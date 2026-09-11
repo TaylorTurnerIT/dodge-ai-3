@@ -1,0 +1,27 @@
+[build-system]
+requires = ["maturin>=1.14,<2"]
+build-backend = "maturin"
+
+[project]
+name = "dodge-native"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["numpy>=2.4.6"]
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+features = ["extension-module"]
+module-name = "dodge_native"
+
+# uv otherwise watches package metadata only and can reinstall a stale wheel
+# after a local maturin build. Include sibling workspace code and baked assets.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "../../Cargo.toml" },
+    { file = "../../Cargo.lock" },
+    { file = "../*/Cargo.toml" },
+    { file = "../*/build.rs" },
+    { file = "../*/src/**/*.rs" },
+    { file = "../../../src/dodge/game/dodge.p8" },
+]

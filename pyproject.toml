@@ -1,0 +1,72 @@
+[project]
+name = "dodge-gymnasium"
+version = "0.1.0"
+description = "Native Rust Dodge game logic and data exposures for Gymnasium training"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "gymnasium>=1.0",
+    "matplotlib>=3.10",
+    "neat-python>=2.0.0",
+    "numpy>=2.4.6",
+    "optuna>=4.0",
+    "pygame>=2.5",
+    "psutil>=5.9",
+    "pydantic>=2.0.0",
+    "torch>=2.7",
+    "websockets>=15.0",
+]
+
+[project.optional-dependencies]
+native = ["dodge-native==0.1.0"]
+training = [
+    "stable-baselines3>=2.6",
+    "tensorboard>=2.16",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.16.3",
+]
+
+[project.scripts]
+dodge-native-smoke = "dodge_native_game.smoke:main"
+dodge-cnn-image-run = "dodge_native_game.variants.cnn_image_ddqn.run:main"
+dodge-cnn-image-dashboard = "dodge_native_game.variants.cnn_image_ddqn.dashboard:main"
+dodge-cnn-image-replay-server = "dodge_native_game.variants.cnn_image_ddqn.replay_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dodge_native_game"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "SIM",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# These modules are intentionally kept close to the upstream LaunchSpark
+# dashboard source so visual behavior and future diffs remain recognizable.
+"src/dodge_native_game/variants/cnn_image_ddqn/dashboard.py" = ["E501", "I001", "B905"]
+"src/dodge_native_game/variants/cnn_image_ddqn/series.py" = ["E501", "I001", "B905"]
+"src/dodge_native_game/variants/cnn_image_ddqn/telemetry.py" = ["E501", "I001", "B905"]
+"src/dodge_native_game/variants/cnn_image_ddqn/rewards.py" = ["E501", "I001"]
+"src/dodge_native_game/variants/cnn_image_ddqn/replay_server.py" = ["E501"]
+# Browser mirror builds HTML/SVG strings inline; wrapping them buys nothing.
+"scripts/web-dashboard.py" = ["E501"]
+
+[tool.uv.sources]
+dodge-native = { path = "native/crates/dodge-python" }

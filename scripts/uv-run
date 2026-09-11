@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The shared Nix host does not expose zlib through the default dynamic-loader
+# path, while NumPy's native wheel needs libz.so.1. Keep this fallback local to
+# project commands and leave other environments unchanged.
+if [[ -d /nix/store ]]; then
+    for zlib_lib in /nix/store/*-zlib-*/lib; do
+        if [[ -f "$zlib_lib/libz.so.1" ]]; then
+            export LD_LIBRARY_PATH="$zlib_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            break
+        fi
+    done
+fi
+
+exec uv run "$@"

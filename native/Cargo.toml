@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/dodge-core",
+    "crates/dodge-batch",
+    "crates/dodge-python",
+]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test)"] }
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"

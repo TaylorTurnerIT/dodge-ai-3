@@ -1,0 +1,123 @@
+# CNN image Double-DQN variant
+
+Isolated major-model variant. Native Rust remains the only source of game
+transitions, collision geometry, rewards, and terminal state.
+
+§G
+G1|Train a CNN policy/value function from collision-only grayscale images.
+G2|Start with `collision-image-v1` + four-frame stack; vary stack length later.
+G3|Use a standard Atari-style convolutional trunk with a dueling Double-DQN head.
+G4|Keep this experiment isolated so future model variants cannot silently share
+   observation or training assumptions.
+G5|Launch bounded runs and show live metrics/controls in LaunchSpark-parity Pygame dashboard.
+
+§C
+C1|No rendered framebuffer, particles, palette, UI, or visual effects.
+C2|Native collision raster is `u8[84,84]`; Python converts to bounded float32.
+C3|Default Gym observation is `float32[4,84,84]`; stack length is configurable.
+C4|Existing nine native actions and default `step_frames=4` remain unchanged.
+C5|Native reward/termination are passed through; Python adds no game semantics.
+C6|Initial learner is image-only; scalar/state MLP inputs are a later variant.
+C7|Dashboard/run artifacts required; local pause/save/load/config controls only; HPO and broad campaign claims stay out of scope.
+C8|Watch Agent opens a separate read-only browser replay generated from a saved `.pt` checkpoint.
+
+§I
+native: `collision-image-v1` → deterministic grayscale collision raster
+env: `CollisionImageEnv` → Gymnasium `Env`, `Discrete(9)` → `Box(0,1,(N,84,84))`
+stack: `FrameStack` → exactly N newest native frames, default N=4
+model: `CNNQNetwork` → dueling Q-values, no softmax
+learner: `DoubleDQNAgent` → online/target networks, replay, Huber loss
+artifacts: `RunRecorder` → manifest, atomic status, metrics, evaluation, report
+dashboard: `TrainingDashboard` → LaunchSpark-parity Pygame charts/modals/controls over `DodgeDDQNSession`
+ replay: `native_replay` → fresh native Rust lane + collision images → bounded `ReplayStore` → Tailscale browser page
+ compare: `run_replay` → run's own checkpoint + game settings + frozen inner/holdout seeds → labeled best/median/worst `NativeReplay` set → side-by-side `/compare` page
+
+§M
+input: `(B,4,84,84)`
+conv1: `Conv2d(4,32,8,4)` + ReLU → `(B,32,20,20)`
+conv2: `Conv2d(32,64,4,2)` + ReLU → `(B,64,9,9)`
+conv3: `Conv2d(64,64,3,1)` + ReLU → `(B,64,7,7)`
+head: Flatten 3136 → Linear 512 + ReLU → value(1) + advantage(9)
+combine: `Q=V+(A-mean(A))`
+target: `argmax_a Q_online(next_state,a)` then `Q_target(next_state,argmax_a)`
+
+§L
+L1|Reset native lane and fill the temporal deque with the initial collision image.
+L2|Encode the deque as channel-first float32 values in [0,1].
+L3|Select epsilon-greedy action from online Q-values.
+L4|Advance native lane exactly one decision interval and append returned image.
+L5|Store `(state, action, reward, next_state, done)` as uint8 image frames in replay.
+L6|Normalize uint8 images to float32 only for the model forward/update path.
+L7|Optimize online Q against Double-DQN target; clip gradient norm at 10; sync target periodically.
+L8|Evaluate with exploration disabled and fixed held-out seeds.
+L9|Write manifest/status/metrics/checkpoint/evaluation artifacts for every bounded run.
+L10|Dashboard queues pause/save/load/game-config requests; learner applies them only at safe points.
+L11|Watch Agent loads the newest checkpoint in a separate worker, greedily replays a fresh native lane, and opens its browser URL.
+
+§V
+V1|No variant observation reads native rendered pixels or particle state.
+V2|Every native collision image is exactly 84×84, finite, deterministic, and bounded.
+V3|Frame stack contains exactly N frames in oldest→newest channel order.
+V4|Reset fills all N channels with the same initial frame; each step appends one frame.
+V5|Env action/reward/termination/step cadence match the native boundary.
+V6|Same seed + same action trace produces identical image hashes and stacked arrays.
+V7|CNN layer shapes are exactly the declared Atari-style architecture.
+V8|Q output is raw action values; no softmax or probability normalization.
+V9|Default head is dueling: `Q=V+(A-mean(A))`, with one scalar V and one A per action.
+V10|Double-DQN target selects next action with online Q and evaluates it with target Q.
+V11|Terminal transitions zero the bootstrap term; nonterminal transitions bootstrap.
+V12|Replay stores owned uint8 frames and converts/normalizes only at update time.
+V13|Every optimizer update clips gradient norm to at most 10.0.
+V14|No batch normalization, max-pooling, RGB input, or spatial augmentation is used.
+V15|Replay samples have validated shapes/dtypes and do not alias mutable storage.
+V16|Changing stack length changes only observation channel count, not native state/action semantics.
+V17|Variant code and artifacts remain under this variant namespace.
+V18|Every run has an immutable manifest, atomic status, append-only metrics, and final report or explicit failure.
+V19|Malformed/incomplete runs are visible as invalid; dashboard never presents them as passing.
+V20|Dashboard renderer copies telemetry under lock, then renders outside lock; control requests never mutate mid-step.
+V21|Live `CNNImageDDQNEnv` construction enables the native collision-image flag; a `None` payload never becomes a visual fallback.
+V22|ReplayBuffer.sample preserves its configured `(C,84,84)` shape through ReplayBatch and the agent update boundary for every supported stack size.
+V23|Dashboard controls save/load native `.pt` checkpoints and persist reward/game panel values without bypassing artifact contract.
+V24|Pygame remains the local LaunchSpark control window; Watch Agent uses a separate browser/Tailscale replay transport.
+V25|CPU trainer disables NNPACK before first CNN forward when using native CPU backend; bounded run publishes terminal artifact.
+V26|Browser replay code never shadows the training `ReplayBuffer`; both replay surfaces import and construct independently.
+V27|Every replay image is the Rust `collision-image-v1` raster from a fresh lane; the live trainer lane and control queue are never shared.
+V28|Replay output is bounded to at most 600 decisions and 8 in-memory replays; HTTP routes expose only generated tokens, metadata, and PNG frames.
+V29|Watch Agent opens the generated Tailscale URL when possible and reports the URL in the dashboard event stream when browser launch is unavailable.
+V30|Every log row carries reward mix, TD error mean/std, action balance/counts, dead-unit share, and effective epsilon schedule; no Python game semantics.
+V31|Epsilon decay is capped at run length and both configured/effective values are stored; short runs still reach exploitation instead of sitting at epsilon 1.0.
+V32|Final evaluation uses frozen inner (offset 10_000) and holdout (offset 20_000) seeds plus a forced-action counterfactual on the least-used action; train/holdout gap is reported.
+V33|Quality gate is computed from warmup/target/decay/sparsity/lock-in/gap checks; bounded runs stay `warn` and `pass` requires 5_000+ steps with no warnings.
+V34|Forced-action replay reuses a fresh native lane and greedy policy except at forced indices; it never touches the live trainer lane.
+V35|Run comparison replays pool only inner/holdout greedy-policy episodes; best/median/worst rank by (reward, survival, seed) and each replay carries its run/label/source/eval-reward tag.
+V36|Every comparison replay reuses the run's own checkpoint and game settings and runs to termination within the 600-decision bound; the compare page never invents seeds or settings.
+V37|Replay builds the Q-head matching the checkpoint (dueling vs plain `q_head`); a plain-head checkpoint replays instead of failing load.
+V38|The reported best is the best greedy-policy episode of the frozen final evaluation; the training-curve maximum stays visible only as labeled training context, never as the run's best.
+V39|Run comparison serves plotted context per run: the downsampled training reward curve with its exploration-era max marked, plus the final-eval inner/holdout dot strip with best/median/worst ringed.
+
+§T
+id|status|task|cites
+---|---|---|---
+T1|x|Expose native `collision-image-v1` through batch + PyO3 boundary|C1,C2,C5,V1,V2
+T2|x|Implement `CollisionImageEnv` and configurable `FrameStack`|C2-C5,V3-V6,V12
+T3|x|Implement CNN trunk, dueling head, uint8 replay, and Double-DQN update primitive|M,V7-V15
+T4|x|Integrate env + agent smoke episode and deterministic trace test|V5,V6,V10,V11,V17
+T5|x|Add run artifacts and LaunchSpark-parity Pygame dashboard/session adapter|G5,C7,V18-V20
+T6|.|Run stack-length ablation harness for N=1,2,4,8|G2,C3,V16,V17
+T7|x|Run fixed-seed image-only baseline and publish metrics visible in dashboard|G1,G2,G5,C7,V6,V17-V20
+T8|x|Add bounded native replay generator, Tailscale HTTP page, and Watch Agent pop-out|C8,L11,V26-V29
+T9|x|Add reward-mix/TD/action-balance/dead-unit diagnostics, effective epsilon schedule, frozen train/holdout eval, counterfactual probe, and computed quality gate|V30-V34
+T10|.|Add run-anchored best/median/worst replay comparison over the run's own checkpoint, settings, and eval seeds with a side-by-side browser page|C8,V26-V29,V35-V39
+
+§B
+id|date|cause|fix
+B1|2026-09-10|Live adapter test reused a native boundary with collision-image disabled, leaving an optional field as `None`|Enable `collision_image=True` in the live integration and keep V21 explicit
+B2|2026-09-10|PyO3 payload test invoked Cargo with a Python interpreter that had no NumPy module|Keep Rust unit tests independent of the NumPy capsule; verify the actual NumPy payload through the Python boundary test
+B3|2026-09-10|Relative `PYO3_PYTHON` was resolved from Cargo's native working directory and did not exist during the attempted workaround|Drop the fragile interpreter override from the native Cargo command
+B4|2026-09-10|ReplayBatch retained a fixed four-channel validator after ReplayBuffer became configurable|Validate generic `(N,C,84,84)` batches, carry the configured shape, and enforce it at the agent boundary; V22
+B5|2026-09-10|HTTP read-only dashboard did not match requested LaunchSpark Pygame controls/layout|Copy upstream renderer/series/telemetry/reward modules; replace backend with native DDQN session and safe-point control plane; V20,V23
+B6|2026-09-10|PyTorch CPU NNPACK probe emitted unsupported-ISA warnings then terminated bounded run with SIGILL|Disable NNPACK before CPU learner construction and cover helper with test; V25
+B7|2026-09-10|Browser generator was first added as `replay.py`, colliding with the existing training replay buffer|Keep browser replay in `native_replay.py` and assert both module surfaces remain importable; V26
+B8|2026-09-11|Smoke runs stayed near epsilon 1.0, logged no sparsity/TD/coverage signals, and had no frozen holdout or lock-in check|Cap decay at run length, log diagnostics per row, freeze inner/holdout/counterfactual eval, compute gate; V30-V34
+B9|2026-09-11|Replay builder assumed a dueling head, so plain-head checkpoints failed load with missing `value_stream` keys|Detect the head from checkpoint keys and build the matching network; V37
+B10|2026-09-11|Training-curve maximum was reported as the run's best game, but it came from an exploration-era episode of an unsaved policy|Report the best frozen final-eval episode instead and plot training max as labeled context; V38,V39

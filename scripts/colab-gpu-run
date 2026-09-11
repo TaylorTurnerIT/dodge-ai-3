@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Run a bounded CNN/DDQN training job on a Colab GPU and pull results home.
+#
+# Campaign defaults: warmup 20000, target sync 10000 (config.toml), dueling head.
+# Usage:
+#   scripts/colab-gpu-run --run-id <id> [--steps 50000] [--stack-size 4]
+#                         [--gpu T4] [--session <name>] [--keep] [--cpu]
+#
+#   --gpu T4|L4|G4|H100|A100   accelerator (default T4, most available)
+#   --cpu                      no accelerator; bare Colab CPU runtime
+#   --keep                     leave the session alive after download
+#
+# Results land in history/dodge/gymnasium/cnn-image-ddqn/<run-id>/.
+# Requires the prebuilt wheel in native/target/wheels/ (built by uv sync).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# Nix host: torch/pyzmq wheels need libstdc++ + zlib on the loader path.
+if [[ -d /nix/store ]]; then
+    for gcc_lib in /nix/store/*-gcc-*-lib/lib; do
+        if [[ -f "$gcc_lib/libstdc++.so.6" ]]; then
+            export LD_LIBRARY_PATH="$gcc_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            break
+        fi
+    done
+    for zlib_lib in /nix/store/*-zlib-*/lib; do
+        if [[ -f "$zlib_lib/libz.so.1" ]]; then
+            export LD_LIBRARY_PATH="$zlib_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            break
+        fi
+    done
+fi
+
+RUN_ID=""; STEPS="50000"; STACK="4"; GPU="T4"; SESSION=""; KEEP=""; CPU=""; RESUME=""
+WARMUP="20000"; SYNC="10000"; DUELING=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --run-id) RUN_ID="$2"; shift 2;;
+        --steps) STEPS="$2"; shift 2;;
+        --stack-size) STACK="$2"; shift 2;;
+        --gpu) GPU="$2"; shift 2;;
+        --session) SESSION="$2"; shift 2;;
+        --resume-from) RESUME="$2"; shift 2;;
+        --shaping) SHAPING="1"; shift;;
+        --w-survival) W_SURVIVAL="$2"; shift 2;;
+        --w-death) W_DEATH="$2"; shift 2;;
+        --w-score) W_SCORE="$2"; shift 2;;
+        --w-uncontrolled) W_UNCONTROLLED="$2"; shift 2;;
+        --warmup-steps) WARMUP="$2"; shift 2;;
+        --target-sync-interval) SYNC="$2"; shift 2;;
+        --dueling) DUELING="--dueling"; shift;;
+        --no-dueling) DUELING="--no-dueling"; shift;;
+        --keep) KEEP="--keep"; shift;;
+        --cpu) CPU="1"; shift;;
+        *) echo "unknown flag: $1" >&2; exit 2;;
+    esac
+done
+[[ -n "$RUN_ID" ]] || { echo "--run-id is required" >&2; exit 2; }
+[[ -z "$SESSION" ]] && SESSION="dodge-${RUN_ID}"
+
+WHEEL="$(ls native/target/wheels/dodge_native-*.whl 2>/dev/null | head -n 1 || true)"
+[[ -n "$WHEEL" ]] || { echo "no wheel in native/target/wheels/; run: uv sync --extra native" >&2; exit 1; }
+WHEEL_NAME="$(basename "$WHEEL")"
+
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+python3 -c "import tarfile; t=tarfile.open('$TMPDIR/dodge-ship.tar.gz','w:gz'); t.add('src/dodge_native_game','dodge-ship/src/dodge_native_game'); t.add('variants/cnn-image-ddqn/config.toml','dodge-ship/variants/cnn-image-ddqn/config.toml'); t.close()"
+
+if [[ -z "$CPU" ]]; then
+    colab new -s "$SESSION" --gpu "$GPU"
+else
+    colab new -s "$SESSION"
+fi
+trap '[[ -z "$KEEP" ]] && colab stop -s "$SESSION" || true; rm -rf "$TMPDIR"' EXIT
+
+colab upload "$WHEEL" "/content/$WHEEL_NAME" -s "$SESSION"
+colab upload "$TMPDIR/dodge-ship.tar.gz" /content/dodge-ship.tar.gz -s "$SESSION"
+RESUME_ARG=""
+if [[ -n "$RESUME" ]]; then
+    colab upload "$RESUME" /content/resume.pt -s "$SESSION"
+    RESUME_ARG=', resume_from="/content/resume.pt"'
+fi
+DUEL_ARG=""
+if [[ -n "$DUELING" ]]; then
+    DUEL_ARG=", dueling=$([ "$DUELING" = "--dueling" ] && echo True || echo False)"
+fi
+SHAPE_ARGS=""
+if [[ -n "${SHAPING:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, shaping=True"; fi
+if [[ -n "${W_SURVIVAL:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_survival=$W_SURVIVAL"; fi
+if [[ -n "${W_DEATH:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_death=$W_DEATH"; fi
+if [[ -n "${W_SCORE:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_score=$W_SCORE"; fi
+if [[ -n "${W_UNCONTROLLED:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_uncontrolled=$W_UNCONTROLLED"; fi
+colab install -s "$SESSION" gymnasium
+
+cat > "$TMPDIR/setup.py" <<EOF
+import subprocess, sys, tarfile, os
+subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                "/content/$WHEEL_NAME"], check=True)
+os.makedirs("/content/work", exist_ok=True)
+with tarfile.open("/content/dodge-ship.tar.gz") as t:
+    t.extractall("/content/work")
+sys.path.insert(0, "/content/work/dodge-ship/src")
+import dodge_native, torch
+assert torch.cuda.is_available() == ("$CPU" == ""), "accelerator mismatch"
+print("SETUP_OK cuda=", torch.cuda.is_available())
+EOF
+colab exec -s "$SESSION" -f "$TMPDIR/setup.py" --timeout 300
+
+cat > "$TMPDIR/train.py" <<EOF
+import sys, time
+import importlib as _importlib
+_importlib.invalidate_caches()
+sys.path.insert(0, "/content/work/dodge-ship/src")
+from dodge_native_game.variants.cnn_image_ddqn.run import train_run
+t0 = time.perf_counter()
+device = "cpu" if "$CPU" != "" else "cuda"
+path = train_run(history_root="/content/history", run_id="$RUN_ID",
+                 steps=$STEPS, stack_size=$STACK, device=device,
+                 warmup_steps=$WARMUP, target_sync_interval=$SYNC$RESUME_ARG$DUEL_ARG$SHAPE_ARGS)
+print(f"TRAIN_DONE root={path} wall={(time.perf_counter()-t0)/60:.1f}min")
+EOF
+colab exec -s "$SESSION" -f "$TMPDIR/train.py" --timeout 3000
+
+cat > "$TMPDIR/pack.py" <<EOF
+import tarfile
+root = "/content/history/cnn-image-ddqn/$RUN_ID"
+with tarfile.open("/content/$RUN_ID-results.tar.gz", "w:gz") as t:
+    t.add(root, "$RUN_ID")
+print("PACKED")
+EOF
+colab exec -s "$SESSION" -f "$TMPDIR/pack.py" --timeout 300
+mkdir -p "history/dodge/gymnasium/cnn-image-ddqn/$RUN_ID"
+colab download "/content/$RUN_ID-results.tar.gz" "$TMPDIR/results.tar.gz" -s "$SESSION"
+tar -xzf "$TMPDIR/results.tar.gz" -C "history/dodge/gymnasium/cnn-image-ddqn/$RUN_ID" --strip-components=1
+
+echo "done: history/dodge/gymnasium/cnn-image-ddqn/$RUN_ID"
