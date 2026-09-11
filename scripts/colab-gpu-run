@@ -40,6 +40,7 @@ RUN_ID=""; STEPS="50000"; STACK="4"; SEED="42"; GPU="T4"; SESSION=""; KEEP=""; C
 WARMUP="20000"; SYNC="10000"; DUELING=""
 EPSILON_DECAY=""; LEARNING_RATE=""; EVAL_EPISODES="4"; EVAL_STEPS="64"
 COLAB_AUTH="oauth2"
+TRAINING_SEED_COUNT=""; EVALUATION_SEED=""; LOG_INTERVAL="1000"
 usage() {
     sed -n '2,14p' "$0" | sed 's/^# *//'
 }
@@ -50,6 +51,9 @@ while [[ $# -gt 0 ]]; do
         --steps) STEPS="$2"; shift 2;;
         --stack-size) STACK="$2"; shift 2;;
         --seed) SEED="$2"; shift 2;;
+        --training-seed-count) TRAINING_SEED_COUNT="$2"; shift 2;;
+        --evaluation-seed) EVALUATION_SEED="$2"; shift 2;;
+        --log-interval) LOG_INTERVAL="$2"; shift 2;;
         --gpu) GPU="$2"; shift 2;;
         --colab-auth) COLAB_AUTH="$2"; shift 2;;
         --session) SESSION="$2"; shift 2;;
@@ -92,6 +96,9 @@ if [[ -n "$LEARNING_RATE" && ! "$LEARNING_RATE" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]
 fi
 [[ "$GPU" =~ ^(T4|L4|G4|H100|A100)$ ]] || { echo "unsupported --gpu: $GPU" >&2; exit 2; }
 [[ "$COLAB_AUTH" =~ ^(oauth2|adc)$ ]] || { echo "unsupported --colab-auth: $COLAB_AUTH" >&2; exit 2; }
+for value in "$TRAINING_SEED_COUNT" "$EVALUATION_SEED" "$LOG_INTERVAL"; do
+    [[ -z "$value" || "$value" =~ ^[0-9]+$ ]] || { echo "seed and logging arguments must contain digits only" >&2; exit 2; }
+done
 [[ -z "$SESSION" ]] && SESSION="dodge-${RUN_ID}"
 
 colab_cli() {
@@ -132,6 +139,8 @@ if [[ -n "${W_SCORE:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_score=$W_SCORE"; fi
 if [[ -n "${W_UNCONTROLLED:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_uncontrolled=$W_UNCONTROLLED"; fi
 if [[ -n "$EPSILON_DECAY" ]]; then SHAPE_ARGS="$SHAPE_ARGS, epsilon_decay_steps=$EPSILON_DECAY"; fi
 if [[ -n "$LEARNING_RATE" ]]; then SHAPE_ARGS="$SHAPE_ARGS, learning_rate=$LEARNING_RATE"; fi
+if [[ -n "$TRAINING_SEED_COUNT" ]]; then SHAPE_ARGS="$SHAPE_ARGS, training_seed_count=$TRAINING_SEED_COUNT"; fi
+if [[ -n "$EVALUATION_SEED" ]]; then SHAPE_ARGS="$SHAPE_ARGS, evaluation_seed=$EVALUATION_SEED"; fi
 colab_cli install -s "$SESSION" gymnasium
 
 cat > "$TMPDIR/setup.py" <<EOF
@@ -159,6 +168,7 @@ device = "cpu" if "$CPU" != "" else "cuda"
 path = train_run(history_root="/content/history", run_id="$RUN_ID",
                  steps=$STEPS, seed=$SEED, stack_size=$STACK, device=device,
                  warmup_steps=$WARMUP, target_sync_interval=$SYNC,
+                 log_interval=$LOG_INTERVAL,
                  eval_episodes=$EVAL_EPISODES, eval_steps=$EVAL_STEPS$RESUME_ARG$DUEL_ARG$SHAPE_ARGS)
 print(f"TRAIN_DONE root={path} wall={(time.perf_counter()-t0)/60:.1f}min")
 EOF

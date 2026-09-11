@@ -102,6 +102,9 @@ V44|Counterfactual baseline + forced action use identical seeds; artifact stores
 V45|Evaluation records termination/censoring per seed + censored share; censored evaluation cannot support pass gate.
 V46|∀ logged optimizer diagnostic sample → target mean, Q-target mean, pre-clip gradient norm, + clipped flag logged.
 V47|Action balance over declared action space includes zero-count actions; metrics separate cumulative behavior counts from recent greedy-policy counts.
+V48|Seed diversity experiment separates learner RNG seed from nested game-seed pools of 700/5000; pool ∈ [0,9999], eval ∈ [10000,32767], no overlap/clamping; natural episode boundaries only.
+V49|Pool membership immutable in manifest; completed episodes record game seed; per-seed training-step counts sum to segment steps; configured pool size ≠ measured visited count.
+V50|Requested intermediate snapshots retain global checkpoint steps; evaluation after training avoids changing training RNG stream.
 
 §T
 id|status|task|cites
@@ -117,6 +120,7 @@ T8|x|Add bounded native replay generator, Tailscale HTTP page, and Watch Agent p
 T9|x|Add reward-mix/TD/action-balance/dead-unit diagnostics, effective epsilon schedule, frozen train/holdout eval, counterfactual probe, and computed quality gate|V30-V34
 T10|.|Add run-anchored best/median/worst replay comparison over the run's own checkpoint, settings, and eval seeds with a side-by-side browser page|C8,V26-V29,V35-V39
 T11|x|Fix DDQN measurement integrity: sync units, resume/provenance, completed episodes, paired counterfactual, censoring, optimizer metrics, action coverage|V40-V47
+T12|x|Add nested game-seed pools, measured exposure, and 10k/200k checkpoints for 500k A100 comparison|V48-V50
 
 §B
 id|date|cause|fix
@@ -136,3 +140,4 @@ B13|2026-09-11|Counterfactual used different seeds from greedy baseline → forc
 B14|2026-09-11|Periodic `reward` mixed partial + completed episode accumulators and omitted completions between log boundaries|V43
 B15|2026-09-11|Action balance dropped zero-count actions + cumulative epsilon exploration masked greedy lock-in|V47
 B16|2026-09-11|Resume setup failure occurred after status became running but before the failure boundary, leaving a stale running artifact|Wrap setup/load in failure-state handling; V18
+B17|2026-09-11|One learner initialization seed was mistaken for one game seed despite per-episode seed increments; unbounded increments can enter eval ranges|Separate learner/game seed semantics and reserve disjoint pool; V48,V49

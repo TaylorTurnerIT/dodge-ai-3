@@ -42,6 +42,7 @@ from .provenance import git_source_provenance, infer_parent_run_id, sha256_file
 from .replay import ReplayBuffer
 from .rewards import UNCONTROLLED_SCORE_PER_ENEMY, RewardConfig
 from .run_artifacts import VARIANT_ID, RunArtifactWriter
+from .seed_pool import training_seed_pool
 
 DEFAULT_HISTORY_ROOT = Path("history/dodge/gymnasium")
 DEFAULT_STEPS = 256
@@ -577,6 +578,9 @@ def train_run(
     dueling: bool | None = None,
     learning_rate: float | None = None,
     epsilon_decay_steps: int | None = None,
+    training_seed_count: int | None = None,
+    evaluation_seed: int | None = None,
+    checkpoint_steps: Sequence[int] = (),
     shaping: bool = False,
     w_survival: float | None = None,
     w_death: float | None = None,
@@ -600,6 +604,30 @@ def train_run(
             raise ValueError(f"{name} must be positive")
     if not 0 <= seed <= 32_767:
         raise ValueError("seed must be between 0 and 32767")
+    eval_base_seed = seed if evaluation_seed is None else evaluation_seed
+    if training_seed_count is not None or evaluation_seed is not None:
+        if not 0 <= eval_base_seed <= 2767:
+            raise ValueError(
+                "evaluation_seed must be in [0, 2767] to preserve disjoint ranges"
+            )
+        if eval_episodes > 2768 - eval_base_seed:
+            raise ValueError("evaluation seed range would clamp or overlap")
+    pool = (
+        training_seed_pool(training_seed_count)
+        if training_seed_count is not None else None
+    )
+    seed_steps: dict[int, int] = {}
+    snapshot_steps = set(checkpoint_steps)
+    if any(
+        not isinstance(value, int) or not 1 <= value <= steps
+        for value in snapshot_steps
+    ):
+        raise ValueError("checkpoint_steps must fall within the training segment")
+
+    def game_seed(episode_index: int) -> int:
+        if pool is not None:
+            return pool[episode_index % len(pool)]
+        return min(32767, seed + episode_index)
 
     config = _load_variant_config()
     engine_config = dict(config.get("game", {}))
@@ -661,6 +689,19 @@ def train_run(
         "device": chosen_device,
         "initialization_id": INITIALIZATION_ID,
         "source": source_provenance,
+        "training_seed_protocol": {
+            "mode": (
+                "nested-shuffled-cycle-v1" if pool is not None
+                else "legacy-increment-clamp"
+            ),
+            "learner_seed": seed,
+            "pool_seed": 1729 if pool is not None else None,
+            "pool_size": len(pool) if pool is not None else None,
+            "seeds": list(pool) if pool is not None else None,
+            "evaluation_seed": eval_base_seed,
+            "checkpoint_steps": sorted(snapshot_steps),
+            "reset_boundary": "natural-episode-end",
+        },
     }
     resumed_step = 0
     resume_payload: dict[str, Any] | None = None
@@ -709,8 +750,8 @@ def train_run(
     decay_effective = effective_decay_steps(decay_configured, steps)
     global_step_start = resumed_step
     global_step_end = resumed_step + steps
-    inner_seeds = inner_eval_seeds(seed, 4)
-    holdout_seeds = holdout_eval_seeds(seed, 4)
+    inner_seeds = inner_eval_seeds(eval_base_seed, eval_episodes)
+    holdout_seeds = holdout_eval_seeds(eval_base_seed, eval_episodes)
     manifest["eval"] = {
         "protocol": "frozen-train-holdout-v1",
         "inner_offset": 10_000,
@@ -773,6 +814,8 @@ def train_run(
             "global_step_start": global_step_start,
             "global_step_end": global_step_end,
             "seed": seed,
+            "training_seed_count": training_seed_count,
+            "evaluation_seed": eval_base_seed,
             "device": chosen_device,
             "update_every": update_every,
             "log_interval": log_interval,
@@ -855,7 +898,7 @@ def train_run(
         if resume_from is not None:
             _load_checkpoint(agent, Path(resume_from))
         start_time = time.perf_counter()
-        observation, _ = env.reset(seed=seed)
+        observation, _ = env.reset(seed=game_seed(0))
     except Exception as error:
         writer.update_status(
             "failed",
@@ -1018,7 +1061,7 @@ def train_run(
                     )
                     env.close()
                     env = build_environment(selected_game)
-                    observation, _ = env.reset(seed=min(32_767, seed + episode))
+                    observation, _ = env.reset(seed=game_seed(episode))
                     episode_reward = 0.0
                     episode_frames = 0
                     episode_deaths = 0
@@ -1082,6 +1125,8 @@ def train_run(
             )
             action = int(agent.select_action(observation, epsilon, rng=rng))
             next_observation, reward, terminated, truncated, info = env.step(action)
+            current_game_seed = game_seed(episode)
+            seed_steps[current_game_seed] = seed_steps.get(current_game_seed, 0) + 1
             done = bool(terminated or truncated)
             if 0 <= action < len(action_counts):
                 action_counts[action] += 1
@@ -1178,6 +1223,7 @@ def train_run(
                 completed_episodes_since_log.append(
                     {
                         **completed_episode,
+                        "game_seed": current_game_seed,
                         "global_step": global_step,
                         "shaped_reward": float(finished_shaped),
                         "deaths": int(finished_deaths),
@@ -1187,7 +1233,7 @@ def train_run(
                     }
                 )
                 observation, _ = env.reset(
-                    seed=min(32_767, seed + episode),
+                    seed=game_seed(episode),
                 )
                 episode_reward = 0.0
                 episode_shaped = 0.0
@@ -1237,6 +1283,8 @@ def train_run(
                     "step": step,
                     "global_environment_step": global_step,
                     "segment_step": step,
+                    "training_seeds_visited": len(seed_steps),
+                    "training_seed_count": training_seed_count,
                     "episode": episode,
                     "reward": last_metric_reward,
                     "shaped_reward": last_metric_shaped,
@@ -1302,6 +1350,19 @@ def train_run(
                     current_metrics=metrics,
                 )
 
+            if step in snapshot_steps and step != steps:
+                relative = f"checkpoints/step-{global_step}.pt"
+                snapshot_path = writer.paths.relative(relative)
+                snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(
+                    _checkpoint_payload(
+                        agent, step=global_step, seed=seed, run_id=run_id,
+                        target_sync_count=target_sync_count, source=source_provenance,
+                    ),
+                    snapshot_path,
+                )
+                writer.record_checkpoint(relative)
+
         if stopped:
             stopped_metrics = {
                 "step": step,
@@ -1345,7 +1406,7 @@ def train_run(
         evaluation_inner = _evaluate(
             agent,
             env,
-            seed=seed,
+            seed=eval_base_seed,
             episodes=eval_episodes,
             max_steps=eval_steps,
             seed_offset=10_000,
@@ -1353,7 +1414,7 @@ def train_run(
         evaluation_holdout = _evaluate(
             agent,
             env,
-            seed=seed,
+            seed=eval_base_seed,
             episodes=eval_episodes,
             max_steps=eval_steps,
             seed_offset=20_000,
@@ -1378,7 +1439,7 @@ def train_run(
             counterfactual = _counterfactual_eval(
                 agent,
                 env,
-                seed=seed,
+                seed=eval_base_seed,
                 episodes=min(eval_episodes, 4),
                 max_steps=eval_steps,
                 forced_action=int(least_used_final),
@@ -1487,6 +1548,11 @@ def train_run(
             "evaluation": evaluation,
             "checkpoint": checkpoint_relative,
             "diagnostics": {
+                "training_seeds_visited": len(seed_steps),
+                "training_seed_steps": seed_steps,
+                "training_seed_pool_coverage": (
+                    len(seed_steps) / len(pool) if pool else None
+                ),
                 "reward_mix": final_mix,
                 "action_balance": final_balance,
                 "action_counts": list(action_counts),
@@ -1529,6 +1595,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--steps", type=_positive_int, default=DEFAULT_STEPS)
     parser.add_argument("--seed", type=_nonnegative_int, default=DEFAULT_SEED)
+    parser.add_argument("--training-seed-count", type=_positive_int, default=None)
+    parser.add_argument("--evaluation-seed", type=_nonnegative_int, default=None)
     parser.add_argument(
         "--stack-size", type=_positive_int, choices=(1, 2, 4, 8), default=4
     )
@@ -1575,6 +1643,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_id=args.run_id,
         steps=args.steps,
         seed=args.seed,
+        training_seed_count=args.training_seed_count,
+        evaluation_seed=args.evaluation_seed,
         stack_size=args.stack_size,
         batch_size=args.batch_size,
         warmup_steps=args.warmup_steps,
