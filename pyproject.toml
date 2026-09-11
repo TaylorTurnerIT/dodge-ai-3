@@ -35,6 +35,7 @@ dodge-native-smoke = "dodge_native_game.smoke:main"
 dodge-cnn-image-run = "dodge_native_game.variants.cnn_image_ddqn.run:main"
 dodge-cnn-image-dashboard = "dodge_native_game.variants.cnn_image_ddqn.dashboard:main"
 dodge-cnn-image-replay-server = "dodge_native_game.variants.cnn_image_ddqn.replay_server:main"
+dodge-cnn-image-explain = "dodge_native_game.variants.cnn_image_ddqn.explanation_server:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,1900 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dodge DDQN · trace explanation</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #121313;
+      --panel: #1a1b1b;
+      --panel-2: #202222;
+      --line: #343837;
+      --line-soft: #292d2c;
+      --text: #e4e7e5;
+      --muted: #9ca4a0;
+      --cyan: #54d7ee;
+      --cyan-dim: #193f47;
+      --green: #8ddc82;
+      --yellow: #f0c66d;
+      --red: #ff625f;
+      --blue: #5e9dff;
+      --shadow: rgba(0, 0, 0, .24);
+    }
+
+    * { box-sizing: border-box; }
+    html { min-width: 300px; background: var(--bg); }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 0%, rgba(44, 86, 89, .18), transparent 31rem),
+        var(--bg);
+      font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, select, input { font: inherit; }
+    button, select { color: var(--text); }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 7px 10px;
+      background: var(--panel-2);
+      cursor: pointer;
+    }
+    button:hover:not(:disabled), button:focus-visible:not(:disabled),
+    select:focus-visible, input:focus-visible { border-color: var(--cyan); outline: 2px solid rgba(84, 215, 238, .2); }
+    button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity: .52; }
+    button.primary { border-color: #2e8b9b; background: #17464e; }
+    button.active { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+    button.danger { color: var(--red); }
+    select {
+      min-width: 8rem;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 7px 9px;
+      background: var(--panel-2);
+    }
+    input[type="range"] { accent-color: var(--cyan); }
+    code { color: var(--cyan); overflow-wrap: anywhere; }
+
+    main { width: min(1500px, 100%); margin: 0 auto; padding: 20px; }
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    h1 { margin: 0; font-size: 23px; font-weight: 670; letter-spacing: -.02em; }
+    h1 span { color: var(--cyan); }
+    h2 { margin: 0; font-size: 16px; font-weight: 630; }
+    h3 { margin: 0; font-size: 13px; font-weight: 630; }
+    p { margin: 0; }
+    .subtitle { margin-top: 4px; color: var(--muted); }
+    .status {
+      min-width: 6.2rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: var(--muted);
+      text-align: center;
+      white-space: nowrap;
+    }
+    .status.ready { border-color: #39744e; color: var(--green); }
+    .status.error { border-color: #824543; color: var(--red); }
+    .status.busy { border-color: #776335; color: var(--yellow); }
+
+    .notice {
+      margin: 0 0 14px;
+      border: 1px solid #6d5c32;
+      border-radius: 6px;
+      padding: 9px 11px;
+      color: #f2d99e;
+      background: rgba(102, 77, 28, .2);
+    }
+    .notice.error { border-color: #824543; color: #ffaaa7; background: rgba(109, 45, 43, .22); }
+    .notice[hidden], [hidden] { display: none !important; }
+
+    .card {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: rgba(26, 27, 27, .94);
+      box-shadow: 0 10px 30px var(--shadow);
+    }
+    .toolbar, .controls, .segmented, .meta-line {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .toolbar { margin-bottom: 14px; }
+    .toolbar .grow { flex: 1 1 12rem; }
+    .field { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
+    .field label { white-space: nowrap; }
+    .meta-line { color: var(--muted); font-size: 12px; }
+    .meta-line span { overflow-wrap: anywhere; }
+    .meta-line b { color: var(--text); font-weight: 580; }
+    .meta-line .warning { color: var(--yellow); font-weight: 650; }
+    .segmented { gap: 4px; }
+    .segmented button { border-radius: 4px; padding: 6px 9px; }
+
+    .replay-layout {
+      display: grid;
+      grid-template-columns: minmax(300px, 1.15fr) minmax(310px, .85fr);
+      gap: 14px;
+      align-items: start;
+    }
+    .replay-visuals { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+    .visual-box {
+      min-width: 0;
+      border: 1px solid var(--line-soft);
+      border-radius: 6px;
+      padding: 9px;
+      background: #101111;
+    }
+    .visual-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .visual-title strong { color: var(--text); font-weight: 600; }
+    .native-frame {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 210px;
+      border-radius: 4px;
+      overflow: hidden;
+      background: #000;
+    }
+    .native-frame img {
+      display: block;
+      width: min(100%, 320px);
+      aspect-ratio: 1;
+      object-fit: contain;
+      image-rendering: pixelated;
+    }
+    .empty-visual { padding: 28px 8px; color: var(--muted); text-align: center; }
+    .input-stage { display: flex; min-height: 210px; align-items: center; justify-content: center; }
+    .input-canvas {
+      display: block;
+      width: min(100%, 320px);
+      aspect-ratio: 1;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      border: 1px solid #2d302f;
+      background: #000;
+    }
+    .stack-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+      gap: 7px;
+      align-content: start;
+      width: 100%;
+      max-height: 320px;
+      overflow: auto;
+    }
+    .stack-tile { min-width: 0; border: 1px solid var(--line-soft); border-radius: 4px; padding: 4px; background: #0a0b0b; }
+    .stack-tile.selected { border-color: var(--cyan); }
+    .stack-tile canvas { display: block; width: 100%; aspect-ratio: 1; image-rendering: pixelated; }
+    .stack-tile small { display: block; margin-top: 3px; color: var(--muted); text-align: center; font-size: 11px; }
+    .input-warning { min-height: 18px; margin-top: 6px; color: var(--yellow); font-size: 12px; }
+    .input-region-note { margin-top: 2px; color: var(--yellow); font-size: 11px; }
+
+    .replay-controls { margin-top: 12px; }
+    .replay-controls .timeline-input { min-width: 130px; flex: 1 1 200px; }
+    .frame-label { min-width: 5.6rem; color: var(--muted); text-align: right; }
+    .post-state {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(75px, 1fr));
+      gap: 7px;
+      margin-bottom: 12px;
+    }
+    .stat { min-width: 0; border: 1px solid var(--line-soft); border-radius: 5px; padding: 8px; }
+    .stat label { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; }
+    .stat strong { display: block; overflow: hidden; font-size: 15px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+    .pre-label, .post-label {
+      display: inline-block;
+      margin-bottom: 7px;
+      border-radius: 3px;
+      padding: 2px 6px;
+      color: var(--cyan);
+      background: rgba(84, 215, 238, .1);
+      font-size: 11px;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+    }
+    .post-label { color: var(--yellow); background: rgba(240, 198, 109, .1); }
+    .event-flags { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 7px; }
+    .event-flag { border: 1px solid var(--line-soft); border-radius: 3px; padding: 3px 5px; color: var(--muted); font-size: 11px; }
+    .event-flag.true { border-color: #39744e; color: var(--green); }
+    .event-flag.false { color: var(--muted); }
+    .event-flag.unknown { color: var(--yellow); }
+    .event-note { margin: 0 0 7px; color: var(--muted); font-size: 11px; }
+    .q-section { margin-top: 4px; }
+    .q-bars { display: grid; gap: 4px; }
+    .q-row {
+      display: grid;
+      grid-template-columns: 52px minmax(50px, 1fr) 72px;
+      align-items: center;
+      gap: 7px;
+      width: 100%;
+      border-color: transparent;
+      padding: 4px 5px;
+      background: transparent;
+      text-align: left;
+    }
+    .q-row:hover, .q-row.selected { border-color: var(--cyan); background: rgba(84, 215, 238, .08); }
+    .q-row .q-name { color: var(--muted); font-size: 12px; }
+    .q-row.selected .q-name { color: var(--cyan); font-weight: 650; }
+    .q-track { position: relative; height: 13px; overflow: hidden; border-radius: 3px; background: #2a2d2c; }
+    .q-zero { position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: #87918c; opacity: .72; }
+    .q-fill { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: var(--blue); }
+    .q-fill.positive { background: var(--red); }
+    .q-row.selected .q-fill { background: var(--cyan); }
+    .q-row.selected .q-fill.positive { background: #ff8a63; }
+    .q-number { color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+    .value-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-top: 11px; }
+    .value-box { border: 1px solid var(--line-soft); border-radius: 5px; padding: 8px; }
+    .value-box label { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; }
+    .value-box strong { font-size: 17px; font-variant-numeric: tabular-nums; }
+    .value-note { margin-top: 6px; color: var(--muted); font-size: 12px; }
+    .advantage-line { margin-top: 8px; color: var(--muted); font-size: 12px; }
+    .advantage-line code { color: var(--text); }
+
+    .timeline-card { margin-top: 14px; }
+    .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .section-head small { color: var(--muted); }
+    #timeline-chart { display: block; width: 100%; height: 130px; border: 1px solid var(--line-soft); border-radius: 5px; background: #101111; }
+    .chart-note { margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .timeline-events { margin-top: 4px; color: var(--muted); font-size: 11px; }
+
+    .explain-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(300px, .9fr); gap: 14px; margin-top: 14px; }
+    .explain-controls { display: grid; gap: 9px; margin-bottom: 10px; }
+    .control-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .control-row > .label { min-width: 6rem; color: var(--muted); font-size: 12px; }
+    .check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+    .map-shell { min-height: 320px; border: 1px solid var(--line-soft); border-radius: 5px; padding: 10px; background: #101111; }
+    .map-wrap { position: relative; display: flex; align-items: center; justify-content: center; min-height: 270px; }
+    #heatmap-canvas { display: block; width: min(100%, 390px); max-height: 390px; aspect-ratio: 1; image-rendering: pixelated; image-rendering: crisp-edges; background: #050606; }
+    #heatmap-canvas.blurred { filter: blur(2px); }
+    .map-empty { padding: 80px 16px; color: var(--muted); text-align: center; }
+    .map-scale { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 11px; }
+    .scale-bar { flex: 1; height: 9px; border-radius: 3px; background: linear-gradient(90deg, #2266e8, #07090a 50%, #f03d36); }
+    .map-caption { margin-top: 7px; color: var(--muted); font-size: 12px; }
+    .map-caption strong { color: var(--text); }
+    .caveat { margin-top: 8px; border-left: 2px solid var(--yellow); padding-left: 8px; color: #d8c796; font-size: 12px; }
+    .grid-position-note { margin-top: 6px; color: var(--muted); font-size: 11px; }
+
+    .conv-layout { display: grid; grid-template-columns: minmax(170px, .32fr) minmax(0, .68fr); gap: 12px; align-items: start; }
+    .conv-selected { min-width: 0; }
+    .conv-canvas-wrap { display: flex; align-items: center; justify-content: center; min-height: 155px; border: 1px solid var(--line-soft); border-radius: 5px; background: #0f1010; }
+    #conv-canvas { display: block; width: min(100%, 200px); aspect-ratio: 1; image-rendering: pixelated; image-rendering: crisp-edges; }
+    .conv-note { margin-top: 6px; color: var(--muted); font-size: 11px; }
+    .conv-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(54px, 1fr));
+      gap: 5px;
+      max-height: 370px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .conv-tile { min-width: 0; border: 1px solid var(--line-soft); border-radius: 4px; padding: 3px; background: #0d0e0e; cursor: pointer; }
+    .conv-tile:hover, .conv-tile.selected { border-color: var(--cyan); }
+    .conv-tile canvas { display: block; width: 100%; aspect-ratio: 1; image-rendering: pixelated; }
+    .conv-tile small { display: block; margin-top: 2px; color: var(--muted); text-align: center; font-size: 10px; }
+    .conv-scale { margin-top: 6px; color: var(--muted); font-size: 11px; }
+
+    .ablation { margin-top: 12px; border-top: 1px solid var(--line-soft); padding-top: 10px; }
+    .ablation-metrics { display: flex; flex-wrap: wrap; gap: 12px; margin: 5px 0 8px; color: var(--muted); font-size: 12px; }
+    .ablation-metrics b { color: var(--text); font-variant-numeric: tabular-nums; }
+    .ablation-q { display: grid; gap: 3px; }
+    .ablation-row { display: grid; grid-template-columns: 44px minmax(30px, 1fr) 64px; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+    .ablation-track { height: 9px; overflow: hidden; border-radius: 3px; background: #2a2d2c; }
+    .ablation-fill { height: 100%; border-radius: 3px; background: var(--blue); }
+    .ablation-row.chosen .ablation-fill { background: var(--cyan); }
+    .ablation-row.alternative .ablation-fill { background: var(--yellow); }
+    .ablation-value { color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+
+    .contrib-card { margin-top: 14px; }
+    .contrib-summary { color: var(--muted); font-size: 12px; }
+    .contrib-summary b { color: var(--text); }
+    .contribution-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 3px 10px;
+      max-height: 420px;
+      overflow: auto;
+      margin-top: 9px;
+      padding-right: 3px;
+    }
+    .contribution-row {
+      display: grid;
+      grid-template-columns: 34px 39px minmax(40px, 1fr) 66px;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      padding: 2px 4px;
+      color: var(--muted);
+      background: rgba(0, 0, 0, .08);
+      font-size: 11px;
+    }
+    .contribution-row:hover, .contribution-row.selected { border-color: var(--cyan); background: rgba(84, 215, 238, .08); }
+    .contribution-row button { overflow: hidden; border: 0; padding: 0; background: none; color: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+    .contribution-row button:hover { color: var(--cyan); }
+    .contribution-rank { text-align: right; }
+    .contribution-index { color: var(--text); }
+    .contribution-track { height: 8px; overflow: hidden; border-radius: 3px; background: #2c302f; }
+    .contribution-fill { height: 100%; border-radius: 3px; background: var(--blue); }
+    .contribution-fill.positive { background: var(--red); }
+    .contribution-value { color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+
+    .examples { margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 9px; }
+    .example-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+    .example-list button { padding: 4px 7px; color: var(--muted); font-size: 11px; }
+    .example-list button:hover { color: var(--cyan); }
+
+    details { border-top: 1px solid var(--line-soft); }
+    details summary { padding: 10px 0; color: var(--cyan); cursor: pointer; }
+    .help-copy { display: grid; gap: 8px; padding: 0 0 11px; color: var(--muted); font-size: 12px; }
+    .help-copy strong { color: var(--text); font-weight: 600; }
+    .loading { min-height: 180px; display: grid; place-items: center; color: var(--muted); }
+    .muted { color: var(--muted); }
+    .mono { font-variant-numeric: tabular-nums; }
+
+    @media (max-width: 980px) {
+      main { padding: 14px; }
+      .replay-layout, .explain-layout { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 590px) {
+      header { align-items: start; flex-direction: column; }
+      .replay-visuals { grid-template-columns: 1fr; }
+      .native-frame, .input-stage { min-height: 160px; }
+      .post-state { grid-template-columns: repeat(2, minmax(75px, 1fr)); }
+      .q-row { grid-template-columns: 47px minmax(50px, 1fr) 67px; }
+      .conv-layout { grid-template-columns: 1fr; }
+      .conv-grid { max-height: 280px; }
+      .control-row > .label { min-width: 5.2rem; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Dodge <span>trace explanation</span></h1>
+        <p class="subtitle">Offline replay · pre-action input and predictions, then the native post-action result</p>
+      </div>
+      <div id="status" class="status busy" role="status" aria-live="polite">Loading…</div>
+    </header>
+
+    <div id="error" class="notice error" role="alert" hidden></div>
+    <div id="notice" class="notice" hidden></div>
+
+    <section class="card toolbar" aria-label="Trace selection">
+      <div id="episode-picker" class="field" hidden>
+        <label for="episode-select">Episode</label>
+        <select id="episode-select" aria-label="Replay episode"></select>
+      </div>
+      <div class="grow"></div>
+      <div class="meta-line">
+        <span>seed <b id="meta-seed">—</b></span>
+        <span>checkpoint <code id="meta-checkpoint">—</code></span>
+        <span>sha256 <code id="meta-sha">—</code></span>
+        <span>step frames <b id="meta-step-frames">—</b></span>
+        <span>eval reward <b id="meta-eval-reward">—</b></span>
+        <span>actual total <b id="meta-actual-total">—</b></span>
+        <span id="meta-eval-match">evaluation match <b id="meta-eval-match-value">—</b></span>
+      </div>
+    </section>
+
+    <section id="loading" class="card loading">Loading trace…</section>
+    <div id="trace-content" hidden>
+      <section class="replay-layout">
+        <article class="card">
+          <div class="replay-visuals">
+            <div class="visual-box">
+              <div class="visual-title"><strong>Native game</strong><span id="game-caption">optional game_url</span></div>
+              <div class="native-frame">
+                <img id="game-image" alt="Native Dodge game frame" hidden>
+                <div id="game-empty" class="empty-visual">No native image for this frame</div>
+              </div>
+            </div>
+            <div class="visual-box">
+              <div class="visual-title"><strong>Exact input stack</strong><span id="input-shape">C×84×84</span></div>
+              <div class="input-stage">
+                <canvas id="input-canvas" class="input-canvas" width="84" height="84" aria-label="Selected input frame" hidden></canvas>
+                <div id="stack-grid" class="stack-grid" aria-label="All input stack frames"></div>
+                <div id="input-empty" class="empty-visual" hidden>Input stack unavailable</div>
+              </div>
+              <div id="input-warning" class="input-warning" aria-live="polite"></div>
+              <div id="input-region-note" class="input-region-note" aria-live="polite"></div>
+            </div>
+          </div>
+
+          <div class="control-row" style="margin-top:10px">
+            <span class="label">Stack view</span>
+            <div class="segmented" role="group" aria-label="Input stack view">
+              <button id="stack-all" type="button" class="active">All stack</button>
+              <button id="stack-single" type="button">Individual frame</button>
+            </div>
+            <label class="field" for="input-frame-select"><span class="muted">channel</span><select id="input-frame-select" aria-label="Input stack channel"></select></label>
+          </div>
+
+          <div class="controls replay-controls">
+            <button id="play" type="button" class="primary">Play</button>
+            <button id="previous" type="button" aria-label="Previous replay frame">Step −</button>
+            <button id="next" type="button" aria-label="Next replay frame">Step +</button>
+            <input id="timeline" class="timeline-input" type="range" min="0" max="0" value="0" step="1" aria-label="Replay frame">
+            <span id="frame-label" class="frame-label">0 / 0</span>
+          </div>
+          <p class="chart-note">Space toggles playback when the page is focused. Scrubbing pauses playback and requests a fresh explanation.</p>
+          <details style="margin-top:12px">
+            <summary>Final state after the last action</summary>
+            <div class="post-label" style="margin-top:2px">Post-action terminal/cap snapshot</div>
+            <div class="native-frame" style="margin-top:7px; min-height:150px">
+              <img id="final-game-image" alt="Native final game frame after the last action" hidden>
+              <div id="final-game-empty" class="empty-visual">No final_game_url supplied</div>
+            </div>
+            <div class="meta-line" style="margin-top:7px"><span>native frame <b id="final-native-frame">—</b></span><span>reason <b id="final-reason">—</b></span></div>
+            <p class="chart-note">This is the state after the final listed action; it is not the pre-action input used for the last Q prediction.</p>
+          </details>
+        </article>
+
+        <article class="card">
+          <span class="pre-label">Pre-action prediction</span>
+          <div class="post-state">
+            <div class="stat"><label>Replay index</label><strong id="stat-index">—</strong></div>
+            <div class="stat"><label>Native frame</label><strong id="stat-native-frame">—</strong></div>
+            <div class="stat"><label>Chosen action</label><strong id="stat-action">—</strong></div>
+            <div class="stat"><label>Step interval</label><strong id="stat-step">—</strong></div>
+          </div>
+          <div class="q-section">
+            <div class="section-head"><h2>Q values</h2><small>click a row to choose the alternative</small></div>
+            <div id="q-bars" class="q-bars" aria-label="Nine action Q values"></div>
+          </div>
+          <div class="value-grid">
+            <div class="value-box"><label>State value V</label><strong id="state-value">—</strong></div>
+            <div class="value-box"><label>Selected Q</label><strong id="selected-q">—</strong></div>
+          </div>
+          <p id="value-note" class="value-note">V is the scalar value head for this checkpoint.</p>
+          <p id="advantage-line" class="advantage-line"></p>
+          <span class="post-label" style="margin-top:12px">Post-action outcome</span>
+          <div class="post-state">
+            <div class="stat"><label>Reward</label><strong id="stat-reward">—</strong></div>
+            <div class="stat"><label>Done</label><strong id="stat-done">—</strong></div>
+            <div class="stat"><label>Event</label><strong id="stat-event">—</strong></div>
+          </div>
+          <div id="event-flags" class="event-flags" aria-label="Native event flags"></div>
+          <p class="event-note">Native flags only: enemy_spawn, collision, death, pattern_active, terminal. Pickups are unavailable in this trace.</p>
+          <pre id="events" class="muted" style="max-height:90px; margin:0; overflow:auto; font:11px/1.35 ui-monospace,SFMono-Regular,monospace; white-space:pre-wrap"></pre>
+        </article>
+      </section>
+
+      <section class="card timeline-card">
+        <div class="section-head">
+          <h2>Trace timeline</h2>
+          <label class="field" for="timeline-series"><span class="muted">series</span>
+            <select id="timeline-series" aria-label="Timeline series">
+              <option value="value">V value</option>
+              <option value="q">Chosen Q</option>
+              <option value="reward">Post-action reward</option>
+            </select>
+          </label>
+        </div>
+        <canvas id="timeline-chart" width="800" height="130" aria-label="Replay value timeline"></canvas>
+        <p class="chart-note">The marker is the current pre-action frame. Reward and done belong to the transition after that frame.</p>
+        <p id="timeline-events-note" class="timeline-events">Event markers: loading</p>
+      </section>
+
+      <section class="explain-layout">
+        <article class="card">
+          <div class="section-head">
+            <h2>Signed input sensitivity</h2>
+            <small id="explain-status">Waiting for a frame</small>
+          </div>
+          <div class="explain-controls">
+            <div class="control-row">
+              <span class="label">Map</span>
+              <div class="segmented" role="group" aria-label="Heatmap type">
+                <button id="map-value" type="button" class="active">Signed value</button>
+                <button id="map-decision" type="button">Decision</button>
+              </div>
+              <label class="check"><input id="map-blur" type="checkbox"> soften pixels</label>
+            </div>
+            <div class="control-row">
+              <span class="label">Input basis</span>
+              <div class="segmented" role="group" aria-label="Explanation input basis">
+                <button id="map-all" type="button" class="active">All stack</button>
+                <button id="map-single" type="button">Individual frame</button>
+              </div>
+              <label class="field" for="map-frame-select"><span class="muted">channel</span><select id="map-frame-select" aria-label="Explanation input channel"></select></label>
+            </div>
+            <div class="control-row">
+              <span class="label">Pair</span>
+              <label class="field" for="alternative-select"><span class="muted">alternative action</span>
+                <select id="alternative-select" aria-label="Alternative action"></select>
+              </label>
+              <button id="refresh-explain" type="button">Refresh</button>
+            </div>
+            <div class="control-row">
+              <span class="label">Perturbation</span>
+              <label class="field" for="radius-select"><span class="muted">radius</span>
+                <select id="radius-select" aria-label="Perturbation radius">
+                  <option value="3">3 px</option>
+                  <option value="6" selected>6 px</option>
+                  <option value="12">12 px</option>
+                </select>
+              </label>
+              <span class="muted" style="font-size:11px">same chosen/alternative pair for both signed maps</span>
+            </div>
+          </div>
+
+          <div class="map-shell">
+            <div id="map-empty" class="map-empty">Select a replay frame to load its signed map.</div>
+            <div id="map-wrap" class="map-wrap" hidden><canvas id="heatmap-canvas" aria-label="Signed sensitivity heatmap"></canvas></div>
+            <div id="map-scale" class="map-scale" hidden><span id="map-scale-min">−</span><span class="scale-bar" aria-hidden="true"></span><span id="map-scale-max">+</span></div>
+            <p id="map-caption" class="map-caption"></p>
+            <p id="grid-position-note" class="grid-position-note"></p>
+            <p class="caveat">Red: perturbing this location lowered V or weakened the fixed action preference. Blue: perturbing it raised V or strengthened that preference. This sensitivity is not attention, confidence, or object recognition.</p>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="section-head"><h2>Conv3 feature maps</h2><small>exactly 64 × 7 × 7</small></div>
+          <div class="conv-layout">
+            <div class="conv-selected">
+              <div class="control-row" style="margin-bottom:7px">
+                <label class="field" for="channel-select"><span class="muted">channel</span><select id="channel-select" aria-label="Convolution channel"></select></label>
+              </div>
+              <div class="conv-canvas-wrap"><canvas id="conv-canvas" width="7" height="7" aria-label="Selected convolution feature map"></canvas></div>
+              <p id="conv-scale" class="conv-note">No feature maps loaded.</p>
+            </div>
+            <div id="conv-grid" class="conv-grid" aria-label="64 convolution feature maps"></div>
+          </div>
+          <div class="ablation">
+            <div class="section-head"><h3>Channel ablation</h3><small>zero the selected Conv3 channel</small></div>
+            <div class="ablation-metrics"><span>chosen <b id="ablation-chosen">—</b></span><span>alternative <b id="ablation-alternative">—</b></span><span>gap Δ <b id="ablation-gap">—</b></span><span>bias Δ <b id="bias-difference">—</b></span></div>
+            <div id="ablation-q" class="ablation-q"></div>
+          </div>
+          <div class="examples">
+            <div class="control-row">
+              <span class="label">Examples</span>
+              <button id="channel-examples" type="button">Load channel examples</button>
+              <span id="channel-examples-status" class="muted"></span>
+            </div>
+            <div id="channel-example-list" class="example-list"></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="card contrib-card">
+        <div class="section-head">
+          <h2>512-feature contribution ranking</h2>
+          <small id="contribution-count">0 / 512 features</small>
+        </div>
+        <p id="contribution-summary" class="contrib-summary">The 512-unit linear feature contribution vector is ranked by absolute magnitude. Select a feature to load its captured examples.</p>
+        <div id="contribution-list" class="contribution-list" aria-label="Ranked 512 feature contributions"></div>
+        <div class="examples">
+          <div class="control-row">
+            <span class="label">Examples</span>
+            <button id="feature-examples" type="button">Load feature examples</button>
+            <span id="feature-examples-status" class="muted"></span>
+          </div>
+          <div id="feature-example-list" class="example-list"></div>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top:14px">
+        <details>
+          <summary>How to read this page</summary>
+          <div class="help-copy">
+            <p><strong>Trace order.</strong> Each frame is a pre-action snapshot: the input stack and Q/V predictions are evaluated before the listed action. Reward and done are the native result after that action. The page never reconstructs game state.</p>
+            <p><strong>Q, V, and head type.</strong> Q values are raw action values, not probabilities. V is shown only when the API returns a scalar value; a null V is expected for a plain Q head. Centered advantages are shown when present.</p>
+            <p><strong>Signed maps.</strong> The map is original minus perturbed for one fixed chosen/alternative action pair. Red means perturbing that location lowered V or weakened the fixed action preference; blue means it raised V or strengthened that preference. The zero-centred scale stays fixed while switching value and decision views for that response.</p>
+            <p><strong>Feature evidence.</strong> Conv3 maps are 64 channels at 7×7. Ablation Q values show the result after zeroing the selected channel. The ranking includes all 512 contribution entries, ordered by absolute magnitude. Examples are convenience links, not extra evidence.</p>
+            <p><strong>Limits.</strong> Sensitivity and ablation can show where this network changes its output; they are not attention, confidence, causality, or a guarantee that the policy will behave the same on another input.</p>
+          </div>
+        </details>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    "use strict";
+
+    // The page is deliberately self-contained. A replay server only needs to
+    // serve this file and implement the three read-only JSON endpoints below.
+    const ACTION_COUNT = 9;
+    const FEATURE_COUNT = 512;
+    const CHANNEL_COUNT = 64;
+    const MAP_SIZE_HINT = 84;
+    const NATIVE_EVENT_FLAGS = ["enemy_spawn", "collision", "death", "pattern_active", "terminal"];
+    const EVENT_MARKER_COLORS = { enemy_spawn: "#f0c66d", collision: "#ff625f", death: "#f58ad1", pattern_active: "#8ddc82", terminal: "#e4e7e5" };
+    const FETCH_TIMEOUT_MS = 12000;
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      episode: null,
+      episodes: [],
+      trace: null,
+      index: 0,
+      inputMode: "all",
+      inputChannel: 0,
+      mapMode: "value",
+      mapFrameMode: "all",
+      mapFrame: 0,
+      alternative: "auto",
+      radius: 6,
+      channel: 0,
+      feature: 0,
+      inputRegion: null,
+      inputRegionLabel: "",
+      explain: null,
+      mapScale: 1,
+      playing: false,
+      playTimer: null,
+      traceSerial: 0,
+      explainSerial: 0,
+      traceController: null,
+      explainController: null,
+      imageSerial: 0,
+      finalImageSerial: 0,
+      inputCache: new WeakMap(),
+      exampleSerial: { channel: 0, feature: 0 },
+    };
+
+    function setStatus(text, kind) {
+      const node = $("status");
+      node.textContent = text;
+      node.className = `status ${kind || ""}`;
+    }
+
+    function showError(message) {
+      const node = $("error");
+      node.textContent = message || "The replay is unavailable.";
+      node.hidden = false;
+      setStatus("Error", "error");
+    }
+
+    function clearError() {
+      $("error").hidden = true;
+    }
+
+    function showNotice(message) {
+      const node = $("notice");
+      node.textContent = message || "";
+      node.hidden = !message;
+    }
+
+    function finiteNumber(value) {
+      if (value === null || value === undefined || value === "") return null;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }
+
+    function formatNumber(value, digits = 3) {
+      const number = finiteNumber(value);
+      if (number === null) return "—";
+      if (Math.abs(number) >= 10000 || (Math.abs(number) > 0 && Math.abs(number) < .001)) return number.toExponential(2);
+      return number.toFixed(digits);
+    }
+
+    function formatSigned(value, digits = 3) {
+      const number = finiteNumber(value);
+      if (number === null) return "—";
+      return `${number >= 0 ? "+" : ""}${formatNumber(number, digits)}`;
+    }
+
+    function clamp(value, low, high) {
+      return Math.max(low, Math.min(high, value));
+    }
+
+    function safeArray(value) {
+      return Array.isArray(value) ? value : [];
+    }
+
+    function actionNumber(value, fallback = 0) {
+      const number = finiteNumber(value);
+      if (number === null) return fallback;
+      return clamp(Math.round(number), 0, ACTION_COUNT - 1);
+    }
+
+    function runnerUpAction(frame) {
+      const chosen = actionNumber(frame && frame.action, 0);
+      const ranked = safeArray(frame && frame.q).map((value, action) => ({ action, value: finiteNumber(value) }))
+        .filter((entry) => entry.value !== null && entry.action !== chosen)
+        .sort((left, right) => right.value - left.value || left.action - right.action);
+      return ranked.length ? ranked[0].action : (chosen + 1) % ACTION_COUNT;
+    }
+
+    function resolvedAlternative(explain) {
+      const chosen = actionNumber(explain && explain.chosen, actionNumber(currentFrame() && currentFrame().action, 0));
+      const explicit = finiteNumber(explain && explain.alternative);
+      return explicit !== null && actionNumber(explicit) !== chosen ? actionNumber(explicit) : runnerUpAction(currentFrame());
+    }
+
+    function queryEpisode() {
+      try { return new URLSearchParams(window.location.search).get("episode"); }
+      catch (_) { return null; }
+    }
+
+    function endpoint(path, params = {}) {
+      const query = new URLSearchParams();
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+      });
+      return `${path}${query.toString() ? `?${query.toString()}` : ""}`;
+    }
+
+    async function fetchJSON(url, options = {}) {
+      const requestController = new AbortController();
+      const externalSignal = options.signal || null;
+      const relayAbort = () => requestController.abort();
+      if (externalSignal) {
+        if (externalSignal.aborted) requestController.abort();
+        else externalSignal.addEventListener("abort", relayAbort, { once: true });
+      }
+      const timer = window.setTimeout(() => requestController.abort(), FETCH_TIMEOUT_MS);
+      try {
+        const response = await fetch(url, { cache: "no-store", signal: requestController.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}`);
+        const data = await response.json();
+        return data;
+      } catch (error) {
+        if (error && error.name === "AbortError") throw new Error("Request timed out or was cancelled");
+        if (error instanceof SyntaxError) throw new Error(`Invalid JSON from ${url}`);
+        if (error instanceof TypeError) throw new Error(`Network error while loading ${url}`);
+        throw error;
+      } finally {
+        window.clearTimeout(timer);
+        if (externalSignal) externalSignal.removeEventListener("abort", relayAbort);
+      }
+    }
+
+    function normaliseEpisodes(data) {
+      const raw = Array.isArray(data) ? data : safeArray(data && (data.episodes || data.items));
+      return raw.map((item, index) => {
+        if (typeof item === "string" || typeof item === "number") {
+          return { id: String(item), label: String(item), seed: null, eval_reward: null };
+        }
+        if (!item || typeof item !== "object") return null;
+        const id = item.id ?? item.episode ?? item.token ?? index;
+        const label = item.label ?? item.name ?? `Episode ${id}`;
+        return { id: String(id), label: String(label), seed: item.seed, eval_reward: item.eval_reward };
+      }).filter(Boolean);
+    }
+
+    function normaliseTrace(data) {
+      const trace = data && data.trace && typeof data.trace === "object" ? data.trace : data;
+      if (!trace || !Array.isArray(trace.frames) || trace.frames.length === 0) {
+        throw new Error("Trace response has no frames");
+      }
+      const frames = trace.frames.map((frame, index) => {
+        const item = frame && typeof frame === "object" ? frame : {};
+        const q = safeArray(item.q).slice(0, ACTION_COUNT).map((value) => finiteNumber(value));
+        while (q.length < ACTION_COUNT) q.push(null);
+        return {
+          ...item,
+          index: finiteNumber(item.index) === null ? index : Number(item.index),
+          native_frame: finiteNumber(item.native_frame),
+          action: finiteNumber(item.action) === null ? null : actionNumber(item.action),
+          q,
+          value: finiteNumber(item.value),
+          centered_advantage: safeArray(item.centered_advantage).map((value) => finiteNumber(value)),
+          reward: finiteNumber(item.reward),
+          done: Boolean(item.done),
+          input: Array.isArray(item.input) ? item.input : null,
+          input_base64: typeof item.input_base64 === "string" ? item.input_base64 : "",
+          input_shape: Array.isArray(item.input_shape) ? item.input_shape : null,
+          game_url: typeof item.game_url === "string" ? item.game_url : "",
+          events: item.events && typeof item.events === "object" ? item.events : null,
+        };
+      });
+      return { ...trace, frames };
+    }
+
+    function currentFrame() {
+      return state.trace && state.trace.frames[state.index] ? state.trace.frames[state.index] : null;
+    }
+
+    function decodePackedInput(frame) {
+      if (!frame || !frame.input_base64) return { kind: "none", count: 0, error: "" };
+      if (state.inputCache.has(frame)) return state.inputCache.get(frame);
+      const shape = safeArray(frame.input_shape).map((value) => Math.round(Number(value)));
+      if (shape.length !== 3 || shape.some((value) => !Number.isFinite(value) || value < 1) || shape[1] !== MAP_SIZE_HINT || shape[2] !== MAP_SIZE_HINT) {
+        const result = { kind: "packed", count: shape[0] || 0, rows: shape[1] || 0, cols: shape[2] || 0, bytes: null, error: "Packed input_shape is not [C,84,84]." };
+        state.inputCache.set(frame, result);
+        return result;
+      }
+      const expected = shape[0] * shape[1] * shape[2];
+      try {
+        // Decode only the frame being rendered. Keep the flat bytes so the
+        // page does not expand every trace frame into nested JavaScript arrays.
+        let encoded = frame.input_base64;
+        const comma = encoded.indexOf(",");
+        if (comma >= 0) encoded = encoded.slice(comma + 1);
+        encoded = encoded.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+        while (encoded.length % 4) encoded += "=";
+        const binary = window.atob(encoded);
+        if (binary.length !== expected) throw new Error(`packed input has ${binary.length} bytes; expected ${expected}`);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+        const result = { kind: "packed", count: shape[0], rows: shape[1], cols: shape[2], bytes, error: "" };
+        state.inputCache.set(frame, result);
+        return result;
+      } catch (error) {
+        const result = { kind: "packed", count: shape[0], rows: shape[1], cols: shape[2], bytes: null, error: `Could not decode input_base64: ${error.message}` };
+        state.inputCache.set(frame, result);
+        return result;
+      }
+    }
+
+    function inputSource(frame) {
+      if (!frame) return { kind: "none", count: 0, error: "" };
+      if (Array.isArray(frame.input) && frame.input.length) return { kind: "nested", channels: frame.input, count: frame.input.length, error: "" };
+      return decodePackedInput(frame);
+    }
+
+    function inputChannelCount(frame) {
+      return inputSource(frame).count || 0;
+    }
+
+    function matrixFrom(value, rowsHint = MAP_SIZE_HINT, colsHint = MAP_SIZE_HINT) {
+      if (!Array.isArray(value)) return null;
+      if (value.length === 0) return null;
+      if (Array.isArray(value[0])) {
+        const rows = value.length;
+        const cols = Math.max(...value.map((row) => Array.isArray(row) ? row.length : 0));
+        if (!rows || !cols) return null;
+        return { rows, cols, values: value };
+      }
+      if (value.length === rowsHint * colsHint) {
+        const values = [];
+        for (let row = 0; row < rowsHint; row++) values.push(value.slice(row * colsHint, (row + 1) * colsHint));
+        return { rows: rowsHint, cols: colsHint, values };
+      }
+      return null;
+    }
+
+    function pixelValue(value, fallback = 0) {
+      const number = finiteNumber(value);
+      return number === null ? fallback : clamp(number, 0, 255);
+    }
+
+    function normaliseInputRegion(region, rows, cols) {
+      if (!Array.isArray(region) || region.length < 4) return null;
+      const top = finiteNumber(region[0]);
+      const left = finiteNumber(region[1]);
+      const height = finiteNumber(region[2]);
+      const width = finiteNumber(region[3]);
+      if ([top, left, height, width].some((value) => value === null) || height <= 0 || width <= 0) return null;
+      const clippedTop = clamp(top, 0, rows);
+      const clippedLeft = clamp(left, 0, cols);
+      const clippedBottom = clamp(top + height, 0, rows);
+      const clippedRight = clamp(left + width, 0, cols);
+      return { top: clippedTop, left: clippedLeft, height: Math.max(0, clippedBottom - clippedTop), width: Math.max(0, clippedRight - clippedLeft) };
+    }
+
+    function drawInputRegion(canvas, region, rows, cols) {
+      const box = normaliseInputRegion(region, rows, cols);
+      if (!box || box.height <= 0 || box.width <= 0) return;
+      const context = canvas.getContext("2d");
+      context.save();
+      context.strokeStyle = "#f0c66d";
+      context.lineWidth = Math.max(1, Math.min(rows, cols) / 42);
+      context.strokeRect(box.left + .5, box.top + .5, Math.max(0, box.width - 1), Math.max(0, box.height - 1));
+      context.restore();
+    }
+
+    function drawInput(canvas, raw, region = null) {
+      const matrix = matrixFrom(raw, MAP_SIZE_HINT, MAP_SIZE_HINT);
+      if (!matrix) return false;
+      canvas.width = matrix.cols;
+      canvas.height = matrix.rows;
+      const context = canvas.getContext("2d");
+      const image = context.createImageData(matrix.cols, matrix.rows);
+      for (let row = 0; row < matrix.rows; row++) {
+        const source = Array.isArray(matrix.values[row]) ? matrix.values[row] : [];
+        for (let col = 0; col < matrix.cols; col++) {
+          const value = pixelValue(source[col]);
+          const offset = (row * matrix.cols + col) * 4;
+          image.data[offset] = value;
+          image.data[offset + 1] = value;
+          image.data[offset + 2] = value;
+          image.data[offset + 3] = 255;
+        }
+      }
+      context.putImageData(image, 0, 0);
+      drawInputRegion(canvas, region, matrix.rows, matrix.cols);
+      return matrix.rows === MAP_SIZE_HINT && matrix.cols === MAP_SIZE_HINT;
+    }
+
+    function drawPackedInput(canvas, source, channel, region = null) {
+      if (!source || !source.bytes || channel < 0 || channel >= source.count) return false;
+      canvas.width = source.cols;
+      canvas.height = source.rows;
+      const context = canvas.getContext("2d");
+      const image = context.createImageData(source.cols, source.rows);
+      const start = channel * source.rows * source.cols;
+      for (let row = 0; row < source.rows; row++) for (let col = 0; col < source.cols; col++) {
+        const value = source.bytes[start + row * source.cols + col];
+        const offset = (row * source.cols + col) * 4;
+        image.data[offset] = value; image.data[offset + 1] = value; image.data[offset + 2] = value; image.data[offset + 3] = 255;
+      }
+      context.putImageData(image, 0, 0);
+      drawInputRegion(canvas, region, source.rows, source.cols);
+      return source.rows === MAP_SIZE_HINT && source.cols === MAP_SIZE_HINT;
+    }
+
+    function drawInputSource(canvas, source, channel, region = null) {
+      if (!source || channel < 0 || channel >= source.count) return false;
+      if (source.kind === "packed") return drawPackedInput(canvas, source, channel, region);
+      return drawInput(canvas, source.channels[channel], region);
+    }
+
+    function setStackButtons() {
+      $("stack-all").classList.toggle("active", state.inputMode === "all");
+      $("stack-single").classList.toggle("active", state.inputMode === "single");
+      $("map-all").classList.toggle("active", state.mapFrameMode === "all");
+      $("map-single").classList.toggle("active", state.mapFrameMode === "single");
+      $("input-canvas").hidden = state.inputMode !== "single";
+      $("stack-grid").hidden = state.inputMode !== "all";
+    }
+
+    function updateChannelOptions() {
+      const count = inputChannelCount(currentFrame());
+      const safeCount = Math.max(1, count);
+      state.inputChannel = clamp(state.inputChannel, 0, safeCount - 1);
+      state.mapFrame = clamp(state.mapFrame, 0, safeCount - 1);
+      const selects = [$("input-frame-select"), $("map-frame-select")];
+      selects.forEach((select) => {
+        select.replaceChildren();
+        for (let channel = 0; channel < safeCount; channel++) {
+          const option = document.createElement("option");
+          option.value = String(channel);
+          option.textContent = `Frame ${channel}${channel === 0 ? " · oldest" : channel === safeCount - 1 ? " · newest" : ""}`;
+          select.appendChild(option);
+        }
+        select.value = String(select === $("map-frame-select") ? state.mapFrame : state.inputChannel);
+        select.disabled = count === 0;
+      });
+      const source = inputSource(currentFrame());
+      $("input-shape").textContent = count ? `C=${count} · 84×84${source.kind === "packed" ? " · packed" : ""}` : "C unavailable";
+    }
+
+    function renderInputStack() {
+      const frame = currentFrame();
+      const source = inputSource(frame);
+      const count = source.kind === "packed" && !source.bytes ? 0 : source.count;
+      updateChannelOptions();
+      setStackButtons();
+      const grid = $("stack-grid");
+      grid.replaceChildren();
+      $("input-warning").textContent = "";
+      $("input-empty").hidden = count > 0;
+      $("input-region-note").textContent = state.inputRegion
+        ? `${state.inputRegionLabel || "Example"}: yellow box is the receptive field [top,left,height,width], not an object box.`
+        : "";
+      if (!count) {
+        $("input-canvas").hidden = true;
+        grid.hidden = true;
+        $("input-warning").textContent = source.error || "The API did not provide input[C][84][84] or input_base64 for this frame.";
+        return;
+      }
+      if (source.error) $("input-warning").textContent = source.error;
+      if (state.inputMode === "single") {
+        const valid = drawInputSource($("input-canvas"), source, state.inputChannel, state.inputRegion);
+        $("input-canvas").hidden = false;
+        if (!valid && !source.error) $("input-warning").textContent = "Input dimensions differ from the declared 84×84 contract.";
+        return;
+      }
+      const latestChannel = count - 1;
+      for (let index = 0; index < count; index++) {
+        const tile = document.createElement("div");
+        tile.className = `stack-tile${index === state.inputChannel ? " selected" : ""}`;
+        tile.title = `Input frame ${index}`;
+        const canvas = document.createElement("canvas");
+        canvas.width = 84;
+        canvas.height = 84;
+        canvas.setAttribute("aria-label", `Input frame ${index}`);
+        const valid = drawInputSource(canvas, source, index, index === latestChannel ? state.inputRegion : null);
+        const label = document.createElement("small");
+        label.textContent = `frame ${index}`;
+        tile.append(canvas, label);
+        tile.addEventListener("click", () => {
+          state.inputChannel = index;
+          $("input-frame-select").value = String(index);
+          renderInputStack();
+        });
+        grid.appendChild(tile);
+        if (!valid && !source.error) $("input-warning").textContent = "Input dimensions differ from the declared 84×84 contract.";
+      }
+    }
+
+    function renderGameImage(frame) {
+      const image = $("game-image");
+      const empty = $("game-empty");
+      const url = frame && frame.game_url ? frame.game_url : "";
+      const serial = ++state.imageSerial;
+      image.hidden = true;
+      empty.hidden = false;
+      image.removeAttribute("src");
+      if (!url) {
+        $("game-caption").textContent = "no game_url";
+        return;
+      }
+      $("game-caption").textContent = "native frame";
+      image.onload = () => {
+        if (serial !== state.imageSerial) return;
+        image.hidden = false;
+        empty.hidden = true;
+      };
+      image.onerror = () => {
+        if (serial !== state.imageSerial) return;
+        image.hidden = true;
+        empty.hidden = false;
+        empty.textContent = "Native image failed to load";
+      };
+      image.src = url;
+    }
+
+    function renderFinalState(trace) {
+      const image = $("final-game-image");
+      const empty = $("final-game-empty");
+      const termination = trace && trace.termination && typeof trace.termination === "object" ? trace.termination : {};
+      const url = trace && (trace.final_game_url || (trace.final_state && trace.final_state.game_url));
+      const nativeFrame = termination.native_frame ?? trace.final_native_frame ?? trace.final_state_native_frame;
+      const reason = termination.reason ?? trace.termination_reason ?? trace.final_reason;
+      $("final-native-frame").textContent = nativeFrame === undefined || nativeFrame === null ? "—" : String(nativeFrame);
+      $("final-reason").textContent = reason === undefined || reason === null || reason === "" ? "—" : String(reason);
+      const serial = ++state.finalImageSerial;
+      image.hidden = true;
+      empty.hidden = false;
+      image.removeAttribute("src");
+      if (typeof url !== "string" || !url) return;
+      image.onload = () => {
+        if (serial !== state.finalImageSerial) return;
+        image.hidden = false;
+        empty.hidden = true;
+      };
+      image.onerror = () => {
+        if (serial !== state.finalImageSerial) return;
+        image.hidden = true;
+        empty.hidden = false;
+        empty.textContent = "Final native image failed to load";
+      };
+      image.src = url;
+    }
+
+    function qRange(q) {
+      const values = q.map((value) => finiteNumber(value)).filter((value) => value !== null);
+      if (!values.length) return { min: -1, max: 1 };
+      let min = Math.min(0, ...values);
+      let max = Math.max(0, ...values);
+      if (max - min < 1e-9) { min -= 1; max += 1; }
+      const pad = (max - min) * .08;
+      return { min: min - pad, max: max + pad };
+    }
+
+    function makeQRow(action, value, chosen, onClick) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `q-row${action === chosen ? " selected" : ""}`;
+      button.setAttribute("aria-label", `Action ${action}, Q ${formatNumber(value)}`);
+      button.title = `Use action ${action} as the alternative for the explanation`;
+      const name = document.createElement("span");
+      name.className = "q-name";
+      name.textContent = `A${action}${action === chosen ? " · chosen" : ""}`;
+      const track = document.createElement("span");
+      track.className = "q-track";
+      const zero = document.createElement("span");
+      zero.className = "q-zero";
+      const fill = document.createElement("span");
+      fill.className = "q-fill";
+      const number = finiteNumber(value);
+      const range = qRange(currentFrame() ? currentFrame().q : []);
+      if (number !== null) {
+        const zeroPercent = ((0 - range.min) / (range.max - range.min)) * 100;
+        const valuePercent = ((number - range.min) / (range.max - range.min)) * 100;
+        if (number >= 0) {
+          fill.classList.add("positive");
+          fill.style.left = `${zeroPercent}%`;
+          fill.style.width = `${Math.max(0, valuePercent - zeroPercent)}%`;
+        } else {
+          fill.style.left = `${valuePercent}%`;
+          fill.style.width = `${Math.max(0, zeroPercent - valuePercent)}%`;
+        }
+      }
+      track.append(zero, fill);
+      const valueNode = document.createElement("span");
+      valueNode.className = "q-number";
+      valueNode.textContent = formatNumber(value);
+      button.append(name, track, valueNode);
+      button.addEventListener("click", () => onClick(action));
+      return button;
+    }
+
+    function populateActionSelects() {
+      const select = $("alternative-select");
+      const current = currentFrame();
+      const chosen = actionNumber(current && current.action, 0);
+      select.replaceChildren();
+      const automatic = document.createElement("option");
+      automatic.value = "auto";
+      automatic.textContent = "Auto · runner-up";
+      select.appendChild(automatic);
+      for (let action = 0; action < ACTION_COUNT; action++) {
+        const option = document.createElement("option");
+        option.value = String(action);
+        option.textContent = `A${action}${action === chosen ? " · chosen" : ""}`;
+        option.disabled = action === chosen;
+        select.appendChild(option);
+      }
+      select.value = state.alternative === "auto" ? "auto" : String(state.alternative);
+    }
+
+    function renderQ(frame) {
+      const chosen = actionNumber(frame && frame.action, 0);
+      const q = frame && Array.isArray(frame.q) ? frame.q : [];
+      const bars = $("q-bars");
+      bars.replaceChildren();
+      for (let action = 0; action < ACTION_COUNT; action++) {
+        bars.appendChild(makeQRow(action, q[action], chosen, (selected) => {
+          if (selected === chosen) return;
+          state.alternative = selected;
+          populateActionSelects();
+          requestExplanation();
+        }));
+      }
+      $("stat-action").textContent = frame && frame.action === null ? "—" : `A${chosen}`;
+      const value = frame ? frame.value : null;
+      $("state-value").textContent = value === null ? "n/a" : formatNumber(value);
+      $("selected-q").textContent = formatNumber(q[chosen]);
+      $("value-note").textContent = value === null
+        ? "V unavailable: this trace appears to use a plain Q head."
+        : "V is the scalar value head returned for this pre-action input.";
+      const advantages = frame && Array.isArray(frame.centered_advantage) ? frame.centered_advantage : [];
+      $("advantage-line").textContent = advantages.length
+        ? `Centered advantage: ${advantages.map((item, index) => `A${index} ${formatSigned(item)}`).join(" · ")}`
+        : "Centered advantages unavailable for this trace.";
+    }
+
+    function renderFrameStats(frame) {
+      const trace = state.trace;
+      $("stat-index").textContent = `${state.index} / ${Math.max(0, trace.frames.length - 1)}`;
+      $("stat-native-frame").textContent = frame && frame.native_frame !== null ? String(frame.native_frame) : "—";
+      $("stat-step").textContent = finiteNumber(trace.step_frames) === null ? "—" : String(trace.step_frames);
+      $("stat-reward").textContent = formatNumber(frame && frame.reward);
+      $("stat-done").textContent = frame && frame.done ? "yes" : frame ? "no" : "—";
+      const events = frame && frame.events;
+      const nativeFlags = NATIVE_EVENT_FLAGS;
+      const providedFlags = nativeFlags.filter((name) => events && typeof events[name] === "boolean");
+      const trueFlags = nativeFlags.filter((name) => events && events[name] === true);
+      $("stat-event").textContent = events === null || !providedFlags.length ? "unavailable" : trueFlags.length ? trueFlags.join(", ") : "none true";
+      const flagContainer = $("event-flags");
+      flagContainer.replaceChildren();
+      nativeFlags.forEach((name) => {
+        const value = events && typeof events[name] === "boolean" ? events[name] : null;
+        const flag = document.createElement("span");
+        flag.className = `event-flag ${value === true ? "true" : value === false ? "false" : "unknown"}`;
+        flag.textContent = `${name} ${value === null ? "—" : value ? "yes" : "no"}`;
+        flagContainer.appendChild(flag);
+      });
+      const nativePayload = {};
+      nativeFlags.forEach((name) => { if (events && typeof events[name] === "boolean") nativePayload[name] = events[name]; });
+      $("events").textContent = Object.keys(nativePayload).length ? JSON.stringify(nativePayload, null, 2) : "Native event flags unavailable for this frame.";
+      $("timeline").value = String(state.index);
+      $("frame-label").textContent = `${state.index} / ${Math.max(0, trace.frames.length - 1)}`;
+    }
+
+    function resizeCanvas(canvas, cssHeight) {
+      const width = Math.max(280, Math.floor(canvas.clientWidth || canvas.parentElement.clientWidth || 800));
+      const ratio = window.devicePixelRatio || 1;
+      const height = Math.max(80, Math.floor(cssHeight * ratio));
+      canvas.width = Math.floor(width * ratio);
+      canvas.height = height;
+      canvas.style.height = `${cssHeight}px`;
+      return { width: canvas.width, height: canvas.height, ratio };
+    }
+
+    function timelineValue(frame, series) {
+      if (!frame) return null;
+      if (series === "reward") return finiteNumber(frame.reward);
+      if (series === "q") {
+        const action = actionNumber(frame.action, 0);
+        return finiteNumber(safeArray(frame.q)[action]);
+      }
+      return finiteNumber(frame.value);
+    }
+
+    function timelineEventInfo(frames) {
+      const indices = [];
+      const labels = new Set();
+      let anyPayload = false;
+      frames.forEach((frame, index) => {
+        const events = frame && frame.events;
+        if (!events || typeof events !== "object") return;
+        anyPayload = true;
+        NATIVE_EVENT_FLAGS.forEach((name) => {
+          if (events[name] === true) {
+            indices.push({ name, index });
+            labels.add(name);
+          }
+        });
+      });
+      $("timeline-events-note").textContent = !anyPayload
+        ? "Event markers: unavailable (no native event payloads)"
+        : labels.size
+          ? `Event markers: ${Array.from(labels).join(" · ")} (presence only; post-action)`
+          : "Event markers: none true in the returned native flags";
+      return indices;
+    }
+
+    function drawTimeline() {
+      const canvas = $("timeline-chart");
+      const dimensions = resizeCanvas(canvas, 130);
+      const context = canvas.getContext("2d");
+      const width = dimensions.width;
+      const height = dimensions.height;
+      const ratio = dimensions.ratio;
+      context.clearRect(0, 0, width, height);
+      context.fillStyle = "#101111";
+      context.fillRect(0, 0, width, height);
+      const frames = state.trace ? state.trace.frames : [];
+      if (!frames.length) return;
+      const series = $("timeline-series").value;
+      const values = frames.map((frame) => timelineValue(frame, series));
+      const eventIndices = timelineEventInfo(frames);
+      const left = 34 * ratio, right = 10 * ratio, top = 10 * ratio, bottom = 20 * ratio;
+      const plotWidth = Math.max(1, width - left - right);
+      const xFor = (index) => left + (frames.length <= 1 ? 0 : index * plotWidth / (frames.length - 1));
+      const finite = values.filter((value) => value !== null);
+      if (!finite.length) {
+        context.fillStyle = "#9ca4a0";
+        context.font = `${12 * ratio}px system-ui`;
+        context.fillText("V is unavailable for this trace", 12 * ratio, 24 * ratio);
+        eventIndices.forEach(({ name, index }) => {
+          context.strokeStyle = EVENT_MARKER_COLORS[name];
+          context.lineWidth = 2 * ratio;
+          context.beginPath(); context.moveTo(xFor(index), height - bottom - 8 * ratio); context.lineTo(xFor(index), height - bottom + 4 * ratio); context.stroke();
+        });
+        return;
+      }
+      let min = Math.min(0, ...finite);
+      let max = Math.max(0, ...finite);
+      if (Math.abs(max - min) < 1e-9) { min -= 1; max += 1; }
+      const pad = (max - min) * .1;
+      min -= pad; max += pad;
+      const plotHeight = Math.max(1, height - top - bottom);
+      const yFor = (value) => top + (max - value) * plotHeight / (max - min);
+      context.strokeStyle = "#343837";
+      context.lineWidth = ratio;
+      [min, 0, max].forEach((value) => {
+        const y = yFor(value);
+        context.beginPath(); context.moveTo(left, y); context.lineTo(width - right, y); context.stroke();
+      });
+      context.fillStyle = "#9ca4a0";
+      context.font = `${10 * ratio}px system-ui`;
+      context.fillText(formatNumber(max, 2), 4 * ratio, yFor(max) + 4 * ratio);
+      context.fillText(formatNumber(min, 2), 4 * ratio, yFor(min) + 4 * ratio);
+      context.strokeStyle = series === "reward" ? "#f0c66d" : series === "q" ? "#54d7ee" : "#8ddc82";
+      context.lineWidth = 1.5 * ratio;
+      context.beginPath();
+      let started = false;
+      values.forEach((value, index) => {
+        if (value === null) { started = false; return; }
+        const x = xFor(index), y = yFor(value);
+        if (!started) context.moveTo(x, y); else context.lineTo(x, y);
+        started = true;
+      });
+      context.stroke();
+      const markerX = xFor(clamp(state.index, 0, frames.length - 1));
+      context.strokeStyle = "#ff625f";
+      context.lineWidth = ratio;
+      context.beginPath(); context.moveTo(markerX, top); context.lineTo(markerX, height - bottom); context.stroke();
+      context.fillStyle = "#e4e7e5";
+      context.beginPath(); context.arc(markerX, height - bottom + 7 * ratio, 3 * ratio, 0, Math.PI * 2); context.fill();
+      eventIndices.forEach(({ name, index }) => {
+        context.strokeStyle = EVENT_MARKER_COLORS[name];
+        context.lineWidth = 2 * ratio;
+        const x = xFor(index);
+        context.beginPath(); context.moveTo(x, height - bottom - 8 * ratio); context.lineTo(x, height - bottom + 4 * ratio); context.stroke();
+      });
+    }
+
+    function renderFrame() {
+      const frame = currentFrame();
+      if (!frame || !state.trace) return;
+      renderFrameStats(frame);
+      renderGameImage(frame);
+      renderInputStack();
+      renderQ(frame);
+      populateActionSelects();
+      drawTimeline();
+    }
+
+    function hideExplanationForPlayback() {
+      state.explain = null;
+      $("map-empty").hidden = false;
+      $("map-empty").textContent = "Pause or scrub to inspect this frame's explanation.";
+      $("map-wrap").hidden = true;
+      $("map-scale").hidden = true;
+      $("map-caption").textContent = "";
+      $("grid-position-note").textContent = "";
+      $("explain-status").textContent = "Playback · pause to load";
+      $("conv-grid").replaceChildren();
+      const context = $("conv-canvas").getContext("2d");
+      if (context && typeof context.clearRect === "function") context.clearRect(0, 0, 7, 7);
+      $("conv-scale").textContent = "Pause to load feature maps.";
+      $("ablation-q").replaceChildren();
+      $("ablation-gap").textContent = "—";
+      $("bias-difference").textContent = "—";
+      renderContributions([]);
+    }
+
+    function setPlaying(value) {
+      state.playing = Boolean(value && state.trace && state.trace.frames.length > 1);
+      if (state.playing) {
+        // Explanation requests are on-demand. Stop an in-flight request so
+        // playback remains a bounded scrub loop instead of a heatmap queue.
+        state.explainSerial += 1;
+        if (state.explainController) state.explainController.abort();
+        hideExplanationForPlayback();
+      }
+      if (!state.playing && state.playTimer !== null) {
+        window.clearTimeout(state.playTimer);
+        state.playTimer = null;
+      }
+      $("play").textContent = state.playing ? "Pause" : "Play";
+      $("play").setAttribute("aria-label", state.playing ? "Pause replay" : "Play replay");
+      if (state.playing) schedulePlayback();
+    }
+
+    function togglePlayback() {
+      if (state.playing) {
+        setPlaying(false);
+        requestExplanation();
+      } else {
+        setPlaying(true);
+      }
+    }
+
+    function playbackDelay() {
+      const frame = currentFrame();
+      const next = state.trace && state.trace.frames[state.index + 1];
+      const nativeDelta = frame && next && finiteNumber(frame.native_frame) !== null && finiteNumber(next.native_frame) !== null
+        ? Number(next.native_frame) - Number(frame.native_frame)
+        : finiteNumber(state.trace && state.trace.step_frames);
+      const frames = nativeDelta !== null && nativeDelta > 0 ? nativeDelta : 1;
+      // Native frame numbers are 60 Hz. Keep a bad trace from creating a
+      // zero-delay timer or an unbounded wait.
+      return clamp(frames / 60 * 1000, 16, 1000);
+    }
+
+    function schedulePlayback() {
+      if (!state.playing || state.playTimer !== null) return;
+      state.playTimer = window.setTimeout(() => {
+        state.playTimer = null;
+        if (!state.playing || !state.trace) return;
+        if (state.index >= state.trace.frames.length - 1) {
+          setPlaying(false);
+          requestExplanation();
+          return;
+        }
+        state.index += 1;
+        renderFrame();
+        schedulePlayback();
+      }, playbackDelay());
+    }
+
+    function setIndex(index, pause = true, inputRegion = null, inputRegionLabel = "") {
+      if (!state.trace) return;
+      if (pause) setPlaying(false);
+      state.inputRegion = inputRegion;
+      state.inputRegionLabel = inputRegion ? inputRegionLabel : "";
+      state.index = clamp(Math.round(Number(index) || 0), 0, state.trace.frames.length - 1);
+      renderFrame();
+      requestExplanation();
+    }
+
+    function traceEvaluationReward(trace) {
+      return finiteNumber(trace.eval_reward ?? trace.evaluation_reward ?? (trace.evaluation && trace.evaluation.reward));
+    }
+
+    function traceActualTotal(trace) {
+      const explicit = finiteNumber(trace.actual_total_reward ?? trace.total_reward ?? trace.replay_total_reward);
+      if (explicit !== null) return explicit;
+      const rewards = safeArray(trace.frames).map((frame) => finiteNumber(frame && frame.reward));
+      return rewards.length && rewards.every((value) => value !== null) ? rewards.reduce((sum, value) => sum + value, 0) : null;
+    }
+
+    function traceEvaluationMatch(trace, evaluationReward, actualTotal) {
+      const raw = trace.evaluation_reward_matches;
+      if (typeof raw === "boolean") return raw;
+      if (typeof raw === "string" && /^(true|false)$/i.test(raw)) return raw.toLowerCase() === "true";
+      // Do not infer a match when the server did not provide both values.
+      return evaluationReward !== null && actualTotal !== null ? Math.abs(evaluationReward - actualTotal) < 1e-6 : null;
+    }
+
+    function setMeta(trace) {
+      $("meta-seed").textContent = trace.seed === undefined || trace.seed === null ? "—" : String(trace.seed);
+      $("meta-checkpoint").textContent = trace.checkpoint === undefined || trace.checkpoint === null ? "—" : String(trace.checkpoint);
+      $("meta-sha").textContent = trace.checkpoint_sha256 === undefined || trace.checkpoint_sha256 === null ? "—" : String(trace.checkpoint_sha256);
+      $("meta-step-frames").textContent = finiteNumber(trace.step_frames) === null ? "—" : String(trace.step_frames);
+      const evaluationReward = traceEvaluationReward(trace);
+      const actualTotal = traceActualTotal(trace);
+      const matches = traceEvaluationMatch(trace, evaluationReward, actualTotal);
+      $("meta-eval-reward").textContent = formatNumber(evaluationReward, 1);
+      $("meta-actual-total").textContent = formatNumber(actualTotal, 1);
+      $("meta-eval-match").classList.toggle("warning", matches === false);
+      $("meta-eval-match-value").textContent = matches === null ? "not supplied" : matches ? "matches" : "MISMATCH";
+      return { evaluationReward, actualTotal, matches };
+    }
+
+    function resetExplanationView() {
+      state.explain = null;
+      state.mapScale = 1;
+      $("map-empty").hidden = false;
+      $("map-wrap").hidden = true;
+      $("map-scale").hidden = true;
+      $("map-caption").textContent = "";
+      $("grid-position-note").textContent = "";
+      $("explain-status").textContent = "Waiting for a frame";
+      $("conv-grid").replaceChildren();
+      $("conv-canvas").getContext("2d").clearRect(0, 0, 7, 7);
+      $("conv-scale").textContent = "No feature maps loaded.";
+      $("ablation-q").replaceChildren();
+      $("ablation-gap").textContent = "—";
+      $("bias-difference").textContent = "—";
+      renderContributions([]);
+    }
+
+    function explanationParams() {
+      return {
+        episode: state.episode,
+        frame: state.mapFrameMode === "all" ? "all" : state.mapFrame,
+        alternative: state.alternative === "auto" ? "auto" : state.alternative,
+        channel: state.channel,
+        radius: state.radius,
+      };
+    }
+
+    async function requestExplanation() {
+      if (state.playing || !state.trace || !currentFrame()) return;
+      const serial = ++state.explainSerial;
+      if (state.explainController) state.explainController.abort();
+      const controller = new AbortController();
+      state.explainController = controller;
+      const requestedIndex = state.index;
+      const requestedEpisode = state.episode;
+      $("explain-status").textContent = "Loading explanation…";
+      setStatus(state.playing ? "Playing" : "Loading", "busy");
+      try {
+        const data = await fetchJSON(endpoint(`/api/explain/${encodeURIComponent(requestedIndex)}`, explanationParams()), { signal: controller.signal });
+        if (serial !== state.explainSerial || requestedIndex !== state.index || requestedEpisode !== state.episode) return;
+        state.explain = data && data.explain && typeof data.explain === "object" ? data.explain : data;
+        renderExplanation();
+        $("explain-status").textContent = "Loaded";
+        if (!state.playing) setStatus("Ready", "ready");
+      } catch (error) {
+        if (serial !== state.explainSerial || (error && /cancelled/i.test(error.message || ""))) return;
+        $("explain-status").textContent = "Unavailable";
+        resetExplanationView();
+        $("explain-status").textContent = "Unavailable";
+        if (!state.playing) setStatus("Ready", "ready");
+        showNotice(`Explanation unavailable for frame ${requestedIndex}: ${error.message}. Replay remains usable.`);
+      }
+    }
+
+    function mapEntries(matrix) {
+      const parsed = matrixFrom(matrix, 1, 1);
+      if (!parsed) return [];
+      const values = [];
+      parsed.values.forEach((row) => {
+        if (Array.isArray(row)) row.forEach((value) => { const number = finiteNumber(value); if (number !== null) values.push(number); });
+      });
+      return values;
+    }
+
+    function divergingColor(value, scale) {
+      const magnitude = clamp(Math.abs(value) / Math.max(scale, 1e-12), 0, 1);
+      // Keep zero dark; positive values are red and negative values are blue.
+      if (value >= 0) return [Math.round(8 + 239 * magnitude), Math.round(10 + 54 * magnitude), Math.round(12 + 43 * magnitude), 255];
+      return [Math.round(8 + 20 * magnitude), Math.round(10 + 82 * magnitude), Math.round(12 + 210 * magnitude), 255];
+    }
+
+    function drawMap(canvas, raw, scale) {
+      const matrix = matrixFrom(raw, 1, 1);
+      if (!matrix) return null;
+      canvas.width = matrix.cols;
+      canvas.height = matrix.rows;
+      const context = canvas.getContext("2d");
+      const image = context.createImageData(matrix.cols, matrix.rows);
+      for (let row = 0; row < matrix.rows; row++) {
+        const source = Array.isArray(matrix.values[row]) ? matrix.values[row] : [];
+        for (let col = 0; col < matrix.cols; col++) {
+          const number = finiteNumber(source[col]) || 0;
+          const color = divergingColor(number, scale);
+          const offset = (row * matrix.cols + col) * 4;
+          image.data[offset] = color[0]; image.data[offset + 1] = color[1]; image.data[offset + 2] = color[2]; image.data[offset + 3] = color[3];
+        }
+      }
+      context.putImageData(image, 0, 0);
+      return matrix;
+    }
+
+    function positionPair(position) {
+      // The native explanation payload emits grid positions as [x, y]. Keep
+      // the internal pair [row, col] so it overlays a row-major canvas.
+      if (Array.isArray(position) && position.length >= 2) return [finiteNumber(position[1]), finiteNumber(position[0])];
+      if (position && typeof position === "object") {
+        const row = position.row ?? position.y;
+        const col = position.col ?? position.x;
+        return [finiteNumber(row), finiteNumber(col)];
+      }
+      return [null, null];
+    }
+
+    function drawPositionMarkers(canvas, positions, matrix, stride = 1) {
+      if (!matrix || !Array.isArray(positions)) return;
+      const context = canvas.getContext("2d");
+      context.save();
+      context.fillStyle = "#f0c66d";
+      positions.forEach((position) => {
+        const [row, col] = positionPair(position);
+        if (row === null || col === null) return;
+        // grid_positions are input-pixel [x,y] centers while the map is
+        // downsampled into stride-sized cells.
+        const x = clamp(Math.floor(col / Math.max(1, stride)) + .5, 0, matrix.cols);
+        const y = clamp(Math.floor(row / Math.max(1, stride)) + .5, 0, matrix.rows);
+        context.beginPath(); context.arc(x, y, Math.max(.6, Math.min(matrix.cols, matrix.rows) / 18), 0, Math.PI * 2); context.fill();
+      });
+      context.restore();
+    }
+
+    function renderHeatmap() {
+      const explain = state.explain;
+      const canvas = $("heatmap-canvas");
+      if (!explain) return;
+      const raw = state.mapMode === "value" ? explain.value_map : explain.decision_map;
+      const matrix = drawMap(canvas, raw, state.mapScale);
+      if (!matrix) {
+        $("map-wrap").hidden = true;
+        $("map-scale").hidden = true;
+        $("map-empty").hidden = false;
+        $("map-empty").textContent = state.mapMode === "value"
+          ? "Value map unavailable for this (plain-head) trace. Switch to Decision."
+          : "Decision map unavailable for this frame.";
+        return;
+      }
+      $("map-empty").hidden = true;
+      $("map-wrap").hidden = false;
+      $("map-scale").hidden = false;
+      canvas.classList.toggle("blurred", $("map-blur").checked);
+      drawPositionMarkers(canvas, safeArray(explain.grid_positions), matrix, finiteNumber(explain.stride) || 1);
+      $("map-scale-min").textContent = `−${formatNumber(state.mapScale, 3)}`;
+      $("map-scale-max").textContent = `+${formatNumber(state.mapScale, 3)}`;
+      const mapName = state.mapMode === "value" ? "Signed value" : "Signed decision";
+      $("map-caption").innerHTML = `<strong>${mapName}</strong> · ${matrix.rows}×${matrix.cols} · original − perturbed · chosen A${actionNumber(explain.chosen, actionNumber(currentFrame().action, 0))} vs alternative A${resolvedAlternative(explain)}`;
+      const positions = safeArray(explain.grid_positions);
+      $("grid-position-note").textContent = positions.length ? `${positions.length} grid position${positions.length === 1 ? "" : "s"} supplied by the explanation API; markers are guide points only.` : "No grid positions supplied.";
+    }
+
+    function convMatrix(raw) {
+      const matrix = matrixFrom(raw, 7, 7);
+      if (!matrix || matrix.rows !== 7 || matrix.cols !== 7) return null;
+      return matrix;
+    }
+
+    function convColor(value, scale) {
+      const t = clamp(value / Math.max(scale, 1e-12), 0, 1);
+      return [Math.round(12 + 58 * t), Math.round(26 + 196 * t), Math.round(42 + 196 * t), 255];
+    }
+
+    function drawConv(canvas, raw, scale) {
+      const matrix = convMatrix(raw);
+      if (!matrix) return false;
+      canvas.width = 7; canvas.height = 7;
+      const context = canvas.getContext("2d");
+      const image = context.createImageData(7, 7);
+      for (let row = 0; row < 7; row++) for (let col = 0; col < 7; col++) {
+        const value = Math.max(0, finiteNumber(matrix.values[row][col]) || 0);
+        const color = convColor(value, scale);
+        const offset = (row * 7 + col) * 4;
+        image.data[offset] = color[0]; image.data[offset + 1] = color[1]; image.data[offset + 2] = color[2]; image.data[offset + 3] = color[3];
+      }
+      context.putImageData(image, 0, 0);
+      return true;
+    }
+
+    function renderAblation(explain) {
+      const ablation = explain && explain.ablation && typeof explain.ablation === "object" ? explain.ablation : null;
+      $("ablation-chosen").textContent = explain && explain.chosen !== undefined ? `A${actionNumber(explain.chosen)}` : "—";
+      $("ablation-alternative").textContent = explain && explain.alternative !== undefined ? `A${actionNumber(explain.alternative)}` : "—";
+      $("ablation-gap").textContent = ablation && finiteNumber(ablation.gap_delta) !== null ? formatSigned(ablation.gap_delta) : "—";
+      $("bias-difference").textContent = finiteNumber(explain && explain.bias_difference) === null ? "—" : formatSigned(explain.bias_difference);
+      const q = ablation ? safeArray(ablation.q).slice(0, ACTION_COUNT).map((value) => finiteNumber(value)) : [];
+      const finite = q.filter((value) => value !== null);
+      const min = finite.length ? Math.min(...finite) : 0;
+      const max = finite.length ? Math.max(...finite) : 1;
+      const range = Math.max(1e-9, max - min);
+      const chosen = actionNumber(explain && explain.chosen, actionNumber(currentFrame() && currentFrame().action));
+      const alternative = resolvedAlternative(explain);
+      const container = $("ablation-q");
+      container.replaceChildren();
+      if (!q.length) { container.textContent = "Ablation Q values unavailable."; return; }
+      q.forEach((value, action) => {
+        const row = document.createElement("div");
+        row.className = `ablation-row${action === chosen ? " chosen" : action === alternative ? " alternative" : ""}`;
+        const name = document.createElement("span"); name.textContent = `A${action}`;
+        const track = document.createElement("span"); track.className = "ablation-track";
+        const fill = document.createElement("span"); fill.className = "ablation-fill";
+        fill.style.width = value === null ? "0%" : `${clamp(((value - min) / range) * 100, 2, 100)}%`;
+        track.appendChild(fill);
+        const number = document.createElement("span"); number.className = "ablation-value"; number.textContent = formatNumber(value);
+        row.append(name, track, number); container.appendChild(row);
+      });
+    }
+
+    function renderConvMaps(explain) {
+      const maps = safeArray(explain && explain.conv_maps);
+      const validMaps = maps.map((map) => convMatrix(map));
+      const allValues = [];
+      validMaps.forEach((matrix) => {
+        if (!matrix) return;
+        matrix.values.forEach((row) => row.forEach((value) => { const number = finiteNumber(value); if (number !== null) allValues.push(Math.max(0, number)); }));
+      });
+      const scale = allValues.length ? Math.max(1e-12, Math.max(...allValues)) : 1;
+      const grid = $("conv-grid"); grid.replaceChildren();
+      $("channel-select").replaceChildren();
+      for (let channel = 0; channel < CHANNEL_COUNT; channel++) {
+        const option = document.createElement("option"); option.value = String(channel); option.textContent = `C${channel}`; $("channel-select").appendChild(option);
+      }
+      state.channel = clamp(state.channel, 0, CHANNEL_COUNT - 1);
+      $("channel-select").value = String(state.channel);
+      const selected = validMaps[state.channel];
+      const selectedCanvas = $("conv-canvas");
+      if (selected) drawConv(selectedCanvas, maps[state.channel], scale);
+      else {
+        const selectedContext = selectedCanvas.getContext("2d");
+        if (selectedContext && typeof selectedContext.clearRect === "function") selectedContext.clearRect(0, 0, 7, 7);
+      }
+      $("conv-scale").textContent = validMaps.filter(Boolean).length === CHANNEL_COUNT
+        ? `Selected C${state.channel}; cyan scale 0…${formatNumber(scale)} across all 64 maps.`
+        : `Expected conv_maps[64][7][7], received ${validMaps.filter(Boolean).length} valid maps.`;
+      for (let channel = 0; channel < CHANNEL_COUNT; channel++) {
+        const tile = document.createElement("button");
+        tile.type = "button"; tile.className = `conv-tile${channel === state.channel ? " selected" : ""}`; tile.title = `Select Conv3 channel ${channel}`;
+        const canvas = document.createElement("canvas"); canvas.width = 7; canvas.height = 7; canvas.setAttribute("aria-label", `Conv3 channel ${channel}`);
+        drawConv(canvas, maps[channel], scale);
+        const label = document.createElement("small"); label.textContent = `C${channel}`;
+        tile.append(canvas, label);
+        tile.addEventListener("click", () => selectChannel(channel));
+        grid.appendChild(tile);
+      }
+      renderAblation(explain);
+    }
+
+    function contributionValues(explain) {
+      const raw = safeArray(explain && explain.contributions);
+      return raw.length === FEATURE_COUNT ? raw.map((value) => finiteNumber(value)) : null;
+    }
+
+    function renderContributions(valuesOrEmpty) {
+      const values = Array.isArray(valuesOrEmpty) && valuesOrEmpty.length === FEATURE_COUNT ? valuesOrEmpty : [];
+      const list = $("contribution-list"); list.replaceChildren();
+      $("contribution-count").textContent = `${values.length} / ${FEATURE_COUNT} features`;
+      if (!values.length) {
+        $("contribution-summary").textContent = "The API has not returned an exact 512-value contribution vector for this frame.";
+        return;
+      }
+      const finite = values.map((value, index) => ({ value, index })).filter((entry) => entry.value !== null);
+      const maxAbs = finite.length ? Math.max(1e-12, ...finite.map((entry) => Math.abs(entry.value))) : 1;
+      finite.sort((left, right) => Math.abs(right.value) - Math.abs(left.value) || left.index - right.index);
+      finite.forEach((entry, rank) => {
+        const row = document.createElement("div");
+        row.className = `contribution-row${entry.index === state.feature ? " selected" : ""}`;
+        const rankNode = document.createElement("span"); rankNode.className = "contribution-rank"; rankNode.textContent = `#${rank + 1}`;
+        const featureButton = document.createElement("button"); featureButton.type = "button"; featureButton.textContent = `F${entry.index}`; featureButton.title = `Select feature ${entry.index} and load examples`;
+        featureButton.addEventListener("click", () => { state.feature = entry.index; renderContributions(values); });
+        const track = document.createElement("span"); track.className = "contribution-track";
+        const fill = document.createElement("span"); fill.className = `contribution-fill${entry.value >= 0 ? " positive" : ""}`; fill.style.width = `${Math.max(2, Math.abs(entry.value) / maxAbs * 100)}%`; track.appendChild(fill);
+        const valueNode = document.createElement("span"); valueNode.className = "contribution-value"; valueNode.textContent = formatSigned(entry.value);
+        row.append(rankNode, featureButton, track, valueNode); list.appendChild(row);
+      });
+      $("contribution-summary").textContent = `All ${FEATURE_COUNT} entries returned; ranking is by |contribution|. Positive bars are red, negative bars are blue.`;
+    }
+
+    function renderExplanation() {
+      const explain = state.explain;
+      if (!explain) return;
+      const valueEntries = mapEntries(explain.value_map);
+      const decisionEntries = mapEntries(explain.decision_map);
+      const maxAbs = Math.max(1e-12, ...valueEntries.concat(decisionEntries).map((value) => Math.abs(value)));
+      state.mapScale = maxAbs;
+      $("map-value").classList.toggle("active", state.mapMode === "value");
+      $("map-decision").classList.toggle("active", state.mapMode === "decision");
+      renderHeatmap();
+      renderConvMaps(explain);
+      renderContributions(contributionValues(explain));
+      $("channel-examples").disabled = false;
+      $("feature-examples").disabled = false;
+      clearError();
+    }
+
+    function selectChannel(channel) {
+      state.channel = clamp(Number(channel) || 0, 0, CHANNEL_COUNT - 1);
+      $("channel-select").value = String(state.channel);
+      requestExplanation();
+    }
+
+    function normaliseExamples(data) {
+      const examples = Array.isArray(data) ? data : safeArray(data && (data.examples || data.items));
+      return examples.filter((item) => item && typeof item === "object").map((item) => ({
+        index: finiteNumber(item.index),
+        activation: finiteNumber(item.activation),
+        region: Array.isArray(item.region) && item.region.length >= 2 ? item.region : null,
+        input_region: Array.isArray(item.input_region) && item.input_region.length >= 4 ? item.input_region : null,
+      })).filter((item) => item.index !== null);
+    }
+
+    async function loadExamples(kind) {
+      const unit = kind === "channel" ? state.channel : state.feature;
+      const serial = ++state.exampleSerial[kind];
+      const requestedEpisode = state.episode;
+      const status = $(kind === "channel" ? "channel-examples-status" : "feature-examples-status");
+      const list = $(kind === "channel" ? "channel-example-list" : "feature-example-list");
+      status.textContent = " loading…";
+      list.replaceChildren();
+      try {
+        const data = await fetchJSON(endpoint("/api/examples", { episode: state.episode, kind, unit }));
+        if (serial !== state.exampleSerial[kind] || requestedEpisode !== state.episode) return;
+        const examples = normaliseExamples(data);
+        if (!examples.length) { status.textContent = " no examples"; return; }
+        status.textContent = ` ${examples.length} example${examples.length === 1 ? "" : "s"}`;
+        examples.slice(0, 40).forEach((example) => {
+          const button = document.createElement("button"); button.type = "button";
+          const region = example.region ? ` · (${example.region[0]},${example.region[1]})` : "";
+          button.textContent = `frame ${example.index} · ${formatNumber(example.activation)}${region}`;
+          button.addEventListener("click", () => setIndex(example.index, true, example.input_region, `${kind} ${kind === "channel" ? `C${unit}` : `F${unit}`} example`));
+          list.appendChild(button);
+        });
+      } catch (error) {
+        if (serial !== state.exampleSerial[kind] || requestedEpisode !== state.episode) return;
+        status.textContent = ` unavailable (${error.message})`;
+      }
+    }
+
+    async function fetchTrace(episode, serial) {
+      if (state.traceController) state.traceController.abort();
+      const controller = new AbortController(); state.traceController = controller;
+      const url = endpoint("/api/trace", episode ? { episode } : {});
+      const data = await fetchJSON(url, { signal: controller.signal });
+      if (serial !== state.traceSerial) return null;
+      return normaliseTrace(data);
+    }
+
+    function applyTrace(trace) {
+      state.trace = trace;
+      state.index = 0;
+      state.inputChannel = 0;
+      state.mapFrame = 0;
+      state.alternative = "auto";
+      state.channel = 0;
+      state.feature = 0;
+      state.inputRegion = null;
+      state.inputRegionLabel = "";
+      state.inputCache = new WeakMap();
+      $("timeline").max = String(Math.max(0, trace.frames.length - 1));
+      resetExplanationView();
+      renderFrame();
+      renderFinalState(trace);
+      $("loading").hidden = true;
+      $("trace-content").hidden = false;
+      setStatus("Ready", "ready");
+      clearError();
+      const rewardMeta = setMeta(trace);
+      showNotice(rewardMeta.matches === false ? "Evaluation reward does not match the actual replay total for this trace." : "");
+      requestExplanation();
+    }
+
+    async function selectEpisode(episode, options = {}) {
+      const serial = ++state.traceSerial;
+      setPlaying(false);
+      state.episode = episode || null;
+      if (!options.keepUrl) {
+        try {
+          const url = new URL(window.location.href);
+          if (state.episode) url.searchParams.set("episode", state.episode); else url.searchParams.delete("episode");
+          window.history.replaceState(null, "", url);
+        } catch (_) { /* file:// and embedded hosts may disallow history updates */ }
+      }
+      $("loading").hidden = false;
+      $("loading").textContent = state.episode ? `Loading ${state.episode}…` : "Loading trace…";
+      $("trace-content").hidden = true;
+      setStatus("Loading", "busy");
+      try {
+        const trace = await fetchTrace(state.episode, serial);
+        if (!trace || serial !== state.traceSerial) return;
+        applyTrace(trace);
+      } catch (error) {
+        if (serial !== state.traceSerial || (error && /cancelled/i.test(error.message || ""))) return;
+        showError(`Could not load ${state.episode ? `episode ${state.episode}` : "the trace"}: ${error.message}`);
+        $("loading").textContent = "Trace unavailable. Check the replay server and retry.";
+        $("trace-content").hidden = true;
+      }
+    }
+
+    async function loadEpisodesThenTrace() {
+      const requested = queryEpisode();
+      let episodes = [];
+      try {
+        episodes = normaliseEpisodes(await fetchJSON("/api/episodes"));
+      } catch (error) {
+        // Single-trace servers are supported; don't make an optional picker
+        // failure block the replay.
+        showNotice("Episode list unavailable; loading the single trace endpoint.");
+      }
+      state.episodes = episodes;
+      const picker = $("episode-picker");
+      const select = $("episode-select");
+      if (episodes.length) {
+        picker.hidden = false;
+        select.replaceChildren();
+        episodes.forEach((episode) => {
+          const option = document.createElement("option");
+          option.value = episode.id;
+          const reward = finiteNumber(episode.eval_reward);
+          option.textContent = `${episode.label}${episode.seed === undefined || episode.seed === null ? "" : ` · seed ${episode.seed}`}${reward === null ? "" : ` · eval ${formatNumber(reward, 1)}`}`;
+          select.appendChild(option);
+        });
+        const chosen = episodes.some((episode) => episode.id === requested) ? requested : episodes[0].id;
+        select.value = chosen;
+        await selectEpisode(chosen, { keepUrl: chosen === requested });
+        return;
+      }
+      picker.hidden = true;
+      await selectEpisode(requested, { keepUrl: true });
+    }
+
+    $("episode-select").addEventListener("change", (event) => selectEpisode(event.target.value));
+    $("play").addEventListener("click", togglePlayback);
+    $("previous").addEventListener("click", () => setIndex(state.index - 1));
+    $("next").addEventListener("click", () => setIndex(state.index + 1));
+    $("timeline").addEventListener("input", (event) => setIndex(event.target.value));
+    $("timeline-series").addEventListener("change", drawTimeline);
+    $("stack-all").addEventListener("click", () => { state.inputMode = "all"; renderInputStack(); });
+    $("stack-single").addEventListener("click", () => { state.inputMode = "single"; renderInputStack(); });
+    $("input-frame-select").addEventListener("change", (event) => { state.inputChannel = Number(event.target.value) || 0; renderInputStack(); });
+    $("map-all").addEventListener("click", () => { state.mapFrameMode = "all"; setStackButtons(); requestExplanation(); });
+    $("map-single").addEventListener("click", () => { state.mapFrameMode = "single"; state.mapFrame = state.inputChannel; setStackButtons(); requestExplanation(); });
+    $("map-frame-select").addEventListener("change", (event) => { state.mapFrame = Number(event.target.value) || 0; state.mapFrameMode = "single"; setStackButtons(); requestExplanation(); });
+    $("map-value").addEventListener("click", () => { state.mapMode = "value"; $("map-value").classList.add("active"); $("map-decision").classList.remove("active"); renderHeatmap(); });
+    $("map-decision").addEventListener("click", () => { state.mapMode = "decision"; $("map-decision").classList.add("active"); $("map-value").classList.remove("active"); renderHeatmap(); });
+    $("map-blur").addEventListener("change", renderHeatmap);
+    $("alternative-select").addEventListener("change", (event) => { state.alternative = event.target.value === "auto" ? "auto" : actionNumber(event.target.value); requestExplanation(); });
+    $("radius-select").addEventListener("change", (event) => { state.radius = clamp(Number(event.target.value) || 6, 3, 12); requestExplanation(); });
+    $("refresh-explain").addEventListener("click", requestExplanation);
+    $("channel-select").addEventListener("change", (event) => selectChannel(event.target.value));
+    $("channel-examples").addEventListener("click", () => loadExamples("channel"));
+    $("feature-examples").addEventListener("click", () => loadExamples("feature"));
+    window.addEventListener("resize", drawTimeline);
+    window.addEventListener("keydown", (event) => {
+      if (event.code !== "Space" || /INPUT|SELECT|TEXTAREA|BUTTON/.test(document.activeElement && document.activeElement.tagName)) return;
+      event.preventDefault(); togglePlayback();
+    });
+
+    loadEpisodesThenTrace().catch((error) => showError(error.message));
+  </script>
+</body>
+</html>

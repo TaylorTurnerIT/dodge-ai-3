@@ -105,6 +105,11 @@ V47|Action balance over declared action space includes zero-count actions; metri
 V48|Seed diversity experiment separates learner RNG seed from nested game-seed pools of 700/5000; pool ∈ [0,9999], eval ∈ [10000,32767], no overlap/clamping; natural episode boundaries only.
 V49|Pool membership immutable in manifest; completed episodes record game seed; per-seed training-step counts sum to segment steps; configured pool size ≠ measured visited count.
 V50|Requested intermediate snapshots retain global checkpoint steps; evaluation after training avoids changing training RNG stream.
+V51|Explanation input + Q/V/advantage captured before action; reward/events/termination labeled after action; immutable checkpoint SHA-256 + native config retained; no live training state.
+V52|Dueling explanation Q equals forward output; V equals mean Q; pairwise 512-feature contributions + bias reconstruct fixed-action Q gap; plain head has no invented V.
+V53|Blur sensitivity = original minus perturbed V or fixed chosen-alternative Q gap; all-stack + single-frame modes explicit; sign, mask/grid, scale + sensitivity limitations visible; no model mutation.
+V54|Explanation replay pause/scrub aligns game image, exact oldest→newest input stack, predictions + timelines; native events unavailable → unknown, never fabricated zero.
+V55|Offline feature/channel examples use real captured observations; channel suppression changes inference activation only; activation ≠ importance; traces ≤4096 decisions each, explanation cache + inference concurrency bounded.
 
 §T
 id|status|task|cites
@@ -121,6 +126,7 @@ T9|x|Add reward-mix/TD/action-balance/dead-unit diagnostics, effective epsilon s
 T10|.|Add run-anchored best/median/worst replay comparison over the run's own checkpoint, settings, and eval seeds with a side-by-side browser page|C8,V26-V29,V35-V39
 T11|x|Fix DDQN measurement integrity: sync units, resume/provenance, completed episodes, paired counterfactual, censoring, optimizer metrics, action coverage|V40-V47
 T12|x|Add nested game-seed pools, measured exposure, and 10k/200k checkpoints for 500k A100 comparison|V48-V50
+T13|x|Add checkpoint-backed held-out explanation replay, signed perturbations, feature examples + channel ablations|V51-V55
 
 §B
 id|date|cause|fix
@@ -141,3 +147,6 @@ B14|2026-09-11|Periodic `reward` mixed partial + completed episode accumulators 
 B15|2026-09-11|Action balance dropped zero-count actions + cumulative epsilon exploration masked greedy lock-in|V47
 B16|2026-09-11|Resume setup failure occurred after status became running but before the failure boundary, leaving a stale running artifact|Wrap setup/load in failure-state handling; V18
 B17|2026-09-11|One learner initialization seed was mistaken for one game seed despite per-episode seed increments; unbounded increments can enter eval ranges|Separate learner/game seed semantics and reserve disjoint pool; V48,V49
+B18|2026-09-11|Explanation server draft exceeded Ruff line limit|Format draft before verification; mechanical failure, no new invariant
+B19|2026-09-11|Explanation draft suppressed input-stack channels instead of final convolution channels + exposed perturbed gap as signed sensitivity|V53,V55; test conv-channel 63 ablation against manual zeroing + signed fixed-pair map
+B20|2026-09-11|UI draft converted null V to zero, counted false event flags as events, and requested heatmaps during playback|V52,V54,V55; Node contracts preserve null + presence semantics and forbid playback inference; DOM stub extended for rendering

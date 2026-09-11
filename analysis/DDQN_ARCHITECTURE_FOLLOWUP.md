@@ -200,3 +200,38 @@ The old CLI's stale proxy credentials had made a completed A100 job appear
 lost. Recovering its existing assignment with fresh credentials exposed the
 checkpoint and all artifacts. No model conclusion should be drawn from that
 transport failure.
+
+## Checkpoint-backed explanation replay
+
+The new [explanation viewer guide](DDQN_EXPLANATION_REPLAY.md) describes the
+pre-action input/Q/V capture, signed blur sensitivity, Conv3 suppression, and
+exact 512-feature action-gap decomposition. Reproduction evidence is in
+[DDQN_EXPLANATION_PROOF.json](DDQN_EXPLANATION_PROOF.json). The viewer defaults
+to held-out representatives from the completed 700-seed, 500k-step A100 run.
+Its full holdout mean survival is 349.9375 native frames over 128 uncensored
+episodes. This is one learner initialization, not a replicated pool-size result;
+the 5000-seed comparison was still running when this section was added.
+
+All three representative replays exactly reproduced recorded evaluation reward.
+The final decision in each episode gives a useful observation:
+
+| Held-out episode | Chosen Q before action | Reward after terminal action | V before action | Chosen-minus-runner-up gap |
+|---|---:|---:|---:|---:|
+| Best, seed 20152 | 46.5121 | 2 | 46.3464 | 0.02594 |
+| Median, seed 20155 | 45.7978 | 3 | 45.7090 | 0.00188 |
+| Worst, seed 20159 | 46.5179 | 1 | 46.2945 | 0.12850 |
+
+Because these actions terminate the episode, their realized remaining returns
+equal the listed immediate rewards. The predictions are much higher. V also
+remains close to its common reset value of 46.3689. This identifies terminal
+anticipation as a concrete investigation, rather than relying on flat average
+loss or a quality-gate badge. It does not establish global miscalibration:
+three selected transitions are not a representative conditional-return sample,
+and identical partial observations can conceal different native states.
+
+The action gap is not uniformly tiny before death: the worst example has a
+larger gap than the other two. That weakens a universal “it cannot choose between
+actions” explanation. Use the viewer to locate sensitive regions, then test
+warning-state observability, terminal-transition sampling, and target cadence
+on new scenarios. No reward or architecture improvement is claimed from these
+visualizations alone.
