@@ -110,8 +110,7 @@ def action_histogram(actions: Sequence[int], num_actions: int) -> dict[str, obje
         if 0 <= index < len(counts):
             counts[index] += 1
     total = sum(counts)
-    nonzero = [value for value in counts if value > 0]
-    ratio = (min(nonzero) / max(nonzero)) if nonzero else 0.0
+    ratio = action_balance_ratio(counts)
     least_used = min(range(len(counts)), key=lambda i: counts[i])
     return {
         "counts": counts,
@@ -122,11 +121,13 @@ def action_histogram(actions: Sequence[int], num_actions: int) -> dict[str, obje
 
 
 def action_balance_ratio(counts: Sequence[int]) -> float:
-    """Balance ratio for already-aggregated counts; 0 when empty."""
+    """Balance ratio for already-aggregated counts; 0 for an unused action."""
 
     values = [int(value) for value in counts]
     nonzero = [value for value in values if value > 0]
     if not nonzero:
+        return 0.0
+    if any(value == 0 for value in values):
         return 0.0
     return float(min(nonzero) / max(nonzero))
 
@@ -230,17 +231,16 @@ def best_greedy_episode(
 
 
 def effective_decay_steps(configured: int, steps: int) -> int:
-    """Scale epsilon decay to the actual run length.
+    """Return the validated global epsilon schedule.
 
-    Full campaigns use the configured 1M-step schedule. Bounded smoke runs
-    with ``steps << configured`` would otherwise sit near epsilon=1.0 and
-    never practice exploitation, so the effective schedule is capped at the
-    run length. Always returns at least 1.
+    ``steps`` remains in the signature for compatibility with existing
+    callers, but segment length must not implicitly rescale the schedule.
+    Bounded runs that need faster exploitation must pass an explicit shorter
+    configured schedule. Always returns at least 1.
     """
 
-    configured_value = max(1, int(configured))
-    total = max(1, int(steps))
-    return min(configured_value, total)
+    del steps
+    return max(1, int(configured))
 
 
 def decide_gate(
@@ -255,6 +255,8 @@ def decide_gate(
     train_mean: float,
     holdout_mean: float | None,
     updates: int,
+    target_sync_count: int,
+    evaluation_censored_share: float = 0.0,
 ) -> tuple[str, list[str]]:
     """Pick a quality gate and human-readable reasons.
 
@@ -268,7 +270,7 @@ def decide_gate(
         reasons.append("warmup-no-updates")
     elif int(updates) == 0 and int(steps) >= int(warmup_steps):
         reasons.append("no-optimizer-updates")
-    if int(target_sync_interval) > int(steps):
+    if int(target_sync_count) <= 0:
         reasons.append("target-never-synced")
     if int(decay_configured) > int(decay_effective):
         reasons.append("epsilon-decay-scaled")
@@ -283,6 +285,8 @@ def decide_gate(
         gap = abs(float(train_mean) - float(holdout_mean)) / denominator
         if gap > GENERALIZATION_GAP_THRESHOLD:
             reasons.append("generalization-gap")
+    if float(evaluation_censored_share) > 0.0:
+        reasons.append("evaluation-censored")
     if int(steps) < PASS_MIN_STEPS:
         reasons.append("bounded-smoke")
         return "warn", reasons

@@ -85,7 +85,7 @@ V27|Every replay image is the Rust `collision-image-v1` raster from a fresh lane
 V28|Replay output is bounded to at most 600 decisions and 8 in-memory replays; HTTP routes expose only generated tokens, metadata, and PNG frames.
 V29|Watch Agent opens the generated Tailscale URL when possible and reports the URL in the dashboard event stream when browser launch is unavailable.
 V30|Every log row carries reward mix, TD error mean/std, action balance/counts, dead-unit share, and effective epsilon schedule; no Python game semantics.
-V31|Epsilon decay is capped at run length and both configured/effective values are stored; short runs still reach exploitation instead of sitting at epsilon 1.0.
+V31|Epsilon decay uses configured global environment-step schedule; bounded smoke exploitation requires explicit short decay, never implicit per-segment rescaling.
 V32|Final evaluation uses frozen inner (offset 10_000) and holdout (offset 20_000) seeds plus a forced-action counterfactual on the least-used action; train/holdout gap is reported.
 V33|Quality gate is computed from warmup/target/decay/sparsity/lock-in/gap checks; bounded runs stay `warn` and `pass` requires 5_000+ steps with no warnings.
 V34|Forced-action replay reuses a fresh native lane and greedy policy except at forced indices; it never touches the live trainer lane.
@@ -94,6 +94,14 @@ V36|Every comparison replay reuses the run's own checkpoint and game settings an
 V37|Replay builds the Q-head matching the checkpoint (dueling vs plain `q_head`); a plain-head checkpoint replays instead of failing load.
 V38|The reported best is the best greedy-policy episode of the frozen final evaluation; the training-curve maximum stays visible only as labeled training context, never as the run's best.
 V39|Run comparison serves plotted context per run: the downsampled training reward curve with its exploration-era max marked, plus the final-eval inner/holdout dot strip with best/median/worst ringed.
+V40|Target sync interval unit = optimizer updates; metrics + gate use actual sync count, not environment-step inference.
+V41|∀ run segment → local + global environment steps explicit; resume restores global epsilon progress while replay/RNG/env reset declared.
+V42|Manifest records source revision/dirty state, initialization ID, parent checkpoint SHA-256, parent step, + resume mode; unavailable fields explicit.
+V43|Metrics preserve every completed episode return exactly once; partial episode accumulator never labeled completed return.
+V44|Counterfactual baseline + forced action use identical seeds; artifact stores per-seed paired deltas + mean delta.
+V45|Evaluation records termination/censoring per seed + censored share; censored evaluation cannot support pass gate.
+V46|∀ logged optimizer diagnostic sample → target mean, Q-target mean, pre-clip gradient norm, + clipped flag logged.
+V47|Action balance over declared action space includes zero-count actions; metrics separate cumulative behavior counts from recent greedy-policy counts.
 
 §T
 id|status|task|cites
@@ -108,6 +116,7 @@ T7|x|Run fixed-seed image-only baseline and publish metrics visible in dashboard
 T8|x|Add bounded native replay generator, Tailscale HTTP page, and Watch Agent pop-out|C8,L11,V26-V29
 T9|x|Add reward-mix/TD/action-balance/dead-unit diagnostics, effective epsilon schedule, frozen train/holdout eval, counterfactual probe, and computed quality gate|V30-V34
 T10|.|Add run-anchored best/median/worst replay comparison over the run's own checkpoint, settings, and eval seeds with a side-by-side browser page|C8,V26-V29,V35-V39
+T11|x|Fix DDQN measurement integrity: sync units, resume/provenance, completed episodes, paired counterfactual, censoring, optimizer metrics, action coverage|V40-V47
 
 §B
 id|date|cause|fix
@@ -121,3 +130,9 @@ B7|2026-09-10|Browser generator was first added as `replay.py`, colliding with t
 B8|2026-09-11|Smoke runs stayed near epsilon 1.0, logged no sparsity/TD/coverage signals, and had no frozen holdout or lock-in check|Cap decay at run length, log diagnostics per row, freeze inner/holdout/counterfactual eval, compute gate; V30-V34
 B9|2026-09-11|Replay builder assumed a dueling head, so plain-head checkpoints failed load with missing `value_stream` keys|Detect the head from checkpoint keys and build the matching network; V37
 B10|2026-09-11|Training-curve maximum was reported as the run's best game, but it came from an exploration-era episode of an unsaved policy|Report the best frozen final-eval episode instead and plot training max as labeled context; V38,V39
+B11|2026-09-11|Gate compared optimizer-update target interval with environment steps → zero-sync runs escaped warning|V40
+B12|2026-09-11|Resume reported segment steps as total + restarted epsilon from local step without declaring replay/RNG/env reset|V41,V42
+B13|2026-09-11|Counterfactual used different seeds from greedy baseline → forced-action effect confounded by scenario|V44
+B14|2026-09-11|Periodic `reward` mixed partial + completed episode accumulators and omitted completions between log boundaries|V43
+B15|2026-09-11|Action balance dropped zero-count actions + cumulative epsilon exploration masked greedy lock-in|V47
+B16|2026-09-11|Resume setup failure occurred after status became running but before the failure boundary, leaving a stale running artifact|Wrap setup/load in failure-state handling; V18

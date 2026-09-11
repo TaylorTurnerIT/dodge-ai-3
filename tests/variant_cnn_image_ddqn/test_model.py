@@ -6,8 +6,13 @@ from torch import nn
 
 from dodge_native_game.variants.cnn_image_ddqn.model import (
     IMAGE_SHAPE,
+    INITIALIZATION_ID,
     AtariCnnQNetwork,
 )
+
+
+def test_initialization_has_versioned_identity() -> None:
+    assert INITIALIZATION_ID == "kaiming-relu-xavier-head-v1"
 
 
 def test_atari_cnn_has_dueling_head_and_no_probability_layers() -> None:

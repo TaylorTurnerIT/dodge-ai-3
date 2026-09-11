@@ -9,10 +9,12 @@ from torch import nn
 
 IMAGE_SHAPE: Final = (4, 84, 84)
 CNN_FEATURE_SIZE: Final = 64 * 7 * 7
+INITIALIZATION_ID: Final = "kaiming-relu-xavier-head-v1"
 
 __all__ = [
     "CNN_FEATURE_SIZE",
     "IMAGE_SHAPE",
+    "INITIALIZATION_ID",
     "AtariCnnQNetwork",
     "to_float_observations",
 ]

@@ -35,6 +35,7 @@ fi
 
 RUN_ID=""; STEPS="50000"; STACK="4"; GPU="T4"; SESSION=""; KEEP=""; CPU=""; RESUME=""
 WARMUP="20000"; SYNC="10000"; DUELING=""
+EPSILON_DECAY=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --run-id) RUN_ID="$2"; shift 2;;
@@ -50,6 +51,7 @@ while [[ $# -gt 0 ]]; do
         --w-uncontrolled) W_UNCONTROLLED="$2"; shift 2;;
         --warmup-steps) WARMUP="$2"; shift 2;;
         --target-sync-interval) SYNC="$2"; shift 2;;
+        --epsilon-decay-steps) EPSILON_DECAY="$2"; shift 2;;
         --dueling) DUELING="--dueling"; shift;;
         --no-dueling) DUELING="--no-dueling"; shift;;
         --keep) KEEP="--keep"; shift;;
@@ -92,6 +94,7 @@ if [[ -n "${W_SURVIVAL:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_survival=$W_SURVI
 if [[ -n "${W_DEATH:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_death=$W_DEATH"; fi
 if [[ -n "${W_SCORE:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_score=$W_SCORE"; fi
 if [[ -n "${W_UNCONTROLLED:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_uncontrolled=$W_UNCONTROLLED"; fi
+if [[ -n "$EPSILON_DECAY" ]]; then SHAPE_ARGS="$SHAPE_ARGS, epsilon_decay_steps=$EPSILON_DECAY"; fi
 colab install -s "$SESSION" gymnasium
 
 cat > "$TMPDIR/setup.py" <<EOF

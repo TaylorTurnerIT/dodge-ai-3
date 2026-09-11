@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import operator
 import os
 import threading
 import time
@@ -18,7 +19,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from .agent import DoubleDQNAgent
+from .agent import MAX_GRAD_NORM, DoubleDQNAgent
 from .diagnostics import (
     action_balance_ratio,
     best_greedy_episode,
@@ -31,7 +32,13 @@ from .diagnostics import (
     reward_mix_stats,
 )
 from .env import ACTION_COUNT, CNNImageDDQNEnv
-from .model import AtariCnnQNetwork
+from .episode_metrics import (
+    EpisodeReturnState,
+    paired_reward_deltas,
+    record_episode_step,
+)
+from .model import INITIALIZATION_ID, AtariCnnQNetwork
+from .provenance import git_source_provenance, infer_parent_run_id, sha256_file
 from .replay import ReplayBuffer
 from .rewards import UNCONTROLLED_SCORE_PER_ENEMY, RewardConfig
 from .run_artifacts import VARIANT_ID, RunArtifactWriter
@@ -258,18 +265,30 @@ def _seed_everything(seed: int) -> None:
 
 
 def _checkpoint_payload(
-    agent: DoubleDQNAgent, *, step: int, seed: int
+    agent: DoubleDQNAgent,
+    *,
+    step: int,
+    seed: int,
+    run_id: str | None = None,
+    target_sync_count: int = 0,
+    source: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     return {
+        "checkpoint_schema_version": 2,
         "variant_id": VARIANT_ID,
         "step": step,
+        "global_environment_step": step,
         "seed": seed,
+        "run_id": run_id,
+        "initialization_id": INITIALIZATION_ID,
         "observation_shape": list(agent.observation_shape),
         "num_actions": agent.num_actions,
         "online_network": agent.online_network.state_dict(),
         "target_network": agent.target_network.state_dict(),
         "optimizer": agent.optimizer.state_dict(),
         "optimizer_steps": agent.optimizer_steps,
+        "target_sync_count": int(target_sync_count),
+        "source": dict(source or {}),
     }
 
 
@@ -316,8 +335,39 @@ def _load_checkpoint(agent: DoubleDQNAgent, path: Path) -> dict[str, Any]:
     optimizer = payload.get("optimizer")
     if optimizer is not None:
         agent.optimizer.load_state_dict(optimizer)
-    agent.optimizer_steps = int(payload.get("optimizer_steps", 0))
+    agent.optimizer_steps = _checkpoint_counter(payload, "optimizer_steps")
     return payload
+
+
+def _checkpoint_counter(
+    payload: Mapping[str, object], key: str, *, default: int = 0
+) -> int:
+    """Read a non-negative integral checkpoint counter without truncation."""
+
+    raw = payload.get(key, default)
+    if isinstance(raw, bool):
+        raise ValueError(f"checkpoint {key} must be a non-negative integer")
+    try:
+        value = operator.index(raw)
+    except TypeError as error:
+        raise ValueError(
+            f"checkpoint {key} must be a non-negative integer"
+        ) from error
+    if value < 0:
+        raise ValueError(f"checkpoint {key} must be a non-negative integer")
+    return int(value)
+
+
+def _checkpoint_global_step(payload: Mapping[str, object]) -> int:
+    """Read global progress while accepting legacy step-only checkpoints."""
+
+    legacy_step = _checkpoint_counter(payload, "step")
+    if "global_environment_step" not in payload:
+        return legacy_step
+    global_step = _checkpoint_counter(payload, "global_environment_step")
+    if "step" in payload and global_step != legacy_step:
+        raise ValueError("checkpoint global_environment_step conflicts with step")
+    return global_step
 
 
 def _native_game_config(
@@ -389,10 +439,13 @@ def _evaluate(
     seeds: list[int] = eval_seed_list(seed, episodes, offset=seed_offset)
     q_samples: list[list[float]] = []
     dead_units: list[float] = []
+    action_counts = [0] * agent.num_actions
+    terminated_rows: list[bool] = []
     for eval_seed in seeds:
         observation, _ = env.reset(seed=eval_seed)
         episode_reward = 0.0
         frames = 0
+        episode_terminated = False
         for _ in range(max_steps):
             try:
                 q_values = agent.q_values_for(observation)
@@ -401,13 +454,16 @@ def _evaluate(
             except (RuntimeError, ValueError):
                 pass
             action = int(agent.select_action(observation, 0.0))
+            action_counts[action] += 1
             observation, reward, terminated, truncated, info = env.step(action)
             episode_reward += reward
             frames += int(info["native_frames_advanced"])
             if terminated or truncated:
+                episode_terminated = bool(terminated)
                 break
         rewards.append(episode_reward)
         survival_frames.append(frames)
+        terminated_rows.append(episode_terminated)
     spread = (
         q_spread_stats(q_samples)
         if q_samples
@@ -428,6 +484,15 @@ def _evaluate(
         "q_std": float(spread["std"]),
         "q_gap": float(spread["gap"]),
         "dead_units_mean": float(np.mean(dead_units)) if dead_units else 0.0,
+        "action_counts": action_counts,
+        "action_balance": action_balance_ratio(action_counts),
+        "terminated": terminated_rows,
+        "censored": [not value for value in terminated_rows],
+        "censored_share": (
+            float(np.mean([not value for value in terminated_rows]))
+            if terminated_rows
+            else 0.0
+        ),
     }
 
 
@@ -449,34 +514,44 @@ def _counterfactual_eval(
     """
 
     seeds: list[int] = eval_seed_list(seed, episodes, offset=seed_offset)
-    rewards: list[float] = []
+    baseline_rewards: list[float] = []
+    forced_rewards: list[float] = []
     for eval_seed in seeds:
-        observation, _ = env.reset(seed=eval_seed)
-        episode_reward = 0.0
-        try:
-            _, _, _, _, _ = (None, None, None, None, None)
-            observation_forced, reward, terminated, truncated, _ = env.step(
-                int(forced_action)
-            )
-            episode_reward += float(reward)
-            observation = observation_forced
-            if not (terminated or truncated):
-                for _ in range(max_steps - 1):
-                    action = int(agent.select_action(observation, 0.0))
+        rewards_for_seed: list[float] = []
+        for force_first_action in (False, True):
+            observation, _ = env.reset(seed=eval_seed)
+            episode_reward = 0.0
+            try:
+                for decision in range(max_steps):
+                    action = (
+                        int(forced_action)
+                        if force_first_action and decision == 0
+                        else int(agent.select_action(observation, 0.0))
+                    )
                     observation, reward, terminated, truncated, _ = env.step(action)
                     episode_reward += float(reward)
                     if terminated or truncated:
                         break
-        except (RuntimeError, ValueError):
-            pass
-        rewards.append(episode_reward)
+            except (RuntimeError, ValueError):
+                pass
+            rewards_for_seed.append(episode_reward)
+        baseline_rewards.append(rewards_for_seed[0])
+        forced_rewards.append(rewards_for_seed[1])
+    paired = paired_reward_deltas(
+        zip(seeds, baseline_rewards, strict=True),
+        zip(seeds, forced_rewards, strict=True),
+    )
     return {
         "episodes": episodes,
         "forced_action": int(forced_action),
         "seed_offset": seed_offset,
         "seeds": seeds,
-        "mean_reward": float(np.mean(rewards)) if rewards else 0.0,
-        "rewards": rewards,
+        "mean_reward": float(np.mean(forced_rewards)) if forced_rewards else 0.0,
+        "rewards": forced_rewards,
+        "baseline_rewards": baseline_rewards,
+        "reward_deltas": [row["delta"] for row in paired["rows"]],
+        "mean_reward_delta": paired["summary"]["mean_delta"],
+        "paired": paired,
     }
 
 
@@ -501,6 +576,7 @@ def train_run(
     resume_from: os.PathLike[str] | str | None = None,
     dueling: bool | None = None,
     learning_rate: float | None = None,
+    epsilon_decay_steps: int | None = None,
     shaping: bool = False,
     w_survival: float | None = None,
     w_death: float | None = None,
@@ -553,6 +629,8 @@ def train_run(
         lr_effective = float(learning_rate)
     if not lr_effective > 0.0:
         raise ValueError("learning_rate must be positive")
+    if epsilon_decay_steps is not None and epsilon_decay_steps < 1:
+        raise ValueError("epsilon_decay_steps must be positive")
     reward_defaults = RewardConfig()
 
     def _weight(flag: float | None, default: float) -> float:
@@ -567,6 +645,7 @@ def train_run(
         ),
     }
     shaping_enabled = bool(shaping)
+    source_provenance = git_source_provenance(_project_root())
 
     manifest = {
         "schema_version": 1,
@@ -580,18 +659,56 @@ def train_run(
         },
         "trainer": "native-cnn-image-ddqn",
         "device": chosen_device,
+        "initialization_id": INITIALIZATION_ID,
+        "source": source_provenance,
     }
     resumed_step = 0
+    resume_payload: dict[str, Any] | None = None
     if resume_from is not None:
-        resume_payload = torch.load(
+        loaded_resume_payload = torch.load(
             Path(resume_from), map_location="cpu", weights_only=False
         )
-        if isinstance(resume_payload, dict):
-            resumed_step = int(resume_payload.get("step", 0))
+        if not isinstance(loaded_resume_payload, dict):
+            raise ValueError("checkpoint must contain a mapping")
+        resume_payload = loaded_resume_payload
+        resumed_step = _checkpoint_global_step(resume_payload)
         manifest["resumed_from"] = str(resume_from)
         manifest["resumed_step"] = resumed_step
-    decay_configured = int(exploration_config.get("epsilon_decay_steps", 1_000_000))
+        manifest["resume_mode"] = "optimizer-state-with-fresh-replay-rng-env"
+        manifest["parent_checkpoint"] = {
+            "path": str(resume_from),
+            "sha256": sha256_file(Path(resume_from)),
+            "run_id": infer_parent_run_id(
+                Path(resume_from), resume_payload.get("run_id")
+            ),
+            "global_environment_step": resumed_step,
+            "optimizer_step": _checkpoint_counter(
+                resume_payload, "optimizer_steps"
+            ),
+            "initialization_id": resume_payload.get("initialization_id"),
+        }
+        manifest["resume_state"] = {
+            "restored": ["online_network", "target_network", "optimizer"],
+            "reset": [
+                "replay_buffer",
+                "replay_rng",
+                "action_rng",
+                "numpy_global_rng",
+                "torch_rng",
+                "environment",
+                "episode_accumulator",
+                "diagnostic_windows",
+                "segment_counters",
+            ],
+        }
+    decay_configured = int(
+        epsilon_decay_steps
+        if epsilon_decay_steps is not None
+        else exploration_config.get("epsilon_decay_steps", 1_000_000)
+    )
     decay_effective = effective_decay_steps(decay_configured, steps)
+    global_step_start = resumed_step
+    global_step_end = resumed_step + steps
     inner_seeds = inner_eval_seeds(seed, 4)
     holdout_seeds = holdout_eval_seeds(seed, 4)
     manifest["eval"] = {
@@ -599,6 +716,7 @@ def train_run(
         "inner_offset": 10_000,
         "holdout_offset": 20_000,
         "counterfactual_offset": 30_000,
+        "counterfactual_protocol": "paired-first-action-v1",
         "inner_seeds_preview": inner_seeds,
         "holdout_seeds_preview": holdout_seeds,
     }
@@ -621,6 +739,7 @@ def train_run(
             "dueling": dueling_effective,
             "learning_rate": lr_effective,
             "input_channels": stack_size,
+            "initialization_id": INITIALIZATION_ID,
         },
         "replay": {
             **replay_config,
@@ -637,17 +756,22 @@ def train_run(
             "epsilon_decay_steps": decay_configured,
             "epsilon_decay_steps_configured": decay_configured,
             "epsilon_decay_steps_effective": decay_effective,
+            "schedule_unit": "global-environment-steps",
         },
         "evaluation": {
             "protocol": "frozen-train-holdout-v1",
             "inner_offset": 10_000,
             "holdout_offset": 20_000,
             "counterfactual_offset": 30_000,
+            "counterfactual_protocol": "paired-first-action-v1",
             "episodes": eval_episodes,
             "max_steps_per_episode": eval_steps,
         },
         "run": {
             "steps": steps,
+            "segment_steps": steps,
+            "global_step_start": global_step_start,
+            "global_step_end": global_step_end,
             "seed": seed,
             "device": chosen_device,
             "update_every": update_every,
@@ -676,6 +800,9 @@ def train_run(
     if resume_from is not None:
         run_config["run"]["resumed_from"] = str(resume_from)
         run_config["run"]["resumed_step"] = resumed_step
+        run_config["run"]["resume_mode"] = (
+            "optimizer-state-with-fresh-replay-rng-env"
+        )
     writer = RunArtifactWriter.create(
         history_root,
         run_id,
@@ -696,35 +823,50 @@ def train_run(
         "powerups": bool(selected_game["powerups"]),
     }
     try:
-        env = env_factory(**env_kwargs)
-    except TypeError:
-        # Preserve the narrow factory seam used by the existing unit tests and
-        # by callers that provide a minimal fake environment.
-        env = env_factory(stack_size=stack_size, step_frames=step_frames)
-    replay = ReplayBuffer(
-        capacity=int(replay_config.get("capacity", 100_000)),
-        seed=seed,
-        num_actions=num_actions,
-        observation_shape=observation_shape,
-    )
-    def _network_factory(actions: int) -> torch.nn.Module:
-        return AtariCnnQNetwork(
-            actions, dueling=dueling_effective, input_channels=observation_shape[0]
+        try:
+            env = env_factory(**env_kwargs)
+        except TypeError:
+            # Preserve the narrow factory seam used by the existing unit tests and
+            # by callers that provide a minimal fake environment.
+            env = env_factory(stack_size=stack_size, step_frames=step_frames)
+        replay = ReplayBuffer(
+            capacity=int(replay_config.get("capacity", 100_000)),
+            seed=seed,
+            num_actions=num_actions,
+            observation_shape=observation_shape,
         )
 
-    agent = DoubleDQNAgent(
-        num_actions=num_actions,
-        gamma=float(model_config.get("gamma", 0.99)),
-        learning_rate=lr_effective,
-        device=chosen_device,
-        seed=seed,
-        observation_shape=observation_shape,
-        network_factory=_network_factory,
-    )
-    if resume_from is not None:
-        _load_checkpoint(agent, Path(resume_from))
-    start_time = time.perf_counter()
-    observation, _ = env.reset(seed=seed)
+        def _network_factory(actions: int) -> torch.nn.Module:
+            return AtariCnnQNetwork(
+                actions,
+                dueling=dueling_effective,
+                input_channels=observation_shape[0],
+            )
+
+        agent = DoubleDQNAgent(
+            num_actions=num_actions,
+            gamma=float(model_config.get("gamma", 0.99)),
+            learning_rate=lr_effective,
+            device=chosen_device,
+            seed=seed,
+            observation_shape=observation_shape,
+            network_factory=_network_factory,
+        )
+        if resume_from is not None:
+            _load_checkpoint(agent, Path(resume_from))
+        start_time = time.perf_counter()
+        observation, _ = env.reset(seed=seed)
+    except Exception as error:
+        writer.update_status(
+            "failed",
+            gate="fail",
+            step=0,
+            episode=0,
+            message=f"{type(error).__name__}: {error}",
+        )
+        with contextlib.suppress(Exception):
+            env.close()
+        raise
     episode = 0
     episode_reward = 0.0
     episode_shaped = 0.0
@@ -742,7 +884,8 @@ def train_run(
     last_episode_reward = 0.0
     last_episode_frames = 0
     last_loss: float | None = None
-    last_update_step = 0
+    optimizer_step_start = agent.optimizer_steps
+    last_update_step = optimizer_step_start
     last_metric_reward = 0.0
     last_metric_shaped = 0.0
     last_metric_frames = 0
@@ -759,9 +902,19 @@ def train_run(
     last_target_std = 0.0
     last_q_std = 0.0
     last_q_mean = 0.0
+    last_target_mean = 0.0
+    last_pre_clip_grad_norm = 0.0
     last_dead_units = 0.0
+    target_sync_count_start = (
+        _checkpoint_counter(resume_payload, "target_sync_count")
+        if resume_payload is not None
+        else 0
+    )
+    target_sync_count = target_sync_count_start
+    completed_episodes_since_log: list[dict[str, object]] = []
+    episode_return_state = EpisodeReturnState(episode=1)
     epsilon = epsilon_at(
-        0,
+        global_step_start,
         start=float(exploration_config.get("epsilon_start", 1.0)),
         final=float(exploration_config.get("epsilon_final", 0.1)),
         decay_steps=decay_effective,
@@ -791,6 +944,7 @@ def train_run(
         nonlocal last_episode_reward, last_episode_frames
         nonlocal episode_deaths, episode_patterns, episode_spawns
         nonlocal episode_kills, episode_shaped, last_shattered, last_score
+        nonlocal episode_return_state
         if control is None:
             return
         for command in control.drain_commands():
@@ -804,7 +958,14 @@ def train_run(
                     checkpoint_path, relative = _checkpoint_path(writer, command.path)
                     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
                     torch.save(
-                        _checkpoint_payload(agent, step=step, seed=seed),
+                        _checkpoint_payload(
+                            agent,
+                            step=resumed_step + step,
+                            seed=seed,
+                            run_id=run_id,
+                            target_sync_count=target_sync_count,
+                            source=source_provenance,
+                        ),
                         checkpoint_path,
                     )
                     if relative is not None:
@@ -835,7 +996,7 @@ def train_run(
                             "load",
                             True,
                             f"Loaded {command.path.name} at step "
-                            f"{int(payload.get('step', step)):,}",
+                            f"{int(payload.get('step', resumed_step + step)):,}",
                             command.path,
                             agent.optimizer_steps,
                         )
@@ -867,6 +1028,7 @@ def train_run(
                     episode_shaped = 0.0
                     last_shattered = 0
                     last_score = 0.0
+                    episode_return_state = EpisodeReturnState(episode=episode + 1)
                     last_episode_reward = 0.0
                     last_episode_frames = 0
                     control.emit(
@@ -897,7 +1059,10 @@ def train_run(
             control.wait()
         if paused_reported and not control.stopped:
             writer.update_status(
-                "running", step=step, episode=episode, message="training resumed"
+                "running",
+                step=step,
+                episode=episode,
+                message="training resumed",
             )
             paused_reported = False
 
@@ -908,8 +1073,9 @@ def train_run(
             if control is not None and control.stopped:
                 stopped = True
                 break
+            global_step = resumed_step + step
             epsilon = epsilon_at(
-                step,
+                global_step,
                 start=float(exploration_config.get("epsilon_start", 1.0)),
                 final=float(exploration_config.get("epsilon_final", 0.1)),
                 decay_steps=decay_effective,
@@ -951,6 +1117,13 @@ def train_run(
             episode_reward += float(reward)
             episode_shaped += float(train_reward)
             episode_frames += frames_now
+            episode_return_state, completed_episode = record_episode_step(
+                episode_return_state,
+                reward=float(reward),
+                terminated=bool(terminated),
+                truncated=bool(truncated),
+                survival_frames=frames_now,
+            )
             flags = int(info.get("native_event_flags", 0) or 0)
             if flags & EVENT_DEATH:
                 episode_deaths += 1
@@ -978,8 +1151,11 @@ def train_run(
                 last_target_std = float(update.target_std)
                 last_q_std = float(update.q_std)
                 last_q_mean = float(update.mean_q)
+                last_target_mean = float(update.mean_target)
+                last_pre_clip_grad_norm = float(update.pre_clip_grad_norm)
                 if update.optimizer_step % target_sync_interval == 0:
                     agent.sync_target()
+                    target_sync_count += 1
 
             finished_reward: float | None = None
             finished_frames: int | None = None
@@ -997,6 +1173,19 @@ def train_run(
                 finished_kills = episode_kills
                 finished_shaped = episode_shaped
                 episode += 1
+                if completed_episode is None:
+                    raise RuntimeError("completed episode record is missing")
+                completed_episodes_since_log.append(
+                    {
+                        **completed_episode,
+                        "global_step": global_step,
+                        "shaped_reward": float(finished_shaped),
+                        "deaths": int(finished_deaths),
+                        "patterns_survived": int(finished_patterns),
+                        "enemies_spawned": int(finished_spawns),
+                        "enemies_killed": int(finished_kills),
+                    }
+                )
                 observation, _ = env.reset(
                     seed=min(32_767, seed + episode),
                 )
@@ -1046,6 +1235,8 @@ def train_run(
                     last_dead_units = float(agent.dead_unit_fraction(observation))
                 metrics: dict[str, object] = {
                     "step": step,
+                    "global_environment_step": global_step,
+                    "segment_step": step,
                     "episode": episode,
                     "reward": last_metric_reward,
                     "shaped_reward": last_metric_shaped,
@@ -1070,11 +1261,19 @@ def train_run(
                     "throughput": step / elapsed,
                     "replay_size": len(replay),
                     "optimizer_step": last_update_step,
+                    "global_optimizer_step": last_update_step,
+                    "segment_optimizer_step": (
+                        last_update_step - optimizer_step_start
+                    ),
                     "td_error_mean": last_td_mean,
                     "td_error_std": last_td_std,
                     "target_std": last_target_std,
                     "q_std": last_q_std,
                     "q_mean": last_q_mean,
+                    "target_mean": last_target_mean,
+                    "q_target_mean_delta": last_q_mean - last_target_mean,
+                    "pre_clip_grad_norm": last_pre_clip_grad_norm,
+                    "gradient_clipped": last_pre_clip_grad_norm > MAX_GRAD_NORM,
                     "reward_zero_share": mix["zero_share"],
                     "reward_mean": mix["mean"],
                     "reward_mean_nonzero": mix["mean_nonzero"],
@@ -1083,8 +1282,19 @@ def train_run(
                     "least_used_action": least_used,
                     "action_counts": list(action_counts),
                     "dead_units": last_dead_units,
+                    "target_sync_count": target_sync_count,
+                    "segment_target_sync_count": (
+                        target_sync_count - target_sync_count_start
+                    ),
+                    "reward_scope": (
+                        "completed-episode"
+                        if finished_reward is not None
+                        else "partial-episode"
+                    ),
+                    "completed_episodes": list(completed_episodes_since_log),
                 }
                 writer.append_metrics(metrics)
+                completed_episodes_since_log.clear()
                 writer.update_status(
                     "running",
                     step=step,
@@ -1095,6 +1305,8 @@ def train_run(
         if stopped:
             stopped_metrics = {
                 "step": step,
+                "global_environment_step": resumed_step + step,
+                "segment_step": step,
                 "episode": episode,
                 "reward": last_metric_reward,
                 "survival_frames": last_metric_frames,
@@ -1103,6 +1315,8 @@ def train_run(
                 "throughput": step / max(time.perf_counter() - start_time, 1e-9),
                 "replay_size": len(replay),
                 "optimizer_step": last_update_step,
+                "global_optimizer_step": last_update_step,
+                "segment_optimizer_step": last_update_step - optimizer_step_start,
             }
             report = {
                 "result": "stopped_by_dashboard",
@@ -1112,11 +1326,18 @@ def train_run(
             writer.finalize(gate="warn", report=report, state="stopped")
             return writer.paths.root
 
-        checkpoint_relative = f"checkpoints/step-{steps}.pt"
+        checkpoint_relative = f"checkpoints/step-{global_step_end}.pt"
         checkpoint_path = writer.paths.relative(checkpoint_relative)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(
-            _checkpoint_payload(agent, step=steps, seed=seed),
+            _checkpoint_payload(
+                agent,
+                step=global_step_end,
+                seed=seed,
+                run_id=run_id,
+                target_sync_count=target_sync_count,
+                source=source_provenance,
+            ),
             checkpoint_path,
         )
         writer.record_checkpoint(checkpoint_relative)
@@ -1137,6 +1358,19 @@ def train_run(
             max_steps=eval_steps,
             seed_offset=20_000,
         )
+        greedy_action_counts = [
+            int(inner) + int(holdout)
+            for inner, holdout in zip(
+                evaluation_inner.get("action_counts", []),
+                evaluation_holdout.get("action_counts", []),
+                strict=True,
+            )
+        ]
+        greedy_action_balance = action_balance_ratio(greedy_action_counts)
+        evaluation_censored_share = max(
+            float(evaluation_inner.get("censored_share", 0.0)),
+            float(evaluation_holdout.get("censored_share", 0.0)),
+        )
         least_used_final = min(
             range(len(action_counts)), key=lambda i: action_counts[i]
         )
@@ -1155,6 +1389,10 @@ def train_run(
                 "forced_action": int(least_used_final),
                 "mean_reward": 0.0,
                 "rewards": [],
+                "baseline_rewards": [],
+                "reward_deltas": [],
+                "mean_reward_delta": 0.0,
+                "paired": paired_reward_deltas([], []),
             }
         train_mean = float(evaluation_inner.get("mean_reward", 0.0))
         holdout_mean = float(evaluation_holdout.get("mean_reward", 0.0))
@@ -1172,13 +1410,16 @@ def train_run(
             zero_share=float(final_mix["zero_share"]),
             train_mean=train_mean,
             holdout_mean=holdout_mean,
-            updates=int(last_update_step),
+            updates=int(last_update_step - optimizer_step_start),
+            target_sync_count=target_sync_count - target_sync_count_start,
+            evaluation_censored_share=evaluation_censored_share,
         )
         evaluation = {
             "protocol": "frozen-train-holdout-v1",
             "inner": evaluation_inner,
             "holdout": evaluation_holdout,
             "train_holdout_gap": train_holdout_gap,
+            "evaluation_censored_share": evaluation_censored_share,
             "counterfactual": counterfactual,
             # The reported best is one greedy-policy episode from this
             # frozen final evaluation — the training-curve maximum was
@@ -1197,6 +1438,8 @@ def train_run(
         best_eval = evaluation["best_eval_episode"]
         final_metrics = {
             "step": steps,
+            "global_environment_step": global_step_end,
+            "segment_step": steps,
             "episode": episode,
             "reward": last_metric_reward,
             "survival_frames": last_metric_frames,
@@ -1214,14 +1457,26 @@ def train_run(
             "throughput": steps / max(time.perf_counter() - start_time, 1e-9),
             "replay_size": len(replay),
             "optimizer_step": last_update_step,
+            "global_optimizer_step": last_update_step,
+            "segment_optimizer_step": last_update_step - optimizer_step_start,
             "td_error_mean": last_td_mean,
             "td_error_std": last_td_std,
+            "target_mean": last_target_mean,
+            "q_target_mean_delta": last_q_mean - last_target_mean,
+            "pre_clip_grad_norm": last_pre_clip_grad_norm,
+            "gradient_clipped": last_pre_clip_grad_norm > MAX_GRAD_NORM,
             "reward_zero_share": float(final_mix["zero_share"]),
             "action_balance": final_balance,
             "least_used_action": int(least_used_final),
             "action_counts": list(action_counts),
+            "greedy_eval_action_counts": greedy_action_counts,
+            "greedy_eval_action_balance": greedy_action_balance,
             "dead_units": last_dead_units,
             "train_holdout_gap": train_holdout_gap,
+            "target_sync_count": target_sync_count,
+            "segment_target_sync_count": (
+                target_sync_count - target_sync_count_start
+            ),
         }
         report = {
             "result": "bounded_baseline_complete",
@@ -1235,11 +1490,21 @@ def train_run(
                 "reward_mix": final_mix,
                 "action_balance": final_balance,
                 "action_counts": list(action_counts),
+                "greedy_eval_action_counts": greedy_action_counts,
+                "greedy_eval_action_balance": greedy_action_balance,
                 "decay_configured": decay_configured,
                 "decay_effective": decay_effective,
                 "warmup_steps": warmup_steps,
                 "target_sync_interval": target_sync_interval,
-                "optimizer_updates": int(last_update_step),
+                "target_sync_count": target_sync_count,
+                "optimizer_updates": int(last_update_step - optimizer_step_start),
+                "segment_optimizer_updates": int(
+                    last_update_step - optimizer_step_start
+                ),
+                "global_optimizer_updates": int(last_update_step),
+                "segment_target_sync_count": (
+                    target_sync_count - target_sync_count_start
+                ),
             },
         }
         writer.finalize(gate=gate, evaluation=evaluation, report=report)
@@ -1247,7 +1512,7 @@ def train_run(
         writer.update_status(
             "failed",
             gate="fail",
-            step=locals().get("step", 0),
+            step=int(locals().get("step", 0)),
             episode=episode,
             message=f"{type(error).__name__}: {error}",
         )
@@ -1292,6 +1557,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dueling", action=argparse.BooleanOptionalAction, default=None
     )
     parser.add_argument("--learning-rate", type=float, default=None)
+    parser.add_argument("--epsilon-decay-steps", type=_positive_int, default=None)
     parser.add_argument(
         "--shaping", action=argparse.BooleanOptionalAction, default=False
     )
@@ -1321,6 +1587,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         resume_from=args.resume_from,
         dueling=args.dueling,
         learning_rate=args.learning_rate,
+        epsilon_decay_steps=args.epsilon_decay_steps,
         shaping=args.shaping,
         w_survival=args.w_survival,
         w_death=args.w_death,
