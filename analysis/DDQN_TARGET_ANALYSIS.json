@@ -1,0 +1,114 @@
+{
+  "run": "exp500k-lr1e4-ts10k-s42-v2",
+  "target_windows": [
+    {
+      "target_syncs": 0,
+      "logged_samples": 2500,
+      "median_target": 4.09181809425354,
+      "constant_reward_iterate": 4.0000000000000036
+    },
+    {
+      "target_syncs": 1,
+      "logged_samples": 2500,
+      "median_target": 8.042715549468994,
+      "constant_reward_iterate": 7.9600000000000115
+    },
+    {
+      "target_syncs": 2,
+      "logged_samples": 2500,
+      "median_target": 11.930809497833252,
+      "constant_reward_iterate": 11.880399999999991
+    },
+    {
+      "target_syncs": 3,
+      "logged_samples": 2500,
+      "median_target": 15.875688552856445,
+      "constant_reward_iterate": 15.761596000000022
+    },
+    {
+      "target_syncs": 4,
+      "logged_samples": 2500,
+      "median_target": 19.736427307128906,
+      "constant_reward_iterate": 19.603980040000035
+    },
+    {
+      "target_syncs": 5,
+      "logged_samples": 2500,
+      "median_target": 23.532938957214355,
+      "constant_reward_iterate": 23.4079402396
+    },
+    {
+      "target_syncs": 6,
+      "logged_samples": 2500,
+      "median_target": 27.310267448425293,
+      "constant_reward_iterate": 27.173860837204032
+    },
+    {
+      "target_syncs": 7,
+      "logged_samples": 2500,
+      "median_target": 31.280691146850586,
+      "constant_reward_iterate": 30.902122228831974
+    },
+    {
+      "target_syncs": 8,
+      "logged_samples": 2500,
+      "median_target": 34.764102935791016,
+      "constant_reward_iterate": 34.59310100654367
+    },
+    {
+      "target_syncs": 9,
+      "logged_samples": 2500,
+      "median_target": 38.36714172363281,
+      "constant_reward_iterate": 38.247169996478235
+    },
+    {
+      "target_syncs": 10,
+      "logged_samples": 2500,
+      "median_target": 41.97660827636719,
+      "constant_reward_iterate": 41.864698296513446
+    },
+    {
+      "target_syncs": 11,
+      "logged_samples": 2500,
+      "median_target": 45.64755439758301,
+      "constant_reward_iterate": 45.44605131354831
+    },
+    {
+      "target_syncs": 12,
+      "logged_samples": 1,
+      "median_target": 49.007598876953125,
+      "constant_reward_iterate": 48.991590800412865
+    }
+  ],
+  "gradient_windows": [
+    {
+      "from_step": 20000,
+      "to_step": 100000,
+      "logged_samples": 5000,
+      "clipped_share": 0.0244,
+      "gradient_median": 2.236743450164795
+    },
+    {
+      "from_step": 100000,
+      "to_step": 200000,
+      "logged_samples": 6250,
+      "clipped_share": 0.27376,
+      "gradient_median": 6.172258615493774
+    },
+    {
+      "from_step": 200000,
+      "to_step": 400000,
+      "logged_samples": 12500,
+      "clipped_share": 0.60192,
+      "gradient_median": 12.93226957321167
+    },
+    {
+      "from_step": 400000,
+      "to_step": 500000,
+      "logged_samples": 6250,
+      "clipped_share": 0.72816,
+      "gradient_median": 18.847725868225098
+    }
+  ],
+  "gradient_denominator": "logged update diagnostics, not every optimizer update"
+}

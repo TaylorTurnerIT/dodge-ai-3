@@ -4,6 +4,11 @@ Analysis date: 2026-09-11. Code was inspected at `c66a424`. Artifacts were
 read without modification from
 `/home/dev/Projects/dodge-gymnasium/history/dodge/gymnasium/cnn-image-ddqn/`.
 
+Follow-up: [seed diversity and architecture review](DDQN_ARCHITECTURE_FOLLOWUP.md)
+adds the recovered fresh 500k A100 result. In this historical audit, “training
+seed 42” means one learner initialization; the environment advances its game
+seed after every episode and already visits thousands of scenarios.
+
 ## Bottom line
 
 No DDQN change is yet proven to improve policy quality. Every substantive run
