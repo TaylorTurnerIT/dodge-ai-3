@@ -6,7 +6,8 @@
 #   scripts/colab-gpu-run --run-id <id> [--steps 50000] [--stack-size 4]
 #                         [--seed 42] [--learning-rate 0.00025]
 #                         [--eval-episodes 4] [--eval-steps 64]
-#                         [--gpu T4] [--session <name>] [--keep] [--cpu]
+#                         [--gpu T4] [--colab-auth oauth2|adc]
+#                         [--session <name>] [--keep] [--cpu]
 #
 #   --gpu T4|L4|G4|H100|A100   accelerator (default T4, most available)
 #   --cpu                      no accelerator; bare Colab CPU runtime
@@ -38,6 +39,7 @@ fi
 RUN_ID=""; STEPS="50000"; STACK="4"; SEED="42"; GPU="T4"; SESSION=""; KEEP=""; CPU=""; RESUME=""
 WARMUP="20000"; SYNC="10000"; DUELING=""
 EPSILON_DECAY=""; LEARNING_RATE=""; EVAL_EPISODES="4"; EVAL_STEPS="64"
+COLAB_AUTH="oauth2"
 usage() {
     sed -n '2,14p' "$0" | sed 's/^# *//'
 }
@@ -49,6 +51,7 @@ while [[ $# -gt 0 ]]; do
         --stack-size) STACK="$2"; shift 2;;
         --seed) SEED="$2"; shift 2;;
         --gpu) GPU="$2"; shift 2;;
+        --colab-auth) COLAB_AUTH="$2"; shift 2;;
         --session) SESSION="$2"; shift 2;;
         --resume-from) RESUME="$2"; shift 2;;
         --shaping) SHAPING="1"; shift;;
@@ -88,7 +91,12 @@ if [[ -n "$LEARNING_RATE" && ! "$LEARNING_RATE" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]
     exit 2
 fi
 [[ "$GPU" =~ ^(T4|L4|G4|H100|A100)$ ]] || { echo "unsupported --gpu: $GPU" >&2; exit 2; }
+[[ "$COLAB_AUTH" =~ ^(oauth2|adc)$ ]] || { echo "unsupported --colab-auth: $COLAB_AUTH" >&2; exit 2; }
 [[ -z "$SESSION" ]] && SESSION="dodge-${RUN_ID}"
+
+colab_cli() {
+    colab --auth="$COLAB_AUTH" "$@"
+}
 
 WHEEL="$(ls native/target/wheels/dodge_native-*.whl 2>/dev/null | head -n 1 || true)"
 [[ -n "$WHEEL" ]] || { echo "no wheel in native/target/wheels/; run: uv sync --extra native" >&2; exit 1; }
@@ -99,17 +107,17 @@ trap 'rm -rf "$TMPDIR"' EXIT
 python3 -c "import tarfile; t=tarfile.open('$TMPDIR/dodge-ship.tar.gz','w:gz'); t.add('src/dodge_native_game','dodge-ship/src/dodge_native_game'); t.add('variants/cnn-image-ddqn/config.toml','dodge-ship/variants/cnn-image-ddqn/config.toml'); t.close()"
 
 if [[ -z "$CPU" ]]; then
-    colab new -s "$SESSION" --gpu "$GPU"
+    colab_cli new -s "$SESSION" --gpu "$GPU"
 else
-    colab new -s "$SESSION"
+    colab_cli new -s "$SESSION"
 fi
-trap '[[ -z "$KEEP" ]] && colab stop -s "$SESSION" || true; rm -rf "$TMPDIR"' EXIT
+trap '[[ -z "$KEEP" ]] && colab --auth="$COLAB_AUTH" stop -s "$SESSION" || true; rm -rf "$TMPDIR"' EXIT
 
-colab upload "$WHEEL" "/content/$WHEEL_NAME" -s "$SESSION"
-colab upload "$TMPDIR/dodge-ship.tar.gz" /content/dodge-ship.tar.gz -s "$SESSION"
+colab_cli upload "$WHEEL" "/content/$WHEEL_NAME" -s "$SESSION"
+colab_cli upload "$TMPDIR/dodge-ship.tar.gz" /content/dodge-ship.tar.gz -s "$SESSION"
 RESUME_ARG=""
 if [[ -n "$RESUME" ]]; then
-    colab upload "$RESUME" /content/resume.pt -s "$SESSION"
+    colab_cli upload "$RESUME" /content/resume.pt -s "$SESSION"
     RESUME_ARG=', resume_from="/content/resume.pt"'
 fi
 DUEL_ARG=""
@@ -124,7 +132,7 @@ if [[ -n "${W_SCORE:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_score=$W_SCORE"; fi
 if [[ -n "${W_UNCONTROLLED:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_uncontrolled=$W_UNCONTROLLED"; fi
 if [[ -n "$EPSILON_DECAY" ]]; then SHAPE_ARGS="$SHAPE_ARGS, epsilon_decay_steps=$EPSILON_DECAY"; fi
 if [[ -n "$LEARNING_RATE" ]]; then SHAPE_ARGS="$SHAPE_ARGS, learning_rate=$LEARNING_RATE"; fi
-colab install -s "$SESSION" gymnasium
+colab_cli install -s "$SESSION" gymnasium
 
 cat > "$TMPDIR/setup.py" <<EOF
 import subprocess, sys, tarfile, os
@@ -138,7 +146,7 @@ import dodge_native, torch
 assert torch.cuda.is_available() == ("$CPU" == ""), "accelerator mismatch"
 print("SETUP_OK cuda=", torch.cuda.is_available())
 EOF
-colab exec -s "$SESSION" -f "$TMPDIR/setup.py" --timeout 300
+colab_cli exec -s "$SESSION" -f "$TMPDIR/setup.py" --timeout 300
 
 cat > "$TMPDIR/train.py" <<EOF
 import sys, time
@@ -154,7 +162,7 @@ path = train_run(history_root="/content/history", run_id="$RUN_ID",
                  eval_episodes=$EVAL_EPISODES, eval_steps=$EVAL_STEPS$RESUME_ARG$DUEL_ARG$SHAPE_ARGS)
 print(f"TRAIN_DONE root={path} wall={(time.perf_counter()-t0)/60:.1f}min")
 EOF
-colab exec -s "$SESSION" -f "$TMPDIR/train.py" --timeout 3000
+colab_cli exec -s "$SESSION" -f "$TMPDIR/train.py" --timeout 3000
 
 cat > "$TMPDIR/pack.py" <<EOF
 import tarfile
@@ -163,9 +171,9 @@ with tarfile.open("/content/$RUN_ID-results.tar.gz", "w:gz") as t:
     t.add(root, "$RUN_ID")
 print("PACKED")
 EOF
-colab exec -s "$SESSION" -f "$TMPDIR/pack.py" --timeout 300
+colab_cli exec -s "$SESSION" -f "$TMPDIR/pack.py" --timeout 300
 mkdir -p "history/dodge/gymnasium/cnn-image-ddqn/$RUN_ID"
-colab download "/content/$RUN_ID-results.tar.gz" "$TMPDIR/results.tar.gz" -s "$SESSION"
+colab_cli download "/content/$RUN_ID-results.tar.gz" "$TMPDIR/results.tar.gz" -s "$SESSION"
 tar -xzf "$TMPDIR/results.tar.gz" -C "history/dodge/gymnasium/cnn-image-ddqn/$RUN_ID" --strip-components=1
 
 echo "done: history/dodge/gymnasium/cnn-image-ddqn/$RUN_ID"
