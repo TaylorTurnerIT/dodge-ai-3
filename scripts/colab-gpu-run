@@ -4,6 +4,8 @@
 # Campaign defaults: warmup 20000, target sync 10000 (config.toml), dueling head.
 # Usage:
 #   scripts/colab-gpu-run --run-id <id> [--steps 50000] [--stack-size 4]
+#                         [--seed 42] [--learning-rate 0.00025]
+#                         [--eval-episodes 4] [--eval-steps 64]
 #                         [--gpu T4] [--session <name>] [--keep] [--cpu]
 #
 #   --gpu T4|L4|G4|H100|A100   accelerator (default T4, most available)
@@ -33,14 +35,19 @@ if [[ -d /nix/store ]]; then
     done
 fi
 
-RUN_ID=""; STEPS="50000"; STACK="4"; GPU="T4"; SESSION=""; KEEP=""; CPU=""; RESUME=""
+RUN_ID=""; STEPS="50000"; STACK="4"; SEED="42"; GPU="T4"; SESSION=""; KEEP=""; CPU=""; RESUME=""
 WARMUP="20000"; SYNC="10000"; DUELING=""
-EPSILON_DECAY=""
+EPSILON_DECAY=""; LEARNING_RATE=""; EVAL_EPISODES="4"; EVAL_STEPS="64"
+usage() {
+    sed -n '2,14p' "$0" | sed 's/^# *//'
+}
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --help|-h) usage; exit 0;;
         --run-id) RUN_ID="$2"; shift 2;;
         --steps) STEPS="$2"; shift 2;;
         --stack-size) STACK="$2"; shift 2;;
+        --seed) SEED="$2"; shift 2;;
         --gpu) GPU="$2"; shift 2;;
         --session) SESSION="$2"; shift 2;;
         --resume-from) RESUME="$2"; shift 2;;
@@ -52,6 +59,9 @@ while [[ $# -gt 0 ]]; do
         --warmup-steps) WARMUP="$2"; shift 2;;
         --target-sync-interval) SYNC="$2"; shift 2;;
         --epsilon-decay-steps) EPSILON_DECAY="$2"; shift 2;;
+        --learning-rate) LEARNING_RATE="$2"; shift 2;;
+        --eval-episodes) EVAL_EPISODES="$2"; shift 2;;
+        --eval-steps) EVAL_STEPS="$2"; shift 2;;
         --dueling) DUELING="--dueling"; shift;;
         --no-dueling) DUELING="--no-dueling"; shift;;
         --keep) KEEP="--keep"; shift;;
@@ -60,6 +70,24 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 [[ -n "$RUN_ID" ]] || { echo "--run-id is required" >&2; exit 2; }
+[[ "$RUN_ID" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "--run-id contains invalid characters" >&2; exit 2; }
+for value in "$STEPS" "$STACK" "$SEED" "$WARMUP" "$SYNC" "$EVAL_EPISODES" "$EVAL_STEPS"; do
+    [[ "$value" =~ ^[0-9]+$ ]] || { echo "integer arguments must contain digits only" >&2; exit 2; }
+done
+(( STEPS > 0 && STACK > 0 && WARMUP > 0 && SYNC > 0 && EVAL_EPISODES > 0 && EVAL_STEPS > 0 )) || {
+    echo "step, stack, warmup, sync, and evaluation arguments must be positive" >&2
+    exit 2
+}
+(( SEED <= 32767 )) || { echo "--seed must be at most 32767" >&2; exit 2; }
+if [[ -n "$EPSILON_DECAY" && ! "$EPSILON_DECAY" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--epsilon-decay-steps must be a positive integer" >&2
+    exit 2
+fi
+if [[ -n "$LEARNING_RATE" && ! "$LEARNING_RATE" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][-+]?[0-9]+)?$ ]]; then
+    echo "--learning-rate must be a non-negative number" >&2
+    exit 2
+fi
+[[ "$GPU" =~ ^(T4|L4|G4|H100|A100)$ ]] || { echo "unsupported --gpu: $GPU" >&2; exit 2; }
 [[ -z "$SESSION" ]] && SESSION="dodge-${RUN_ID}"
 
 WHEEL="$(ls native/target/wheels/dodge_native-*.whl 2>/dev/null | head -n 1 || true)"
@@ -95,6 +123,7 @@ if [[ -n "${W_DEATH:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_death=$W_DEATH"; fi
 if [[ -n "${W_SCORE:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_score=$W_SCORE"; fi
 if [[ -n "${W_UNCONTROLLED:-}" ]]; then SHAPE_ARGS="$SHAPE_ARGS, w_uncontrolled=$W_UNCONTROLLED"; fi
 if [[ -n "$EPSILON_DECAY" ]]; then SHAPE_ARGS="$SHAPE_ARGS, epsilon_decay_steps=$EPSILON_DECAY"; fi
+if [[ -n "$LEARNING_RATE" ]]; then SHAPE_ARGS="$SHAPE_ARGS, learning_rate=$LEARNING_RATE"; fi
 colab install -s "$SESSION" gymnasium
 
 cat > "$TMPDIR/setup.py" <<EOF
@@ -120,8 +149,9 @@ from dodge_native_game.variants.cnn_image_ddqn.run import train_run
 t0 = time.perf_counter()
 device = "cpu" if "$CPU" != "" else "cuda"
 path = train_run(history_root="/content/history", run_id="$RUN_ID",
-                 steps=$STEPS, stack_size=$STACK, device=device,
-                 warmup_steps=$WARMUP, target_sync_interval=$SYNC$RESUME_ARG$DUEL_ARG$SHAPE_ARGS)
+                 steps=$STEPS, seed=$SEED, stack_size=$STACK, device=device,
+                 warmup_steps=$WARMUP, target_sync_interval=$SYNC,
+                 eval_episodes=$EVAL_EPISODES, eval_steps=$EVAL_STEPS$RESUME_ARG$DUEL_ARG$SHAPE_ARGS)
 print(f"TRAIN_DONE root={path} wall={(time.perf_counter()-t0)/60:.1f}min")
 EOF
 colab exec -s "$SESSION" -f "$TMPDIR/train.py" --timeout 3000
