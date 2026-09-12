@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--run-id", action="append")
     parser.add_argument("--remote-history", default="content/seed-history")
+    parser.add_argument("--collect-failure", action="store_true")
     args = parser.parse_args()
     state.auth_provider = AuthProvider.ADC
     expected = set(
@@ -51,6 +52,44 @@ def main() -> None:
                 "X-Colab-Client-Agent": "colab-cli",
             }
             base = proxy.url.rstrip("/")
+            if args.collect_failure:
+                failure_remote = (
+                    f"{args.remote_history.strip('/')}/campaign-failure.tar.gz"
+                )
+                failure = requests.get(
+                    f"{base}/api/contents/{failure_remote}",
+                    headers=headers,
+                    params={"content": 0},
+                    timeout=30,
+                )
+                if failure.status_code != 404:
+                    failure.raise_for_status()
+                    rejected = args.destination.parent / "rejected-campaigns"
+                    rejected.mkdir(parents=True, exist_ok=True)
+                    final = rejected / f"{sorted(expected)[0]}-failure.tar.gz"
+                    if final.exists():
+                        raise FileExistsError(final)
+                    partial = final.with_suffix(".partial")
+                    with requests.get(
+                        f"{base}/files/{failure_remote}",
+                        headers=headers,
+                        stream=True,
+                        timeout=120,
+                    ) as download:
+                        download.raise_for_status()
+                        with partial.open("wb") as stream:
+                            for chunk in download.iter_content(1024 * 1024):
+                                stream.write(chunk)
+                    with tarfile.open(partial) as archive:
+                        archive.getmembers()
+                    partial.rename(final)
+                    state.client.unassign(args.endpoint)
+                    print(
+                        "COLLECTED_FAILED_CAMPAIGN_AND_RELEASED_ASSIGNMENT",
+                        final,
+                        flush=True,
+                    )
+                    return
             for run_id in sorted(expected - collected):
                 remote = f"{args.remote_history.strip('/')}/{run_id}.tar.gz"
                 response = requests.get(

@@ -5,6 +5,7 @@ import json
 import runpy
 import subprocess
 import sys
+import tarfile
 import time
 from pathlib import Path
 
@@ -110,4 +111,24 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Only the supervisor publishes failure after its worker has exited.
+        if "--gate-worker" not in sys.argv:
+            history_index = (
+                sys.argv.index("--history") + 1 if "--history" in sys.argv else None
+            )
+            history = (
+                Path(sys.argv[history_index])
+                if history_index
+                else Path("/content/t4-history")
+            )
+            if history.exists():
+                temporary = history / ".campaign-failure.tar.gz"
+                with tarfile.open(temporary, "w:gz") as archive:
+                    for path in history.iterdir():
+                        if path != temporary:
+                            archive.add(path, arcname=path.name)
+                temporary.rename(history / "campaign-failure.tar.gz")
+        raise

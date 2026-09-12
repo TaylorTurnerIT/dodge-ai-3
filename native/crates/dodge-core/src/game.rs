@@ -3542,6 +3542,29 @@ mod tests {
     }
 
     #[test]
+    fn v73_overlapping_hazards_emit_multiple_deaths_for_one_life() {
+        let mut game = NativeGame::new(NativeConfig::default());
+        start_game(&mut game);
+        for _ in 0..2 {
+            game.enemies.push(EnemyState::normal(
+                PicoFixed::from_int(61),
+                PicoFixed::from_int(64),
+                PicoFixed::from_int(3),
+            ));
+        }
+        let result = game.advance_frame(0);
+        assert!(result.as_ref().is_ok_and(|value| value.done));
+        assert_eq!(
+            result.as_ref().map(|value| value
+                .events
+                .iter()
+                .filter(|event| **event == FrameEvent::Death)
+                .count()),
+            Ok(2)
+        );
+    }
+
+    #[test]
     fn v158_audio_events_preserve_source_order_and_restart_boundary() {
         let mut game = NativeGame::new(NativeConfig::default());
         let start = game.advance_frame(BUTTON_X_MASK);

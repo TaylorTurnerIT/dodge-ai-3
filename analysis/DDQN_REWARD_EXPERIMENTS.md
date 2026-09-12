@@ -46,8 +46,19 @@ survival, death, pickups, native destruction, edge, corner. These totals are
 per-decision rewards before discounting/n-step aggregation, not replay samples.
 Legacy Python shaping and live controls cannot be combined with new profiles.
 
-Correctness gate: 191 Python tests, 85 Rust tests, Ruff and workspace Clippy
+Correctness gate: 191 Python tests, 86 Rust tests, Ruff and workspace Clippy
 passed before packaging. Native-RGB smoke tests exercised all three treatment
 profiles, optimizer updates, checkpoint publication, and incompatible resume.
 The legacy survival-only quality gate is unchanged; a `pass` alone does not
 establish learning or justify promotion.
+
+The first GPU preflight exposed repeated native Death events from overlapping
+hazards in one frame. Release was stopped before any 200k treatment. Native
+reward now normalizes death presence to one life penalty while retaining
+pickup/destruction multiplicity; an actual overlapping-hazard fixture covers
+the source behavior. Rejected preflight archives are retained outside the
+normal run catalog under `history/dodge/gymnasium/rejected-campaigns/`.
+The corrected build reruns every telemetry pair. The campaign collector now
+also preserves a supervisor-published failure archive before releasing a failed
+assignment, so a failed gate does not leave an idle GPU waiting for runs that
+were never released.

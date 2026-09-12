@@ -134,6 +134,7 @@ V69|T4 branches freeze700gamepool, lr1e-4, warmup20k, epsilon500k, sync10000, up
 V70|Pickup event emitted exactly once for collected personality2/3/4; explosion destroying other powerups emits no pickup; ordered counts survive batch/PyO3; existing event bits unchanged.
 V71|Native boundary field bounded/symmetric/flat interior; narrow shallow edge term + wider corner overlap; finite validated inputs; no center bonus; geometry tests cover monotonicity and perimeter route.
 V72|Reward experiments keep survival scale, count terminal penalty once, separate component totals + immutable weights; no live mutation; pixel observations unchanged; promotion requires matched evaluation +≤5% telemetry overhead.
+V73|Multiple native Death events from overlapping hazards in one decision → one life penalty; positive pickup/destruction multiplicity retained; no game transition changes.
 
 §T
 id|status|task|cites
@@ -205,3 +206,4 @@ B36|2026-09-12|Gray ring regression import exceeded configured Ruff layout|Forma
 B37|2026-09-12|Host cargo binary does not support rustup +stable directive|Use rustup run stable cargo; existing root V22 covers toolchain selection
 B38|2026-09-12|Maturin CLI absent; new Python test guessed reset/step instead of existing reset_batch/step_batch|Rebuild via uv sync native; use actual batch API; mechanical harness fixes, no new invariant
 B39|2026-09-12|Reward campaign nested imports lacked Ruff separation|Format nested import block; mechanical failure, no new invariant
+B40|2026-09-12|GPU preflight hit overlapping hazards; native Death events repeat for one life and reward validator rejected count>1|V73; normalize death presence in native reward helper; preserve failed artifacts and rerun full gate

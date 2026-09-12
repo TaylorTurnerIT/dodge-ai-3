@@ -28,8 +28,7 @@ impl RewardTerms {
         boundary: BoundaryCosts,
         frames_advanced: u32,
     ) -> Option<Self> {
-        if death_events > 1
-            || survival_frames > frames_advanced
+        if survival_frames > frames_advanced
             || ![boundary.edge, boundary.corner]
                 .iter()
                 .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
@@ -38,7 +37,9 @@ impl RewardTerms {
         }
         Some(Self {
             survival: survival_frames as f32,
-            death: -(death_events as f32),
+            // Several overlapping hazards can emit Death in one native frame.
+            // They terminate one life, so charge once, not once per collision.
+            death: if death_events > 0 { -1.0 } else { 0.0 },
             pickups: pickups as f32,
             enemy_deaths: enemy_deaths as f32,
             edge: -boundary.edge * frames_advanced as f32,
@@ -146,7 +147,7 @@ mod tests {
             },
             4
         )
-        .is_none());
+        .is_some_and(|terms| terms.death == -1.0));
     }
 
     #[test]
