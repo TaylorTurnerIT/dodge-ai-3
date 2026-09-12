@@ -11,7 +11,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from dodge_native_game.variants.cnn_image_ddqn.agent import DoubleDQNAgent
+from dodge_native_game.variants.cnn_image_ddqn.agent import (
+    LEARNER_BACKENDS,
+    DoubleDQNAgent,
+)
 from dodge_native_game.variants.cnn_image_ddqn.env import CNNImageDDQNEnv
 from dodge_native_game.variants.cnn_image_ddqn.pixel_replay import (
     NativePixelReplayBuffer,
@@ -31,6 +34,9 @@ def summary(values: list[float]) -> dict[str, float]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    parser.add_argument(
+        "--learner-backend", choices=LEARNER_BACKENDS, default="baseline"
+    )
     parser.add_argument("--decisions", type=int, default=512)
     parser.add_argument("--capacity", type=int, default=128)
     parser.add_argument("--updates", type=int, default=20)
@@ -45,6 +51,8 @@ def main() -> None:
     ):
         parser.error("capacity 32..2048, decisions>=capacity, bounded updates/repeats")
     _configure_torch_backend(args.device)
+    if args.learner_backend != "baseline" and args.device != "cuda":
+        parser.error("CUDA learner backends require --device cuda")
     torch.set_num_threads(1)
     torch.manual_seed(42)
     shape = (12, 128, 128)
@@ -124,7 +132,12 @@ def main() -> None:
         )
         for mode in order:
             torch.manual_seed(42)
-            agent = DoubleDQNAgent(9, observation_shape=shape, device=args.device)
+            agent = DoubleDQNAgent(
+                9,
+                observation_shape=shape,
+                device=args.device,
+                learner_backend=args.learner_backend,
+            )
             decoded = agent._packed_observation_tensor(packed_batch.observations)
             expected = (
                 torch.as_tensor(batch.observations, device=args.device).float() / 255
@@ -158,6 +171,7 @@ def main() -> None:
     result = {
         "benchmark": "pixel-replay-and-optimizer-microbench-v3",
         "device": args.device,
+        "learner_backend": args.learner_backend,
         "hardware": torch.cuda.get_device_name(0)
         if args.device == "cuda"
         else (platform.processor() or platform.machine()),

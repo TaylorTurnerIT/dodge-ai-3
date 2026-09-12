@@ -317,6 +317,21 @@ class NativeBatchEnvironment:
         self._ensure_open()
         return BatchResult.from_payload(self._native.step_batch(_action_array(actions)))
 
+    def step_batch_active(self, actions: object, active: object) -> BatchResult:
+        self._ensure_open()
+        action_values = _action_array(actions)
+        active_values = np.asarray(active)
+        if (
+            active_values.dtype != np.bool_
+            or active_values.shape != action_values.shape
+        ):
+            raise ValueError("active must be a boolean array matching actions")
+        return BatchResult.from_payload(
+            self._native.step_batch_active(
+                action_values, np.ascontiguousarray(active_values)
+            )
+        )
+
     def reset_ml(self, seeds: object, *, startup: bool = False) -> MlResult:
         self._ensure_open()
         values = _integer_array(seeds, "seeds", maximum=32_767)

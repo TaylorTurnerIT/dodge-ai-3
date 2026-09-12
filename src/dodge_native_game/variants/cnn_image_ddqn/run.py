@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from .agent import MAX_GRAD_NORM, DoubleDQNAgent
+from .agent import LEARNER_BACKENDS, MAX_GRAD_NORM, DoubleDQNAgent
 from .diagnostics import (
     action_balance_ratio,
     best_greedy_episode,
@@ -53,6 +53,7 @@ from .reward_profiles import contract as reward_contract
 from .rewards import UNCONTROLLED_SCORE_PER_ENEMY, RewardConfig
 from .run_artifacts import VARIANT_ID, RunArtifactWriter
 from .seed_pool import training_seed_pool
+from .vector_env import CNNImageDDQNVectorEnv
 
 DEFAULT_HISTORY_ROOT = Path("history/dodge/gymnasium")
 DEFAULT_STEPS = 256
@@ -65,6 +66,8 @@ DEFAULT_TARGET_SYNC_INTERVAL = 100
 DEFAULT_LOG_INTERVAL = 16
 DEFAULT_EVAL_EPISODES = 4
 DEFAULT_EVAL_STEPS = 64
+DEFAULT_EVAL_BATCH_SIZE = 16
+DEFAULT_COLLECTOR_LANES = 1
 DEFAULT_OBSERVATION_PROFILE = COLLISION_PROFILE
 RGB_REPLAY_HEADROOM = 0.20
 DIAGNOSTIC_SAMPLE_CADENCE = (
@@ -556,9 +559,11 @@ def _checkpoint_payload(
         "model_input_size": int(expected_shape[1]),
         "observation_shape": list(expected_shape),
         "num_actions": agent.num_actions,
+        "learner_backend": agent.learner_backend,
         "online_network": agent.online_network.state_dict(),
         "target_network": agent.target_network.state_dict(),
         "optimizer": agent.optimizer.state_dict(),
+        "grad_scaler": agent._grad_scaler.state_dict(),
         "optimizer_steps": agent.optimizer_steps,
         "target_sync_count": int(target_sync_count),
         "source": dict(source or {}),
@@ -628,6 +633,9 @@ def _load_checkpoint(
     optimizer = payload.get("optimizer")
     if optimizer is not None:
         agent.optimizer.load_state_dict(optimizer)
+    grad_scaler = payload.get("grad_scaler")
+    if isinstance(grad_scaler, dict) and agent._amp_enabled:
+        agent._grad_scaler.load_state_dict(grad_scaler)
     agent.optimizer_steps = _checkpoint_counter(payload, "optimizer_steps")
     return payload
 
@@ -790,6 +798,113 @@ def _evaluate(
     }
 
 
+def _evaluate_batched(
+    agent: DoubleDQNAgent,
+    *,
+    seed: int,
+    episodes: int,
+    max_steps: int,
+    seed_offset: int,
+    batch_size: int,
+    env_kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Evaluate independent native lanes with batched policy inference."""
+
+    seeds = eval_seed_list(seed, episodes, offset=seed_offset)
+    rewards = np.zeros(episodes, dtype=np.float64)
+    survival_frames = np.zeros(episodes, dtype=np.int64)
+    terminated_rows = np.zeros(episodes, dtype=np.bool_)
+    q_samples: list[list[float]] = []
+    dead_units: list[float] = []
+    action_counts = np.zeros(agent.num_actions, dtype=np.int64)
+    for offset in range(0, episodes, batch_size):
+        chunk = seeds[offset : offset + batch_size]
+        env = CNNImageDDQNVectorEnv(len(chunk), **env_kwargs)
+        try:
+            observations, _ = env.reset(chunk)
+            active = np.ones(len(chunk), dtype=np.bool_)
+            for _ in range(max_steps):
+                active_lanes = np.flatnonzero(active)
+                if not active_lanes.size:
+                    break
+                q_values, dead_fractions = agent.evaluation_batch_values(
+                    observations[active_lanes]
+                )
+                q_samples.extend(q_values.tolist())
+                dead_units.extend(dead_fractions.tolist())
+                selected_actions = q_values.argmax(axis=1).astype(np.uint8)
+                actions = np.zeros(len(chunk), dtype=np.uint8)
+                actions[active_lanes] = selected_actions
+                action_counts += np.bincount(
+                    selected_actions, minlength=agent.num_actions
+                )
+                next_observations, step_rewards, dones, result = env.step(
+                    actions, active
+                )
+                lane_ids = np.asarray(result.lane_ids, dtype=np.int64)
+                observations[lane_ids] = next_observations
+                rewards[offset + lane_ids] += step_rewards
+                survival_frames[offset + lane_ids] += np.asarray(
+                    result.frames_advanced, dtype=np.int64
+                )
+                terminated_rows[offset + lane_ids[dones]] = True
+                active[lane_ids[dones]] = False
+        finally:
+            env.close()
+    spread = (
+        q_spread_stats(q_samples)
+        if q_samples
+        else {"mean": 0.0, "std": 0.0, "gap": 0.0}
+    )
+    return {
+        "episodes": episodes,
+        "observation_profile": env_kwargs["observation_profile"],
+        "max_steps_per_episode": max_steps,
+        "seed_offset": seed_offset,
+        "seeds": seeds,
+        "mean_reward": float(rewards.mean()) if episodes else 0.0,
+        "mean_survival_frames": (
+            float(survival_frames.mean()) if episodes else 0.0
+        ),
+        "rewards": rewards.tolist(),
+        "survival_frames": survival_frames.tolist(),
+        "q_mean": float(spread["mean"]),
+        "q_std": float(spread["std"]),
+        "q_gap": float(spread["gap"]),
+        "dead_units_mean": float(np.mean(dead_units)) if dead_units else 0.0,
+        "action_counts": action_counts.tolist(),
+        "action_balance": action_balance_ratio(action_counts.tolist()),
+        "terminated": terminated_rows.tolist(),
+        "censored": (~terminated_rows).tolist(),
+        "censored_share": float((~terminated_rows).mean()) if episodes else 0.0,
+        "batch_size": batch_size,
+    }
+
+
+def _vector_lane_info(result: object, index: int, profile: str) -> dict[str, Any]:
+    """Translate one row of an owned native batch without inventing semantics."""
+
+    info: dict[str, Any] = {
+        "native_frame": int(result.frames[index]),  # type: ignore[attr-defined]
+        "native_frames_advanced": int(
+            result.frames_advanced[index]  # type: ignore[attr-defined]
+        ),
+        "native_done": bool(result.done[index]),  # type: ignore[attr-defined]
+        "native_event_flags": int(result.event_flags[index]),  # type: ignore[attr-defined]
+        "native_mode": int(result.modes[index]),  # type: ignore[attr-defined]
+        "native_shattered": int(result.shattered[index]),  # type: ignore[attr-defined]
+        "native_score": float(result.score[index]),  # type: ignore[attr-defined]
+    }
+    reward_terms = result.reward_terms  # type: ignore[attr-defined]
+    if reward_terms is not None:
+        info["native_reward_terms"] = np.array(reward_terms[index], copy=True)
+    if profile in (RGB_PROFILE, GRAY_PROFILE):
+        info["native_palette_indices"] = np.array(
+            result.pixels[index], copy=True  # type: ignore[attr-defined]
+        )
+    return info
+
+
 def _counterfactual_eval(
     agent: DoubleDQNAgent,
     env: CNNImageDDQNEnv,
@@ -868,7 +983,11 @@ def train_run(
     log_interval: int = DEFAULT_LOG_INTERVAL,
     eval_episodes: int = DEFAULT_EVAL_EPISODES,
     eval_steps: int = DEFAULT_EVAL_STEPS,
+    eval_batch_size: int = 1,
+    collector_lanes: int = DEFAULT_COLLECTOR_LANES,
+    collector_execution: str = "serial",
     device: str = "auto",
+    learner_backend: str = "baseline",
     env_factory: EnvFactory = CNNImageDDQNEnv,
     control: TrainingControl | None = None,
     game_config: Mapping[str, Any] | None = None,
@@ -899,11 +1018,21 @@ def train_run(
         ("log_interval", log_interval),
         ("eval_episodes", eval_episodes),
         ("eval_steps", eval_steps),
+        ("eval_batch_size", eval_batch_size),
+        ("collector_lanes", collector_lanes),
     ):
         if value < 1:
             raise ValueError(f"{name} must be positive")
     if not 0 <= seed <= 32_767:
         raise ValueError("seed must be between 0 and 32767")
+    if learner_backend not in LEARNER_BACKENDS:
+        raise ValueError(f"learner_backend must be one of {LEARNER_BACKENDS}")
+    if collector_execution not in ("serial", "parallel"):
+        raise ValueError("collector_execution must be 'serial' or 'parallel'")
+    if collector_lanes > 1 and (n_step != 1 or control is not None):
+        raise ValueError("multi-lane collection requires n_step=1 and no live control")
+    if collector_lanes > 1 and env_factory is not CNNImageDDQNEnv:
+        raise ValueError("multi-lane collection requires the native environment")
     eval_base_seed = seed if evaluation_seed is None else evaluation_seed
     if training_seed_count is not None or evaluation_seed is not None:
         if not 0 <= eval_base_seed <= 2767:
@@ -963,6 +1092,8 @@ def train_run(
     )
     step_frames = int(selected_game["native_step_frames"])
     chosen_device = _choose_device(device)
+    if learner_backend != "baseline" and chosen_device != "cuda":
+        raise ValueError("CUDA learner backends require an available CUDA device")
     _configure_torch_backend(chosen_device)
     _seed_everything(seed)
     rng = np.random.default_rng(seed)
@@ -1040,6 +1171,12 @@ def train_run(
         "replay": dict(replay_storage),
         "trainer": "native-cnn-image-ddqn",
         "device": chosen_device,
+        "learner_backend": learner_backend,
+        "collector": {
+            "lanes": collector_lanes,
+            "execution": collector_execution,
+            "step_unit": "native-transitions",
+        },
         "initialization_id": INITIALIZATION_ID,
         "source": source_provenance,
         "training_seed_protocol": {
@@ -1190,6 +1327,7 @@ def train_run(
             "counterfactual_protocol": "paired-first-action-v1",
             "episodes": eval_episodes,
             "max_steps_per_episode": eval_steps,
+            "batch_size": eval_batch_size,
         },
         "run": {
             "steps": steps,
@@ -1200,6 +1338,9 @@ def train_run(
             "training_seed_count": training_seed_count,
             "evaluation_seed": eval_base_seed,
             "device": chosen_device,
+            "learner_backend": learner_backend,
+            "collector_lanes": collector_lanes,
+            "collector_execution": collector_execution,
             "update_every": update_every,
             "log_interval": log_interval,
             "evaluation_episodes": eval_episodes,
@@ -1249,14 +1390,21 @@ def train_run(
         "observation_profile": effective_profile,
     }
     try:
-        try:
-            env = env_factory(**env_kwargs)
-        except TypeError:
-            # Preserve minimal legacy factory seams only for collision runs. An
-            # RGB run must never silently substitute a collision observation.
-            if effective_profile != COLLISION_PROFILE:
-                raise
-            env = env_factory(stack_size=stack_size, step_frames=step_frames)
+        if collector_lanes > 1:
+            env = CNNImageDDQNVectorEnv(
+                collector_lanes,
+                **env_kwargs,
+                execution=collector_execution,
+            )
+        else:
+            try:
+                env = env_factory(**env_kwargs)
+            except TypeError:
+                # Preserve minimal legacy factory seams only for collision runs. An
+                # RGB run must never silently substitute a collision observation.
+                if effective_profile != COLLISION_PROFILE:
+                    raise
+                env = env_factory(stack_size=stack_size, step_frames=step_frames)
         if replay_class is None:
             replay = ReplayBuffer(
                 capacity=selected_capacity,
@@ -1305,6 +1453,7 @@ def train_run(
             seed=seed,
             observation_shape=observation_shape_value,
             network_factory=_network_factory,
+            learner_backend=learner_backend,
         )
         if resume_from is not None:
             _load_checkpoint(
@@ -1314,11 +1463,22 @@ def train_run(
                 stack_size=stack_size,
             )
         start_time = time.perf_counter()
-        observation, reset_info = env.reset(seed=game_seed(0))
-        palette_reset = getattr(replay, "reset_palette_ids", None)
-        palette_frame = reset_info.get("native_palette_indices")
-        if callable(palette_reset) and palette_frame is not None:
-            palette_reset(palette_frame)
+        observation_batch: np.ndarray | None = None
+        if collector_lanes > 1:
+            initial_seeds = [game_seed(index) for index in range(collector_lanes)]
+            observation_batch, reset_result = env.reset(initial_seeds)
+            observation = observation_batch[0]
+            palette_reset = getattr(replay, "reset_palette_ids", None)
+            palette_frames = env.palette_indices(reset_result)
+            if callable(palette_reset) and palette_frames is not None:
+                for lane, palette_frame in enumerate(palette_frames):
+                    palette_reset(palette_frame, stream_id=lane)
+        else:
+            observation, reset_info = env.reset(seed=game_seed(0))
+            palette_reset = getattr(replay, "reset_palette_ids", None)
+            palette_frame = reset_info.get("native_palette_indices")
+            if callable(palette_reset) and palette_frame is not None:
+                palette_reset(palette_frame)
         accumulator = None
         if n_step > 1:
             from .n_step import NStepAccumulator
@@ -1382,6 +1542,21 @@ def train_run(
     target_sync_count = target_sync_count_start
     completed_episodes_since_log: list[dict[str, object]] = []
     episode_return_state = EpisodeReturnState(episode=1)
+    pending_vector: deque[dict[str, Any]] = deque()
+    lane_game_seeds = [game_seed(index) for index in range(collector_lanes)]
+    next_episode_seed_index = collector_lanes
+    lane_episode_rewards = np.zeros(collector_lanes, dtype=np.float64)
+    lane_episode_shaped = np.zeros(collector_lanes, dtype=np.float64)
+    lane_episode_frames = np.zeros(collector_lanes, dtype=np.int64)
+    lane_episode_deaths = np.zeros(collector_lanes, dtype=np.int64)
+    lane_episode_patterns = np.zeros(collector_lanes, dtype=np.int64)
+    lane_episode_spawns = np.zeros(collector_lanes, dtype=np.int64)
+    lane_episode_kills = np.zeros(collector_lanes, dtype=np.int64)
+    lane_last_shattered = np.zeros(collector_lanes, dtype=np.int64)
+    lane_last_score = np.zeros(collector_lanes, dtype=np.float64)
+    lane_return_states = [
+        EpisodeReturnState(episode=index + 1) for index in range(collector_lanes)
+    ]
     epsilon = epsilon_at(
         global_step_start,
         start=float(exploration_config.get("epsilon_start", 1.0)),
@@ -1569,9 +1744,87 @@ def train_run(
                 final=float(exploration_config.get("epsilon_final", 0.1)),
                 decay_steps=decay_effective,
             )
-            action = int(agent.select_action(observation, epsilon, rng=rng))
-            next_observation, reward, terminated, truncated, info = env.step(action)
-            current_game_seed = game_seed(episode)
+            lane_id = 0
+            if collector_lanes == 1:
+                action = int(agent.select_action(observation, epsilon, rng=rng))
+                next_observation, reward, terminated, truncated, info = env.step(
+                    action
+                )
+                current_game_seed = game_seed(episode)
+            else:
+                if not pending_vector:
+                    assert observation_batch is not None
+                    active_count = min(collector_lanes, steps - step + 1)
+                    active_lanes = np.arange(active_count, dtype=np.int64)
+                    epsilon_values = np.asarray(
+                        [
+                            epsilon_at(
+                                resumed_step + step + offset,
+                                start=float(
+                                    exploration_config.get("epsilon_start", 1.0)
+                                ),
+                                final=float(
+                                    exploration_config.get("epsilon_final", 0.1)
+                                ),
+                                decay_steps=decay_effective,
+                            )
+                            for offset in range(active_count)
+                        ],
+                        dtype=np.float64,
+                    )
+                    selected_actions = np.asarray(
+                        agent.select_action(
+                            observation_batch[active_lanes], epsilon_values, rng=rng
+                        ),
+                        dtype=np.uint8,
+                    )
+                    actions = np.zeros(collector_lanes, dtype=np.uint8)
+                    actions[active_lanes] = selected_actions
+                    active_mask = np.zeros(collector_lanes, dtype=np.bool_)
+                    active_mask[active_lanes] = True
+                    before_batch = observation_batch[active_lanes].copy()
+                    after_batch, rewards_batch, dones_batch, batch_result = env.step(
+                        actions, active_mask
+                    )
+                    result_lanes = np.asarray(batch_result.lane_ids, dtype=np.int64)
+                    observation_batch[result_lanes] = after_batch
+                    for index, lane in enumerate(result_lanes):
+                        pending_vector.append(
+                            {
+                                "lane": int(lane),
+                                "observation": before_batch[index],
+                                "next_observation": after_batch[index],
+                                "action": int(actions[lane]),
+                                "reward": float(rewards_batch[index]),
+                                "terminated": bool(dones_batch[index]),
+                                "info": _vector_lane_info(
+                                    batch_result, index, effective_profile
+                                ),
+                                "seed": lane_game_seeds[lane],
+                                "epsilon": float(epsilon_values[index]),
+                            }
+                        )
+                transition = pending_vector.popleft()
+                lane_id = int(transition["lane"])
+                observation = transition["observation"]
+                next_observation = transition["next_observation"]
+                action = int(transition["action"])
+                reward = float(transition["reward"])
+                terminated = bool(transition["terminated"])
+                truncated = False
+                info = transition["info"]
+                current_game_seed = int(transition["seed"])
+                epsilon = float(transition["epsilon"])
+                episode_reward = float(lane_episode_rewards[lane_id])
+                episode_shaped = float(lane_episode_shaped[lane_id])
+                episode_frames = int(lane_episode_frames[lane_id])
+                episode_deaths = int(lane_episode_deaths[lane_id])
+                episode_patterns = int(lane_episode_patterns[lane_id])
+                episode_spawns = int(lane_episode_spawns[lane_id])
+                episode_kills = int(lane_episode_kills[lane_id])
+                last_shattered = int(lane_last_shattered[lane_id])
+                last_score = float(lane_last_score[lane_id])
+                episode_return_state = lane_return_states[lane_id]
             seed_steps[current_game_seed] = seed_steps.get(current_game_seed, 0) + 1
             done = bool(terminated or truncated)
             if 0 <= action < len(action_counts):
@@ -1612,7 +1865,16 @@ def train_run(
                 palette_add = getattr(replay, "add_palette_ids", None)
                 palette_frame = info.get("native_palette_indices")
                 if callable(palette_add) and palette_frame is not None:
-                    palette_add(palette_frame, action, train_reward, done)
+                    if collector_lanes > 1:
+                        palette_add(
+                            palette_frame,
+                            action,
+                            train_reward,
+                            done,
+                            stream_id=lane_id,
+                        )
+                    else:
+                        palette_add(palette_frame, action, train_reward, done)
                 else:
                     replay.add(
                         _observation_to_uint8(observation, observation_shape_value),
@@ -1674,6 +1936,17 @@ def train_run(
             last_score = score_tmp
             episode_kills += kills_tmp
             total_kills += kills_tmp
+            if collector_lanes > 1:
+                lane_episode_rewards[lane_id] = episode_reward
+                lane_episode_shaped[lane_id] = episode_shaped
+                lane_episode_frames[lane_id] = episode_frames
+                lane_episode_deaths[lane_id] = episode_deaths
+                lane_episode_patterns[lane_id] = episode_patterns
+                lane_episode_spawns[lane_id] = episode_spawns
+                lane_episode_kills[lane_id] = episode_kills
+                lane_last_shattered[lane_id] = last_shattered
+                lane_last_score[lane_id] = last_score
+                lane_return_states[lane_id] = episode_return_state
 
             if (
                 len(replay) >= batch_size
@@ -1741,13 +2014,41 @@ def train_run(
                         "enemies_killed": int(finished_kills),
                     }
                 )
-                observation, reset_info = env.reset(
-                    seed=game_seed(episode),
-                )
-                palette_reset = getattr(replay, "reset_palette_ids", None)
-                palette_frame = reset_info.get("native_palette_indices")
-                if callable(palette_reset) and palette_frame is not None:
-                    palette_reset(palette_frame)
+                if collector_lanes > 1:
+                    new_episode_index = next_episode_seed_index
+                    next_episode_seed_index += 1
+                    new_seed = game_seed(new_episode_index)
+                    reset_observations, reset_result = env.reset_lanes(
+                        [lane_id], [new_seed]
+                    )
+                    assert observation_batch is not None
+                    observation_batch[lane_id] = reset_observations[0]
+                    observation = reset_observations[0]
+                    lane_game_seeds[lane_id] = new_seed
+                    palette_reset = getattr(replay, "reset_palette_ids", None)
+                    palette_frames = env.palette_indices(reset_result)
+                    if callable(palette_reset) and palette_frames is not None:
+                        palette_reset(palette_frames[0], stream_id=lane_id)
+                    lane_episode_rewards[lane_id] = 0.0
+                    lane_episode_shaped[lane_id] = 0.0
+                    lane_episode_frames[lane_id] = 0
+                    lane_episode_deaths[lane_id] = 0
+                    lane_episode_patterns[lane_id] = 0
+                    lane_episode_spawns[lane_id] = 0
+                    lane_episode_kills[lane_id] = 0
+                    lane_last_shattered[lane_id] = 0
+                    lane_last_score[lane_id] = 0.0
+                    lane_return_states[lane_id] = EpisodeReturnState(
+                        episode=new_episode_index + 1
+                    )
+                else:
+                    observation, reset_info = env.reset(
+                        seed=game_seed(episode),
+                    )
+                    palette_reset = getattr(replay, "reset_palette_ids", None)
+                    palette_frame = reset_info.get("native_palette_indices")
+                    if callable(palette_reset) and palette_frame is not None:
+                        palette_reset(palette_frame)
                 episode_reward = 0.0
                 episode_shaped = 0.0
                 episode_frames = 0
@@ -1942,22 +2243,55 @@ def train_run(
         )
         writer.record_checkpoint(checkpoint_relative)
 
-        evaluation_inner = _evaluate(
-            agent,
-            env,
-            seed=eval_base_seed,
-            episodes=eval_episodes,
-            max_steps=eval_steps,
-            seed_offset=10_000,
-        )
-        evaluation_holdout = _evaluate(
-            agent,
-            env,
-            seed=eval_base_seed,
-            episodes=eval_episodes,
-            max_steps=eval_steps,
-            seed_offset=20_000,
-        )
+        if collector_lanes > 1:
+            env.close()
+            env = env_factory(**env_kwargs)
+
+        if eval_batch_size == 1:
+            evaluation_inner = _evaluate(
+                agent,
+                env,
+                seed=eval_base_seed,
+                episodes=eval_episodes,
+                max_steps=eval_steps,
+                seed_offset=10_000,
+            )
+            evaluation_holdout = _evaluate(
+                agent,
+                env,
+                seed=eval_base_seed,
+                episodes=eval_episodes,
+                max_steps=eval_steps,
+                seed_offset=20_000,
+            )
+        else:
+            evaluation_env_kwargs = {
+                "stack_size": stack_size,
+                "step_frames": step_frames,
+                "difficulty": int(selected_game["difficulty"]),
+                "patterns": bool(selected_game["patterns"]),
+                "powerups": bool(selected_game["powerups"]),
+                "observation_profile": effective_profile,
+                "execution": "parallel",
+            }
+            evaluation_inner = _evaluate_batched(
+                agent,
+                seed=eval_base_seed,
+                episodes=eval_episodes,
+                max_steps=eval_steps,
+                seed_offset=10_000,
+                batch_size=eval_batch_size,
+                env_kwargs=evaluation_env_kwargs,
+            )
+            evaluation_holdout = _evaluate_batched(
+                agent,
+                seed=eval_base_seed,
+                episodes=eval_episodes,
+                max_steps=eval_steps,
+                seed_offset=20_000,
+                batch_size=eval_batch_size,
+                env_kwargs=evaluation_env_kwargs,
+            )
         greedy_action_counts = [
             int(inner) + int(holdout)
             for inner, holdout in zip(
@@ -2182,7 +2516,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--eval-episodes", type=_positive_int, default=DEFAULT_EVAL_EPISODES
     )
     parser.add_argument("--eval-steps", type=_positive_int, default=DEFAULT_EVAL_STEPS)
+    parser.add_argument(
+        "--eval-batch-size", type=_positive_int, default=DEFAULT_EVAL_BATCH_SIZE
+    )
+    parser.add_argument(
+        "--collector-lanes", type=_positive_int, default=DEFAULT_COLLECTOR_LANES
+    )
+    parser.add_argument(
+        "--collector-execution", choices=("serial", "parallel"), default="serial"
+    )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument(
+        "--learner-backend", choices=LEARNER_BACKENDS, default="baseline"
+    )
     parser.add_argument("--resume-from", type=Path, default=None)
     parser.add_argument(
         "--dueling", action=argparse.BooleanOptionalAction, default=None
@@ -2222,7 +2568,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         log_interval=args.log_interval,
         eval_episodes=args.eval_episodes,
         eval_steps=args.eval_steps,
+        eval_batch_size=args.eval_batch_size,
+        collector_lanes=args.collector_lanes,
+        collector_execution=args.collector_execution,
         device=args.device,
+        learner_backend=args.learner_backend,
         resume_from=args.resume_from,
         dueling=args.dueling,
         learning_rate=args.learning_rate,

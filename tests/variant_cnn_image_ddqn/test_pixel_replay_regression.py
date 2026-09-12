@@ -96,3 +96,30 @@ def test_native_palette_ingest_matches_rgb_reference_and_keeps_samples_owned() -
     packed.observations.fill(0)
     packed.next_observations.fill(0)
     np.testing.assert_array_equal(direct._packed_frames, stored)
+
+
+def test_interleaved_palette_streams_keep_independent_temporal_chains() -> None:
+    replay = NativePixelReplayBuffer(16, stack_size=2, seed=31)
+    replay.reset_palette_ids(palette_ids(1), stream_id=0)
+    replay.reset_palette_ids(palette_ids(8), stream_id=1)
+    expected: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+    stacks = {
+        0: np.concatenate([rgb(1), rgb(1)]),
+        1: np.concatenate([rgb(8), rgb(8)]),
+    }
+    for tick in range(4):
+        for stream in (0, 1):
+            color = 2 + tick if stream == 0 else 9 + tick
+            following = np.concatenate([stacks[stream][3:], rgb(color)])
+            reward = float(10 * stream + tick)
+            replay.add_palette_ids(
+                palette_ids(color), stream, reward, False, stream_id=stream
+            )
+            expected[reward] = (stacks[stream].copy(), following.copy())
+            stacks[stream] = following
+
+    batch = replay.sample(len(replay))
+    for index, reward in enumerate(batch.rewards):
+        before, after = expected[float(reward)]
+        np.testing.assert_array_equal(batch.observations[index], before)
+        np.testing.assert_array_equal(batch.next_observations[index], after)

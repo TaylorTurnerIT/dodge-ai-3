@@ -196,3 +196,8 @@ def test_cpu_backend_disables_unavailable_nnpack_probe() -> None:
         assert not torch._C._get_nnpack_enabled()
     finally:
         set_flags(previous)
+
+
+def test_cuda_learner_backend_rejects_cpu_device() -> None:
+    with pytest.raises(ValueError, match="CUDA learner"):
+        DoubleDQNAgent(2, learner_backend="cuda-optimized")

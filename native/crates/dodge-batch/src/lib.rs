@@ -694,8 +694,22 @@ impl BatchEnvironment {
     pub fn step(&mut self, actions: &[Action]) -> Result<Vec<BatchObservation>, BatchError> {
         self.validate_actions(actions)?;
         match self.config.execution {
-            ExecutionMode::Serial => self.step_serial(actions),
-            ExecutionMode::Parallel => self.step_parallel(actions),
+            ExecutionMode::Serial => self.step_serial(actions, None),
+            ExecutionMode::Parallel => self.step_parallel(actions, None),
+        }
+    }
+
+    /// Step selected lanes through the full observation boundary.
+    /// Excluded games and their bookkeeping remain frozen.
+    pub fn step_active(
+        &mut self,
+        actions: &[Action],
+        active: &[bool],
+    ) -> Result<Vec<BatchObservation>, BatchError> {
+        self.validate_active_actions(actions, active)?;
+        match self.config.execution {
+            ExecutionMode::Serial => self.step_serial(actions, Some(active)),
+            ExecutionMode::Parallel => self.step_parallel(actions, Some(active)),
         }
     }
 
@@ -718,22 +732,7 @@ impl BatchEnvironment {
         actions: &[Action],
         active: &[bool],
     ) -> Result<Vec<PixelBatchObservation>, BatchError> {
-        if actions.is_empty() {
-            return Err(BatchError::EmptyBatch);
-        }
-        for actual in [actions.len(), active.len()] {
-            if actual != self.games.len() {
-                return Err(BatchError::LaneCountMismatch {
-                    expected: self.games.len(),
-                    actual,
-                });
-            }
-        }
-        for (lane, (complete, selected)) in self.done.iter().zip(active).enumerate() {
-            if *complete && *selected {
-                return Err(BatchError::LaneAlreadyDone(lane));
-            }
-        }
+        self.validate_active_actions(actions, active)?;
         match self.config.execution {
             ExecutionMode::Serial => self.step_pixels_serial(actions, Some(active)),
             ExecutionMode::Parallel => self.step_pixels_parallel(actions, Some(active)),
@@ -957,6 +956,30 @@ impl BatchEnvironment {
         Ok(())
     }
 
+    fn validate_active_actions(
+        &self,
+        actions: &[Action],
+        active: &[bool],
+    ) -> Result<(), BatchError> {
+        if actions.is_empty() {
+            return Err(BatchError::EmptyBatch);
+        }
+        for actual in [actions.len(), active.len()] {
+            if actual != self.games.len() {
+                return Err(BatchError::LaneCountMismatch {
+                    expected: self.games.len(),
+                    actual,
+                });
+            }
+        }
+        for (lane, (complete, selected)) in self.done.iter().zip(active).enumerate() {
+            if *complete && *selected {
+                return Err(BatchError::LaneAlreadyDone(lane));
+            }
+        }
+        Ok(())
+    }
+
     fn ml_grid_spacing(&self) -> Result<u32, BatchError> {
         if !self.config.observations.ml {
             return Err(BatchError::MlObservationDisabled);
@@ -964,10 +987,17 @@ impl BatchEnvironment {
         Ok(self.config.observations.ml_grid_spacing)
     }
 
-    fn step_serial(&mut self, actions: &[Action]) -> Result<Vec<BatchObservation>, BatchError> {
+    fn step_serial(
+        &mut self,
+        actions: &[Action],
+        active: Option<&[bool]>,
+    ) -> Result<Vec<BatchObservation>, BatchError> {
         let mut observations = Vec::with_capacity(actions.len());
         let game_count = self.games.len();
         for (lane, action) in actions.iter().copied().enumerate() {
+            if active.is_some_and(|mask| !mask.get(lane).copied().unwrap_or(false)) {
+                continue;
+            }
             let game = self
                 .games
                 .get_mut(lane)
@@ -981,7 +1011,11 @@ impl BatchEnvironment {
         Ok(observations)
     }
 
-    fn step_parallel(&mut self, actions: &[Action]) -> Result<Vec<BatchObservation>, BatchError> {
+    fn step_parallel(
+        &mut self,
+        actions: &[Action],
+        active: Option<&[bool]>,
+    ) -> Result<Vec<BatchObservation>, BatchError> {
         let previous_frames = self.last_frames.clone();
         let previous_survival_frames = self.last_survival_frames.clone();
         let flags = self.config.observations;
@@ -991,6 +1025,9 @@ impl BatchEnvironment {
                 .par_iter_mut()
                 .enumerate()
                 .zip(actions.par_iter().copied())
+                .filter(|((lane, _), _)| {
+                    active.is_none_or(|mask| mask.get(*lane).copied().unwrap_or(false))
+                })
                 .map(|((lane, game), action)| {
                     let previous_frame = previous_frames.get(lane).copied().ok_or(
                         BatchError::LaneCountMismatch {

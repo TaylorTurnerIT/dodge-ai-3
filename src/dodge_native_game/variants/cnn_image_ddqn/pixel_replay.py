@@ -256,6 +256,9 @@ class NativePixelReplayBuffer:
         self._pending_reset_observation: np.ndarray | None = None
         self._pending_reset_packed: np.ndarray | None = None
         self._awaiting_reset = True
+        self._stream_last_frame_ids: dict[int, int] = {}
+        self._stream_pending_resets: dict[int, np.ndarray] = {}
+        self._stream_awaiting_reset: set[int] = set()
 
     def __len__(self) -> int:
         return self._size
@@ -283,13 +286,18 @@ class NativePixelReplayBuffer:
         self._awaiting_reset = True
         return value.copy()
 
-    def reset_palette_ids(self, frame: object) -> None:
+    def reset_palette_ids(self, frame: object, *, stream_id: int = 0) -> None:
         """Stage one native palette frame without expanding it to RGB or luma."""
 
+        stream = self._validate_stream_id(stream_id)
         palette_ids = _validate_palette_ids(frame)
-        self._pending_reset_observation = None
-        self._pending_reset_packed = _pack_palette_ids(palette_ids)
-        self._awaiting_reset = True
+        packed = _pack_palette_ids(palette_ids)
+        self._stream_pending_resets[stream] = packed
+        self._stream_awaiting_reset.add(stream)
+        if stream == 0:
+            self._pending_reset_observation = None
+            self._pending_reset_packed = packed
+            self._awaiting_reset = True
 
     def add_palette_ids(
         self,
@@ -297,9 +305,12 @@ class NativePixelReplayBuffer:
         action: int,
         reward: float,
         done: bool,
+        *,
+        stream_id: int = 0,
     ) -> None:
         """Store a sequential transition directly from native palette IDs."""
 
+        stream = self._validate_stream_id(stream_id)
         if isinstance(action, bool) or not isinstance(action, (int, np.integer)):
             raise TypeError("action must be an integer")
         action_value = int(action)
@@ -310,15 +321,18 @@ class NativePixelReplayBuffer:
             raise ValueError("reward must be finite")
         next_packed = _pack_palette_ids(_validate_palette_ids(next_frame))
 
-        if self._pending_reset_packed is not None:
+        pending = self._stream_pending_resets.pop(stream, None)
+        if pending is not None:
             observation_frame_id = self._append_frame(
-                self._pending_reset_packed, parent_id=None
+                pending, parent_id=None
             )
-            self._pending_reset_packed = None
+            if stream == 0:
+                self._pending_reset_packed = None
         else:
-            if self._last_frame_id is None or self._awaiting_reset:
+            last_frame_id = self._stream_last_frame_ids.get(stream)
+            if last_frame_id is None or stream in self._stream_awaiting_reset:
                 raise RuntimeError("reset_palette_ids must be called before add")
-            observation_frame_id = self._last_frame_id
+            observation_frame_id = last_frame_id
             self._checked_frame_slot(observation_frame_id)
         next_frame_id = self._append_frame(next_packed, parent_id=observation_frame_id)
 
@@ -330,9 +344,15 @@ class NativePixelReplayBuffer:
         self._dones[transition_index] = bool(done)
         self._next_index = (transition_index + 1) % self.capacity
         self._size = min(self.capacity, self._size + 1)
-        self._last_frame_id = int(next_frame_id)
-        self._last_observation = None
-        self._awaiting_reset = bool(done)
+        self._stream_last_frame_ids[stream] = int(next_frame_id)
+        if done:
+            self._stream_awaiting_reset.add(stream)
+        else:
+            self._stream_awaiting_reset.discard(stream)
+        if stream == 0:
+            self._last_frame_id = int(next_frame_id)
+            self._last_observation = None
+            self._awaiting_reset = bool(done)
 
     def add(
         self,
@@ -467,6 +487,15 @@ class NativePixelReplayBuffer:
         if batch_size > self._size:
             raise ValueError("cannot sample more transitions than are stored")
         return self._rng.choice(self._size, size=int(batch_size), replace=False)
+
+    @staticmethod
+    def _validate_stream_id(stream_id: int) -> int:
+        if isinstance(stream_id, bool) or not isinstance(stream_id, (int, np.integer)):
+            raise TypeError("stream_id must be a nonnegative integer")
+        value = int(stream_id)
+        if value < 0:
+            raise ValueError("stream_id must be a nonnegative integer")
+        return value
 
     def _append_frame(self, packed: np.ndarray, parent_id: int | None) -> int:
         frame_id = self._next_frame_id

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
@@ -26,8 +27,9 @@ if TYPE_CHECKING:
 
 NetworkFactory = Callable[[int], nn.Module]
 MAX_GRAD_NORM: Final = 10.0
+LEARNER_BACKENDS: Final = ("baseline", "cuda-amp", "cuda-optimized")
 
-__all__ = ["DDQNUpdate", "DoubleDQNAgent", "MAX_GRAD_NORM"]
+__all__ = ["DDQNUpdate", "DoubleDQNAgent", "LEARNER_BACKENDS", "MAX_GRAD_NORM"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +69,7 @@ class DoubleDQNAgent:
         online_network: nn.Module | None = None,
         target_network: nn.Module | None = None,
         observation_shape: tuple[int, int, int] = IMAGE_SHAPE,
+        learner_backend: str = "baseline",
     ) -> None:
         if isinstance(num_actions, bool) or num_actions < 1:
             raise ValueError("num_actions must be a positive integer")
@@ -97,30 +100,59 @@ class DoubleDQNAgent:
         self.gamma = float(gamma)
         self.learning_rate = float(learning_rate)
         self.device = torch.device(device)
+        if learner_backend not in LEARNER_BACKENDS:
+            raise ValueError(f"learner_backend must be one of {LEARNER_BACKENDS}")
+        if learner_backend != "baseline" and self.device.type != "cuda":
+            raise ValueError("CUDA learner backends require a CUDA device")
+        self.learner_backend = learner_backend
+        self._amp_enabled = learner_backend != "baseline"
+        self._non_blocking = learner_backend == "cuda-optimized"
+        if learner_backend == "cuda-optimized":
+            torch.backends.cudnn.benchmark = True
+            torch.set_float32_matmul_precision("high")
         self.online_network = online_network.to(self.device)
         self.target_network = target_network.to(self.device)
+        if learner_backend == "cuda-optimized":
+            self.online_network.to(memory_format=torch.channels_last)
+            self.target_network.to(memory_format=torch.channels_last)
         self.optimizer = torch.optim.Adam(
-            self.online_network.parameters(), lr=self.learning_rate
+            self.online_network.parameters(),
+            lr=self.learning_rate,
+            fused=learner_backend == "cuda-optimized",
         )
         for parameter in self.target_network.parameters():
             parameter.requires_grad_(False)
         self.target_network.eval()
         self._rng = np.random.default_rng(seed)
         self.optimizer_steps = 0
+        self._grad_scaler = torch.amp.GradScaler("cuda", enabled=self._amp_enabled)
+        self._online_forward: Callable[[torch.Tensor], torch.Tensor] = (
+            self.online_network
+        )
+        self._target_forward: Callable[[torch.Tensor], torch.Tensor] = (
+            self.target_network
+        )
+        if learner_backend == "cuda-optimized":
+            self._online_forward = torch.compile(
+                self.online_network, mode="reduce-overhead"
+            )
+            self._target_forward = torch.compile(
+                self.target_network, mode="reduce-overhead"
+            )
 
     def select_action(
         self,
         observations: object,
-        epsilon: float,
+        epsilon: object,
         *,
         rng: np.random.Generator | None = None,
     ) -> int | np.ndarray:
         """Select greedy or random actions for one or many image observations."""
 
-        epsilon_value = self._validate_epsilon(epsilon)
         tensor, single = self._validated_observation_batch(observations)
+        epsilon_values = self._epsilon_values(epsilon, tensor.shape[0])
         random_source = self._rng if rng is None else rng
-        random_mask = random_source.random(tensor.shape[0]) < epsilon_value
+        random_mask = random_source.random(tensor.shape[0]) < epsilon_values
         actions = np.empty(tensor.shape[0], dtype=np.int64)
         if np.any(random_mask):
             actions[random_mask] = random_source.integers(
@@ -134,10 +166,10 @@ class DoubleDQNAgent:
                 else tensor[greedy_indices.tolist()]
             )
             selected = to_float_observations(
-                selected.to(device=self.device),
+                self._to_device(selected),
                 expected_shape=self.observation_shape,
             )
-            with torch.no_grad():
+            with torch.inference_mode():
                 q_values = self._checked_q_values(self.online_network, selected)
             actions[greedy_indices] = (
                 q_values.argmax(dim=1).cpu().numpy().astype(np.int64)
@@ -177,11 +209,11 @@ class DoubleDQNAgent:
         else:
             observations, _ = self._observation_tensor(batch.observations)
             next_observations, _ = self._observation_tensor(batch.next_observations)
-        actions = torch.as_tensor(batch.actions, dtype=torch.long, device=self.device)
-        rewards = torch.as_tensor(
-            batch.rewards, dtype=torch.float32, device=self.device
+        actions = self._to_device(torch.from_numpy(batch.actions), dtype=torch.long)
+        rewards = self._to_device(
+            torch.from_numpy(batch.rewards), dtype=torch.float32
         )
-        dones = torch.as_tensor(batch.dones, dtype=torch.float32, device=self.device)
+        dones = self._to_device(torch.from_numpy(batch.dones), dtype=torch.float32)
         discounts = getattr(batch, "discounts", None)
         if discounts is None:
             bootstrap_discounts: torch.Tensor | float = self.gamma
@@ -198,34 +230,45 @@ class DoubleDQNAgent:
                 or np.any(discounts_array > 1.0)
             ):
                 raise ValueError("batch discounts must be finite and between 0 and 1")
-            bootstrap_discounts = torch.as_tensor(
-                discounts_array, dtype=torch.float32, device=self.device
+            bootstrap_discounts = self._to_device(
+                torch.from_numpy(discounts_array), dtype=torch.float32
             )
         if actions.ndim != 1 or actions.shape[0] != batch.size:
             raise ValueError("batch actions must have shape (N,)")
 
         self.online_network.train()
-        q_values = self._checked_q_values(self.online_network, observations)
-        chosen_q_values = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+        with self._autocast():
+            q_values = self._checked_q_values(self.online_network, observations)
+            chosen_q_values = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
-        with torch.no_grad():
-            next_online_q_values = self._checked_q_values(
-                self.online_network, next_observations
-            )
-            next_actions = next_online_q_values.argmax(dim=1, keepdim=True)
-            next_target_q_values = self._checked_q_values(
-                self.target_network, next_observations
-            )
-            next_q_values = next_target_q_values.gather(1, next_actions).squeeze(1)
-            targets = rewards + bootstrap_discounts * (1.0 - dones) * next_q_values
+            with torch.no_grad():
+                next_online_q_values = self._checked_q_values(
+                    self.online_network, next_observations
+                )
+                next_actions = next_online_q_values.argmax(dim=1, keepdim=True)
+                next_target_q_values = self._checked_q_values(
+                    self.target_network, next_observations
+                )
+                next_q_values = next_target_q_values.gather(1, next_actions).squeeze(1)
+                targets = (
+                    rewards + bootstrap_discounts * (1.0 - dones) * next_q_values
+                )
 
-        loss = F.smooth_l1_loss(chosen_q_values, targets)
+            loss = F.smooth_l1_loss(chosen_q_values, targets)
         self.optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        if self._amp_enabled:
+            self._grad_scaler.scale(loss).backward()
+            self._grad_scaler.unscale_(self.optimizer)
+        else:
+            loss.backward()
         pre_clip_grad_norm = torch.nn.utils.clip_grad_norm_(
             self.online_network.parameters(), max_norm=MAX_GRAD_NORM
         )
-        self.optimizer.step()
+        if self._amp_enabled:
+            self._grad_scaler.step(self.optimizer)
+            self._grad_scaler.update()
+        else:
+            self.optimizer.step()
         self.optimizer_steps += 1
 
         if not diagnostics:
@@ -271,7 +314,7 @@ class DoubleDQNAgent:
         self.target_network.load_state_dict(self.online_network.state_dict())
         self.target_network.eval()
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def q_values_for(self, observations: object) -> np.ndarray:
         """Return raw Q-values for logging without affecting training."""
 
@@ -279,9 +322,18 @@ class DoubleDQNAgent:
         q_values = self._checked_q_values(self.online_network, tensor)
         return q_values.detach().cpu().numpy().astype(np.float64, copy=True)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def evaluation_values(self, observations: object) -> tuple[np.ndarray, float]:
         """Return Q values and feature sparsity from one online-network forward."""
+
+        q_values, dead_fractions = self.evaluation_batch_values(observations)
+        return q_values, float(dead_fractions.mean())
+
+    @torch.inference_mode()
+    def evaluation_batch_values(
+        self, observations: object
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return Q values and one feature-sparsity value per observation."""
 
         tensor, _ = self._observation_tensor(observations)
         features = getattr(self.online_network, "features", None)
@@ -296,16 +348,20 @@ class DoubleDQNAgent:
         finally:
             if handle is not None:
                 handle.remove()
-        dead_fraction = (
-            (captured[-1] == 0.0).to(dtype=torch.float32).mean()
+        dead_fractions = (
+            (captured[-1] == 0.0)
+            .to(dtype=torch.float32)
+            .flatten(start_dim=1)
+            .mean(dim=1)
             if captured and captured[-1].numel()
-            else q_values.new_zeros(())
+            else q_values.new_zeros((q_values.shape[0],))
         )
-        transferred = torch.cat((q_values.detach().reshape(-1), dead_fraction[None]))
+        transferred = torch.cat((q_values.detach().reshape(-1), dead_fractions))
         values = transferred.cpu().numpy().astype(np.float64, copy=True)
-        return values[:-1].reshape(tuple(q_values.shape)), float(values[-1])
+        q_size = q_values.numel()
+        return values[:q_size].reshape(tuple(q_values.shape)), values[q_size:]
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def dead_unit_fraction(self, observations: object) -> float:
         """Share of trunk activations that are exactly zero.
 
@@ -327,7 +383,13 @@ class DoubleDQNAgent:
     def _checked_q_values(
         self, network: nn.Module, observations: torch.Tensor
     ) -> torch.Tensor:
-        q_values = network(observations)
+        with self._autocast():
+            if network is self.online_network:
+                q_values = self._online_forward(observations)
+            elif network is self.target_network:
+                q_values = self._target_forward(observations)
+            else:
+                q_values = network(observations)
         if q_values.ndim != 2 or q_values.shape != (
             observations.shape[0],
             self.num_actions,
@@ -342,7 +404,7 @@ class DoubleDQNAgent:
         tensor, single = self._validated_observation_batch(observations)
         return (
             to_float_observations(
-                tensor.to(device=self.device),
+                self._to_device(tensor),
                 expected_shape=self.observation_shape,
             ),
             single,
@@ -408,7 +470,7 @@ class DoubleDQNAgent:
                 f"got {packed_value.shape[2]}"
             )
 
-        packed = torch.as_tensor(packed_value, dtype=torch.uint8, device=self.device)
+        packed = self._to_device(torch.from_numpy(packed_value), dtype=torch.uint8)
         indices = torch.stack((packed >> 4, packed & 15), dim=-1).flatten(-2).long()
         if profile_is_rgb:
             palette = getattr(self, "_display_palette", None)
@@ -419,11 +481,12 @@ class DoubleDQNAgent:
                 self._display_palette = palette
             rgb = palette[indices]
             batch_size, stack_size = packed_value.shape[:2]
-            return rgb.reshape(
+            result = rgb.reshape(
                 batch_size, stack_size, height, width, 3
             ).permute(0, 1, 4, 2, 3).reshape(
                 batch_size, stack_size * 3, height, width
             )
+            return self._formatted_observations(result)
 
         luma = getattr(self, "_display_luma_palette", None)
         if luma is None:
@@ -432,7 +495,31 @@ class DoubleDQNAgent:
             ) / 255.0
             self._display_luma_palette = luma
         batch_size, stack_size = packed_value.shape[:2]
-        return luma[indices].reshape(batch_size, stack_size, height, width)
+        result = luma[indices].reshape(batch_size, stack_size, height, width)
+        return self._formatted_observations(result)
+
+    def _to_device(
+        self, tensor: torch.Tensor, *, dtype: torch.dtype | None = None
+    ) -> torch.Tensor:
+        value = tensor
+        if self._non_blocking and value.device.type == "cpu" and not value.is_pinned():
+            value = value.pin_memory()
+        value = value.to(
+            device=self.device,
+            dtype=dtype,
+            non_blocking=self._non_blocking,
+        )
+        return self._formatted_observations(value)
+
+    def _formatted_observations(self, tensor: torch.Tensor) -> torch.Tensor:
+        if self.learner_backend == "cuda-optimized" and tensor.ndim == 4:
+            return tensor.contiguous(memory_format=torch.channels_last)
+        return tensor
+
+    def _autocast(self):
+        if not self._amp_enabled:
+            return nullcontext()
+        return torch.autocast(device_type="cuda", dtype=torch.float16)
 
     @staticmethod
     def _validate_epsilon(epsilon: float) -> float:
@@ -440,3 +527,19 @@ class DoubleDQNAgent:
         if not np.isfinite(value) or not 0.0 <= value <= 1.0:
             raise ValueError("epsilon must be finite and between 0 and 1")
         return value
+
+    @classmethod
+    def _epsilon_values(cls, epsilon: object, batch_size: int) -> np.ndarray:
+        values = np.asarray(epsilon)
+        if values.ndim == 0:
+            return np.full(batch_size, cls._validate_epsilon(float(values)))
+        if values.shape != (batch_size,) or not np.issubdtype(values.dtype, np.number):
+            raise ValueError(f"epsilon must be scalar or have shape ({batch_size},)")
+        values = np.asarray(values, dtype=np.float64)
+        if (
+            not np.isfinite(values).all()
+            or np.any(values < 0.0)
+            or np.any(values > 1.0)
+        ):
+            raise ValueError("epsilon values must be finite and between 0 and 1")
+        return values

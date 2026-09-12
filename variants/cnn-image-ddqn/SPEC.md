@@ -138,6 +138,10 @@ V73|Multiple native Death events from overlapping hazards in one decision → on
 V74|Epsilon-greedy samples exploration before Q inference; fully random action skips online forward while preserving observation validation + seeded action trace.
 V75|Evaluation decision uses one online-network forward for Q values, greedy action + dead-unit probe; reported values match separate reference calls.
 V76|Native pixel replay accepts owned palette-ID frames from native result; sampled RGB/gray tensors exact current reconstruction + no mutable-storage alias.
+V77|Opt-in multi-lane collector counts `steps` as exact native transitions; epsilon indexed pertransition; optimizer cadence remains transition-based; lane1 native trace exact; each lane owns seed/episode/temporal/replay chain across terminal reset.
+V78|Batched evaluation freezes inactive native lanes + preserves seed order, rewards, survival, actions, termination, Q spread + dead-unit aggregate vs serial reference.
+V79|Learner backend explicit in config/checkpoint context; CUDA-only modes rejectCPU; AMP unscales before gradclip; fusedAdam/channels-last/compile/nonblocking transfer never alter eager checkpoint keys; baseline behavior unchanged.
+V80|Training benchmark reports native transitions/s + optimizerupdates/s with explicit training/all-in denominators, matched config/seed, alternating order, ≥3 trials; CPU result ! GPU claim; performance ! learning quality.
 
 §T
 id|status|task|cites
@@ -168,6 +172,8 @@ T23|x|Native reward foundation: exact pickup count boundary + tested edge/corner
 T24|~|Wire versioned native reward components + weights/train/eval/resume contract; death/pickup/destruction isolated treatments; no default change|V18,V60,V63,V72
 T25|.|Broaden screenshot-only diagnostic corpus; integrate learning gate + inner checkpoint selector; run independent architecture/reward screens after correctness gate|V47,V55,V62,V66,V72
 T26|x|Remove redundant action/eval inference + native-pixel replay conversion/copies; benchmark bounded trainer path|V12,V15,V31,V59,V63-V66,V74-V76
+T27|x|Add active full-native batch boundary, multi-lane temporal collector + stream-safe packed replay, exact transition accounting, and batched frozen evaluation|V5,V6,V12,V15,V31,V43,V48,V59,V77,V78
+T28|x|Add explicit AMP/compiled fused CUDA learner backend + matched bounded training benchmark; retain eager baseline + artifact compatibility|V13,V18,V42,V63,V66,V79,V80
 
 §B
 id|date|cause|fix
@@ -211,3 +217,6 @@ B37|2026-09-12|Host cargo binary does not support rustup +stable directive|Use r
 B38|2026-09-12|Maturin CLI absent; new Python test guessed reset/step instead of existing reset_batch/step_batch|Rebuild via uv sync native; use actual batch API; mechanical harness fixes, no new invariant
 B39|2026-09-12|Reward campaign nested imports lacked Ruff separation|Format nested import block; mechanical failure, no new invariant
 B40|2026-09-12|GPU preflight hit overlapping hazards; native Death events repeat for one life and reward validator rejected count>1|V73; normalize death presence in native reward helper; preserve failed artifacts and rerun full gate
+B41|2026-09-12|New vector boundary used constant `getattr`, rejected by Ruff B009|Use direct typed attributes; mechanical lint failure, no new invariant
+B42|2026-09-12|Vector evaluation test imports were not Ruff-sorted|Sort local imports; mechanical lint failure, no new invariant
+B43|2026-09-12|Vector epsilon validation exceeded Ruff line limit|Wrap predicate; mechanical lint failure, no new invariant

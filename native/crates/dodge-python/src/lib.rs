@@ -319,6 +319,28 @@ impl NativeBatchEnv {
         observations_to_dict(py, observations, self.flags)
     }
 
+    fn step_batch_active<'py>(
+        &mut self,
+        py: Python<'py>,
+        actions: PyReadonlyArray1<'_, u8>,
+        active: PyReadonlyArray1<'_, bool>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let native_actions = actions
+            .as_slice()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+            .iter()
+            .copied()
+            .map(action_from_index)
+            .collect::<PyResult<Vec<_>>>()?;
+        let selected = active
+            .as_slice()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let observations = py
+            .detach(|| self.inner.step_active(&native_actions, selected))
+            .map_err(batch_error)?;
+        observations_to_dict(py, observations, self.flags)
+    }
+
     /// Advance lanes through the minimal rendered pixel-only boundary.
     fn step_pixels<'py>(
         &mut self,
