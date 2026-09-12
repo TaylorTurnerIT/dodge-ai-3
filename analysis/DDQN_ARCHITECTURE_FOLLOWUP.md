@@ -31,9 +31,11 @@ web rendering, explanations, and replay inspection remain outside training.
 Routine telemetry has a 5% added-wall-time promotion budget against minimal
 logging, using at least three alternating paired GPU trials with the same
 configuration, seed, and update count. Report training-loop and all-in times
-separately. This gate is still pending; CPU microbenchmarks do not satisfy it.
+separately. The A100 gate has now passed: incremental routine-logging overhead
+was 0.31–1.00% across three pairs. The matched RGB target-refresh campaign is
+running; see [protocol and GPU evidence](DDQN_RGB_CAMPAIGN.md).
 
-Local verification now passes 150 Python tests, Ruff, both browser replay
+Local verification now passes 152 Python tests, Ruff, both browser replay
 contract suites, and a 32-decision native RGB training/evaluation smoke run.
 Packed batches reconstruct exactly the same normalized pixels and produce
 identical CPU weight updates as dense batches. The replay allocation estimate
