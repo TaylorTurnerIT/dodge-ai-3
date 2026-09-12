@@ -6,7 +6,32 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .model import IMAGE_SHAPE
+from .model import IMAGE_SHAPE, validate_observation_shape
+
+
+def estimate_replay_storage_bytes(
+    capacity: int,
+    observation_shape: tuple[int, int, int] = IMAGE_SHAPE,
+) -> int:
+    """Return the bytes allocated by a dense uint8 replay ring.
+
+    The estimate includes both image rings and the fixed-width transition
+    metadata arrays. It performs no allocation and does not reduce capacity.
+    """
+
+    if isinstance(capacity, bool) or capacity < 1:
+        raise ValueError("capacity must be positive")
+    shape = validate_observation_shape(observation_shape)
+    frame_bytes = int(np.prod(shape, dtype=np.int64))
+    return int(
+        int(capacity)
+        * (
+            2 * frame_bytes * np.dtype(np.uint8).itemsize
+            + np.dtype(np.int64).itemsize
+            + np.dtype(np.float32).itemsize
+            + np.dtype(np.bool_).itemsize
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,9 +51,11 @@ class ReplayBatch:
         rewards = np.asarray(self.rewards)
         dones = np.asarray(self.dones)
         if observations.ndim != 4:
-            raise ValueError("observations must have shape (N, C, 84, 84)")
+            raise ValueError("observations must have shape (N, C, H, W)")
         if next_observations.shape != observations.shape:
             raise ValueError("next_observations must match observations shape")
+        if observations.dtype != np.uint8 or next_observations.dtype != np.uint8:
+            raise ValueError("observations and next_observations must have dtype uint8")
         batch_size = observations.shape[0]
         if actions.shape != (batch_size,):
             raise ValueError("actions must have shape (N,)")
@@ -36,13 +63,20 @@ class ReplayBatch:
             raise ValueError("rewards must have shape (N,)")
         if dones.shape != (batch_size,):
             raise ValueError("dones must have shape (N,)")
-        if observations.shape[1] < 1 or observations.shape[2:] != (84, 84):
-            raise ValueError("observations must have shape (N, C, 84, 84)")
-        object.__setattr__(self, "observations", observations)
-        object.__setattr__(self, "next_observations", next_observations)
-        object.__setattr__(self, "actions", actions)
-        object.__setattr__(self, "rewards", rewards)
-        object.__setattr__(self, "dones", dones)
+        validate_observation_shape(
+            tuple(int(value) for value in observations.shape[1:])
+        )
+        object.__setattr__(
+            self, "observations", np.array(observations, dtype=np.uint8, copy=True)
+        )
+        object.__setattr__(
+            self,
+            "next_observations",
+            np.array(next_observations, dtype=np.uint8, copy=True),
+        )
+        object.__setattr__(self, "actions", np.array(actions, copy=True))
+        object.__setattr__(self, "rewards", np.array(rewards, copy=True))
+        object.__setattr__(self, "dones", np.array(dones, copy=True))
 
     @property
     def size(self) -> int:
@@ -81,14 +115,12 @@ class ReplayBuffer:
         if isinstance(capacity, bool) or capacity < 1:
             raise ValueError("capacity must be positive")
         shape = tuple(int(value) for value in observation_shape)
-        if len(shape) != 3 or shape[0] < 1 or shape[1:] != (84, 84):
-            raise ValueError("observation_shape must be (channels, 84, 84)")
         if num_actions is not None and (
             isinstance(num_actions, bool) or num_actions < 1
         ):
             raise ValueError("num_actions must be positive when provided")
         self.capacity = int(capacity)
-        self.observation_shape = shape
+        self.observation_shape = validate_observation_shape(shape)
         self.num_actions = None if num_actions is None else int(num_actions)
         self._rng = np.random.default_rng(seed)
         self._observations = np.empty(
@@ -100,6 +132,12 @@ class ReplayBuffer:
         self._dones = np.empty(self.capacity, dtype=np.bool_)
         self._size = 0
         self._next_index = 0
+
+    @property
+    def estimated_storage_bytes(self) -> int:
+        """Return the dense ring's current allocation size in bytes."""
+
+        return estimate_replay_storage_bytes(self.capacity, self.observation_shape)
 
     def __len__(self) -> int:
         return self._size
@@ -140,12 +178,12 @@ class ReplayBuffer:
             raise ValueError("cannot sample more transitions than are stored")
         indices = self._rng.choice(self._size, size=int(batch_size), replace=False)
         return ReplayBatch(
-            observations=self._observations[indices].copy(),
-            actions=self._actions[indices].copy(),
-            rewards=self._rewards[indices].copy(),
-            next_observations=self._next_observations[indices].copy(),
-            dones=self._dones[indices].copy(),
+            observations=self._observations[indices],
+            actions=self._actions[indices],
+            rewards=self._rewards[indices],
+            next_observations=self._next_observations[indices],
+            dones=self._dones[indices],
         )
 
 
-__all__ = ["ReplayBatch", "ReplayBuffer"]
+__all__ = ["ReplayBatch", "ReplayBuffer", "estimate_replay_storage_bytes"]

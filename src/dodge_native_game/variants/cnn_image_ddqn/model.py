@@ -10,13 +10,16 @@ from torch import nn
 IMAGE_SHAPE: Final = (4, 84, 84)
 CNN_FEATURE_SIZE: Final = 64 * 7 * 7
 INITIALIZATION_ID: Final = "kaiming-relu-xavier-head-v1"
+SUPPORTED_SPATIAL_SIZES: Final = (84, 128)
 
 __all__ = [
     "CNN_FEATURE_SIZE",
     "IMAGE_SHAPE",
     "INITIALIZATION_ID",
+    "SUPPORTED_SPATIAL_SIZES",
     "AtariCnnQNetwork",
     "to_float_observations",
+    "validate_observation_shape",
 ]
 
 
@@ -43,7 +46,7 @@ def to_float_observations(
 
 
 class AtariCnnQNetwork(nn.Module):
-    """Map stacked 84x84 grayscale frames to action Q-values.
+    """Map stacked image frames to action Q-values.
 
     The default final head is dueling: one shared 512-wide representation
     feeds a value stream and an advantage stream. A plain linear Q-head is
@@ -57,6 +60,7 @@ class AtariCnnQNetwork(nn.Module):
         *,
         dueling: bool = True,
         input_channels: int = IMAGE_SHAPE[0],
+        input_size: int = 84,
     ) -> None:
         super().__init__()
         if isinstance(num_actions, bool) or num_actions < 1:
@@ -65,10 +69,21 @@ class AtariCnnQNetwork(nn.Module):
             raise TypeError("input_channels must be an integer")
         if input_channels < 1:
             raise ValueError("input_channels must be positive")
+        if isinstance(input_size, bool) or not isinstance(input_size, int):
+            raise TypeError("input_size must be an integer")
+        if input_size not in SUPPORTED_SPATIAL_SIZES:
+            raise ValueError("input_size must be exactly 84 or 128")
 
         self.num_actions = int(num_actions)
         self.dueling = bool(dueling)
-        self.observation_shape = (int(input_channels), 84, 84)
+        self.input_size = int(input_size)
+        self.observation_shape = (
+            int(input_channels),
+            self.input_size,
+            self.input_size,
+        )
+        feature_map_size = _conv_output_size(self.input_size)
+        feature_size = 64 * feature_map_size * feature_map_size
         self.features = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=8, stride=4),
             nn.ReLU(),
@@ -79,7 +94,7 @@ class AtariCnnQNetwork(nn.Module):
         )
         self.shared = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(CNN_FEATURE_SIZE, 512),
+            nn.Linear(feature_size, 512),
             nn.ReLU(),
         )
         if self.dueling:
@@ -133,10 +148,31 @@ class AtariCnnQNetwork(nn.Module):
         return self.q_head(features)
 
 
-def _validate_observation_shape(value: tuple[int, int, int]) -> tuple[int, int, int]:
+def validate_observation_shape(value: object) -> tuple[int, int, int]:
+    """Validate a channel-first image shape supported by the CNN variant."""
+
     if not isinstance(value, tuple) or len(value) != 3:
-        raise ValueError("observation shape must be a (channels, 84, 84) tuple")
-    shape = tuple(int(item) for item in value)
-    if shape[0] < 1 or shape[1:] != (84, 84):
-        raise ValueError("observation shape must be (channels, 84, 84)")
+        raise ValueError("observation shape must be a (channels, height, width) tuple")
+    try:
+        shape = tuple(int(item) for item in value)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("observation shape must contain integers") from error
+    if shape[0] < 1 or shape[1] != shape[2] or shape[1] not in SUPPORTED_SPATIAL_SIZES:
+        raise ValueError(
+            "observation shape must be (channels, 84, 84) or "
+            "(channels, 128, 128)"
+        )
     return shape
+
+
+def _validate_observation_shape(value: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Backward-compatible private alias used by the forward boundary."""
+
+    return validate_observation_shape(value)
+
+
+def _conv_output_size(input_size: int) -> int:
+    output_size = input_size
+    for kernel_size, stride in ((8, 4), (4, 2), (3, 1)):
+        output_size = (output_size - kernel_size) // stride + 1
+    return output_size

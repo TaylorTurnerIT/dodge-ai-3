@@ -5,6 +5,8 @@
 # Usage:
 #   scripts/colab-gpu-run --run-id <id> [--steps 50000] [--stack-size 4]
 #                         [--seed 42] [--learning-rate 0.00025]
+#                         [--observation-profile collision-image-v1|native-rgb-v1]
+#                         [--replay-capacity <n>]
 #                         [--eval-episodes 4] [--eval-steps 64]
 #                         [--gpu T4] [--colab-auth oauth2|adc]
 #                         [--session <name>] [--keep] [--cpu]
@@ -41,6 +43,7 @@ WARMUP="20000"; SYNC="10000"; DUELING=""
 EPSILON_DECAY=""; LEARNING_RATE=""; EVAL_EPISODES="4"; EVAL_STEPS="64"
 COLAB_AUTH="oauth2"
 TRAINING_SEED_COUNT=""; EVALUATION_SEED=""; LOG_INTERVAL="1000"
+OBSERVATION_PROFILE=""; REPLAY_CAPACITY=""
 usage() {
     sed -n '2,14p' "$0" | sed 's/^# *//'
 }
@@ -50,6 +53,8 @@ while [[ $# -gt 0 ]]; do
         --run-id) RUN_ID="$2"; shift 2;;
         --steps) STEPS="$2"; shift 2;;
         --stack-size) STACK="$2"; shift 2;;
+        --observation-profile) OBSERVATION_PROFILE="$2"; shift 2;;
+        --replay-capacity) REPLAY_CAPACITY="$2"; shift 2;;
         --seed) SEED="$2"; shift 2;;
         --training-seed-count) TRAINING_SEED_COUNT="$2"; shift 2;;
         --evaluation-seed) EVALUATION_SEED="$2"; shift 2;;
@@ -99,6 +104,14 @@ fi
 for value in "$TRAINING_SEED_COUNT" "$EVALUATION_SEED" "$LOG_INTERVAL"; do
     [[ -z "$value" || "$value" =~ ^[0-9]+$ ]] || { echo "seed and logging arguments must contain digits only" >&2; exit 2; }
 done
+[[ -z "$OBSERVATION_PROFILE" || "$OBSERVATION_PROFILE" =~ ^(collision-image-v1|native-rgb-v1)$ ]] || {
+    echo "unsupported --observation-profile: $OBSERVATION_PROFILE" >&2
+    exit 2
+}
+if [[ -n "$REPLAY_CAPACITY" && ! "$REPLAY_CAPACITY" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--replay-capacity must be a positive integer" >&2
+    exit 2
+fi
 [[ -z "$SESSION" ]] && SESSION="dodge-${RUN_ID}"
 
 colab_cli() {
@@ -141,6 +154,13 @@ if [[ -n "$EPSILON_DECAY" ]]; then SHAPE_ARGS="$SHAPE_ARGS, epsilon_decay_steps=
 if [[ -n "$LEARNING_RATE" ]]; then SHAPE_ARGS="$SHAPE_ARGS, learning_rate=$LEARNING_RATE"; fi
 if [[ -n "$TRAINING_SEED_COUNT" ]]; then SHAPE_ARGS="$SHAPE_ARGS, training_seed_count=$TRAINING_SEED_COUNT"; fi
 if [[ -n "$EVALUATION_SEED" ]]; then SHAPE_ARGS="$SHAPE_ARGS, evaluation_seed=$EVALUATION_SEED"; fi
+PROFILE_ARGS=""
+if [[ -n "$OBSERVATION_PROFILE" ]]; then
+    PROFILE_ARGS="$PROFILE_ARGS, observation_profile=\"$OBSERVATION_PROFILE\""
+fi
+if [[ -n "$REPLAY_CAPACITY" ]]; then
+    PROFILE_ARGS="$PROFILE_ARGS, replay_capacity=$REPLAY_CAPACITY"
+fi
 colab_cli install -s "$SESSION" gymnasium
 
 cat > "$TMPDIR/setup.py" <<EOF
@@ -169,7 +189,7 @@ path = train_run(history_root="/content/history", run_id="$RUN_ID",
                  steps=$STEPS, seed=$SEED, stack_size=$STACK, device=device,
                  warmup_steps=$WARMUP, target_sync_interval=$SYNC,
                  log_interval=$LOG_INTERVAL,
-                 eval_episodes=$EVAL_EPISODES, eval_steps=$EVAL_STEPS$RESUME_ARG$DUEL_ARG$SHAPE_ARGS)
+                 eval_episodes=$EVAL_EPISODES, eval_steps=$EVAL_STEPS$RESUME_ARG$DUEL_ARG$SHAPE_ARGS$PROFILE_ARGS)
 print(f"TRAIN_DONE root={path} wall={(time.perf_counter()-t0)/60:.1f}min")
 EOF
 colab_cli exec -s "$SESSION" -f "$TMPDIR/train.py" --timeout 3000

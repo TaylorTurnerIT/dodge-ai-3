@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import operator
 import os
 import threading
@@ -38,6 +39,12 @@ from .episode_metrics import (
     record_episode_step,
 )
 from .model import INITIALIZATION_ID, AtariCnnQNetwork
+from .pixels import (
+    COLLISION_PROFILE,
+    OBSERVATION_PROFILES,
+    RGB_PROFILE,
+    observation_shape,
+)
 from .provenance import git_source_provenance, infer_parent_run_id, sha256_file
 from .replay import ReplayBuffer
 from .rewards import UNCONTROLLED_SCORE_PER_ENEMY, RewardConfig
@@ -55,6 +62,11 @@ DEFAULT_TARGET_SYNC_INTERVAL = 100
 DEFAULT_LOG_INTERVAL = 16
 DEFAULT_EVAL_EPISODES = 4
 DEFAULT_EVAL_STEPS = 64
+DEFAULT_OBSERVATION_PROFILE = COLLISION_PROFILE
+RGB_REPLAY_HEADROOM = 0.20
+DIAGNOSTIC_SAMPLE_CADENCE = (
+    "first-update-and-next-update-before-log-boundary-or-segment-end"
+)
 
 # Native FrameEvent bits; must match event_flags_code in dodge-python.
 EVENT_SPAWN = 1 << 0
@@ -191,6 +203,211 @@ def _load_variant_config() -> dict[str, Any]:
         }
 
 
+def _resolve_observation_profile(
+    requested: str | None, config: Mapping[str, Any]
+) -> str:
+    """Resolve and validate the immutable observation profile for a run."""
+
+    observation_config = config.get("observation")
+    configured: object = config.get(
+        "observation_profile",
+        config.get("observation_id", DEFAULT_OBSERVATION_PROFILE),
+    )
+    if isinstance(observation_config, Mapping):
+        configured = observation_config.get(
+            "profile", observation_config.get("id", configured)
+        )
+    profile = configured if requested is None else requested
+    if profile not in OBSERVATION_PROFILES:
+        choices = ", ".join(OBSERVATION_PROFILES)
+        raise ValueError(f"unknown observation profile {profile!r}; choose {choices}")
+    return str(profile)
+
+
+def _profile_for_shape(shape: tuple[int, int, int]) -> str:
+    """Infer a legacy-compatible profile only when shape makes it unambiguous."""
+
+    if len(shape) == 3 and tuple(shape[1:]) == (84, 84) and shape[0] >= 1:
+        return COLLISION_PROFILE
+    if (
+        len(shape) == 3
+        and tuple(shape[1:]) == (128, 128)
+        and shape[0] >= 3
+        and shape[0] % 3 == 0
+    ):
+        return RGB_PROFILE
+    raise ValueError(f"unsupported observation shape: {shape}")
+
+
+def _checkpoint_profile(payload: Mapping[str, object]) -> str:
+    """Read a checkpoint profile, treating absent legacy metadata as collision."""
+
+    profile = payload.get("observation_profile", COLLISION_PROFILE)
+    if profile not in OBSERVATION_PROFILES:
+        choices = ", ".join(OBSERVATION_PROFILES)
+        raise ValueError(
+            f"checkpoint observation profile {profile!r} is invalid; choose {choices}"
+        )
+    return str(profile)
+
+
+def _checkpoint_shape(payload: Mapping[str, object]) -> tuple[int, int, int]:
+    raw_shape = payload.get("observation_shape", ())
+    try:
+        shape = tuple(int(item) for item in raw_shape)  # type: ignore[union-attr]
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "checkpoint observation_shape must be a 3-item sequence"
+        ) from error
+    if len(shape) != 3:
+        raise ValueError("checkpoint observation_shape must be a 3-item sequence")
+    return shape
+
+
+def _checkpoint_stack_size(
+    payload: Mapping[str, object], profile: str
+) -> int:
+    """Read stack depth, deriving it for old collision checkpoints."""
+
+    raw_stack = payload.get("stack_size")
+    if raw_stack is None:
+        shape = _checkpoint_shape(payload)
+        if profile == COLLISION_PROFILE:
+            raw_stack = shape[0]
+        else:
+            raise ValueError("native RGB checkpoint is missing stack_size")
+    if isinstance(raw_stack, bool):
+        raise ValueError("checkpoint stack_size must be a positive integer")
+    try:
+        stack_size = operator.index(raw_stack)
+    except TypeError as error:
+        raise ValueError("checkpoint stack_size must be a positive integer") from error
+    if stack_size < 1:
+        raise ValueError("checkpoint stack_size must be a positive integer")
+    return int(stack_size)
+
+
+def _validate_checkpoint_observation(
+    payload: Mapping[str, object],
+    *,
+    observation_profile: str,
+    stack_size: int,
+    expected_shape: tuple[int, int, int],
+) -> None:
+    """Reject profile/depth/shape mismatches before loading network weights."""
+
+    checkpoint_profile = _checkpoint_profile(payload)
+    if checkpoint_profile != observation_profile:
+        raise ValueError(
+            "checkpoint observation profile does not match the current session: "
+            f"{checkpoint_profile!r} != {observation_profile!r}"
+        )
+    checkpoint_stack = _checkpoint_stack_size(payload, checkpoint_profile)
+    if checkpoint_stack != stack_size:
+        raise ValueError(
+            "checkpoint stack_size does not match the current session: "
+            f"{checkpoint_stack} != {stack_size}"
+        )
+    checkpoint_shape = _checkpoint_shape(payload)
+    if checkpoint_shape != expected_shape:
+        raise ValueError(
+            "checkpoint observation shape does not match the current session: "
+            f"{checkpoint_shape} != {expected_shape}"
+        )
+
+
+def _available_host_memory_bytes() -> int:
+    """Return currently available host memory for the one-time replay gate."""
+
+    try:
+        import psutil
+
+        available = int(psutil.virtual_memory().available)
+    except ImportError:
+        try:
+            available = int(
+                os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+            )
+        except (AttributeError, OSError, ValueError) as error:
+            raise RuntimeError("cannot measure available host memory") from error
+    if available < 1:
+        raise RuntimeError("available host memory measurement was invalid")
+    return available
+
+
+def _legacy_replay_storage_bytes(
+    capacity: int, shape: tuple[int, int, int]
+) -> int:
+    """Estimate explicit uint8 state + next-state replay allocation."""
+
+    image_bytes = int(np.prod(shape, dtype=np.int64)) * int(capacity) * 2
+    scalar_bytes = int(capacity) * (
+        np.dtype(np.int64).itemsize
+        + np.dtype(np.float32).itemsize
+        + np.dtype(np.bool_).itemsize
+    )
+    return image_bytes + scalar_bytes
+
+
+def _pixel_replay_class() -> type[Any]:
+    """Import the packed native RGB replay lazily so collision runs stay stable."""
+
+    from .pixel_replay import NativePixelReplayBuffer
+
+    return NativePixelReplayBuffer
+
+
+def _pixel_replay_storage_bytes(
+    replay_class: type[Any], capacity: int, stack_size: int
+) -> int:
+    estimator = getattr(replay_class, "estimated_storage_bytes", None)
+    if callable(estimator):
+        return int(estimator(capacity, stack_size))
+    from .pixel_replay import estimated_storage_bytes
+
+    return int(estimated_storage_bytes(capacity, stack_size))
+
+
+def _replay_storage_plan(
+    *,
+    observation_profile: str,
+    capacity: int,
+    stack_size: int,
+    observation_shape_value: tuple[int, int, int],
+) -> tuple[type[Any] | None, dict[str, Any]]:
+    """Plan replay storage and gate RGB allocation before constructing arrays."""
+
+    if observation_profile != RGB_PROFILE:
+        return None, {
+            "encoding": "uint8-state-next-v1",
+            "capacity": capacity,
+            "estimated_bytes": _legacy_replay_storage_bytes(
+                capacity, observation_shape_value
+            ),
+            "available_bytes": None,
+            "headroom_fraction": None,
+        }
+
+    replay_class = _pixel_replay_class()
+    estimated_bytes = _pixel_replay_storage_bytes(replay_class, capacity, stack_size)
+    available_bytes = _available_host_memory_bytes()
+    required_bytes = math.ceil(estimated_bytes / (1.0 - RGB_REPLAY_HEADROOM))
+    if required_bytes > available_bytes:
+        raise MemoryError(
+            "native RGB replay requires "
+            f"{estimated_bytes:,} bytes plus {RGB_REPLAY_HEADROOM:.0%} host-memory "
+            f"headroom, but only {available_bytes:,} bytes are available"
+        )
+    return replay_class, {
+        "encoding": "native-palette4-frame-ring-v1",
+        "capacity": capacity,
+        "estimated_bytes": estimated_bytes,
+        "available_bytes": available_bytes,
+        "required_bytes_with_headroom": required_bytes,
+        "headroom_fraction": RGB_REPLAY_HEADROOM,
+    }
+
+
 def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
@@ -205,10 +422,39 @@ def _nonnegative_int(value: str) -> int:
     return parsed
 
 
+def _diagnostics_requested(
+    *,
+    step: int,
+    update_every: int,
+    log_interval: int,
+    steps: int,
+    optimizer_step: int,
+    optimizer_step_start: int,
+) -> bool:
+    """Sample one optimizer diagnostic at each useful logging boundary."""
+
+    if optimizer_step == optimizer_step_start:
+        return True
+    # The update at ``step`` is the last one before the next logging boundary
+    # when its next scheduled update crosses that boundary. This handles
+    # update/log intervals that are not integer multiples of one another.
+    before_log_boundary = (step - 1) // log_interval != (
+        step + update_every - 1
+    ) // log_interval
+    return before_log_boundary or step + update_every > steps
+
+
 def _observation_to_uint8(
     observation: object, expected_shape: tuple[int, int, int]
 ) -> np.ndarray:
-    value = np.asarray(observation, dtype=np.float32)
+    raw = np.asarray(observation)
+    if raw.shape != expected_shape:
+        raise ValueError(
+            f"observation must have shape {expected_shape}, got {raw.shape}"
+        )
+    if raw.dtype == np.uint8:
+        return np.ascontiguousarray(raw, dtype=np.uint8).copy()
+    value = np.asarray(raw, dtype=np.float32)
     if value.shape != expected_shape:
         raise ValueError(
             f"observation must have shape {expected_shape}, got {value.shape}"
@@ -270,10 +516,30 @@ def _checkpoint_payload(
     *,
     step: int,
     seed: int,
+    observation_profile: str = DEFAULT_OBSERVATION_PROFILE,
+    stack_size: int | None = None,
     run_id: str | None = None,
     target_sync_count: int = 0,
     source: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
+    profile = _resolve_observation_profile(observation_profile, {})
+    agent_shape = tuple(int(value) for value in agent.observation_shape)
+    if stack_size is None:
+        if profile == RGB_PROFILE:
+            if agent_shape[0] % 3:
+                raise ValueError(
+                    "native RGB checkpoint requires a channel count divisible by 3"
+                )
+            stack_size = agent_shape[0] // 3
+        else:
+            stack_size = agent_shape[0]
+    expected_shape = observation_shape(profile, int(stack_size))
+    if agent_shape != expected_shape:
+        raise ValueError(
+            "checkpoint observation profile/shape mismatch: "
+            f"{profile!r} with stack {stack_size} expects {expected_shape}, "
+            f"got {agent_shape}"
+        )
     return {
         "checkpoint_schema_version": 2,
         "variant_id": VARIANT_ID,
@@ -282,7 +548,10 @@ def _checkpoint_payload(
         "seed": seed,
         "run_id": run_id,
         "initialization_id": INITIALIZATION_ID,
-        "observation_shape": list(agent.observation_shape),
+        "observation_profile": profile,
+        "stack_size": int(stack_size),
+        "model_input_size": int(expected_shape[1]),
+        "observation_shape": list(expected_shape),
         "num_actions": agent.num_actions,
         "online_network": agent.online_network.state_dict(),
         "target_network": agent.target_network.state_dict(),
@@ -310,7 +579,13 @@ def _epsilon_entropy(epsilon: float, num_actions: int) -> float:
     return float(-sum(value * np.log(value) for value in terms if value > 0.0))
 
 
-def _load_checkpoint(agent: DoubleDQNAgent, path: Path) -> dict[str, Any]:
+def _load_checkpoint(
+    agent: DoubleDQNAgent,
+    path: Path,
+    *,
+    observation_profile: str | None = None,
+    stack_size: int | None = None,
+) -> dict[str, Any]:
     """Load one native DDQN checkpoint into an existing learner."""
 
     payload = torch.load(path, map_location=agent.device, weights_only=False)
@@ -318,12 +593,23 @@ def _load_checkpoint(agent: DoubleDQNAgent, path: Path) -> dict[str, Any]:
         raise ValueError("checkpoint must contain a mapping")
     if payload.get("variant_id") != VARIANT_ID:
         raise ValueError("checkpoint variant does not match cnn-image-ddqn")
-    shape = tuple(payload.get("observation_shape", ()))
-    if shape != tuple(agent.observation_shape):
-        raise ValueError(
-            "checkpoint observation shape does not match the current session: "
-            f"{shape} != {agent.observation_shape}"
-        )
+    agent_shape = tuple(int(value) for value in agent.observation_shape)
+    expected_profile = (
+        _profile_for_shape(agent_shape)
+        if observation_profile is None
+        else _resolve_observation_profile(observation_profile, {})
+    )
+    expected_stack = (
+        agent_shape[0] // (3 if expected_profile == RGB_PROFILE else 1)
+        if stack_size is None
+        else int(stack_size)
+    )
+    _validate_checkpoint_observation(
+        payload,
+        observation_profile=expected_profile,
+        stack_size=expected_stack,
+        expected_shape=agent_shape,
+    )
     if int(payload.get("num_actions", -1)) != agent.num_actions:
         raise ValueError("checkpoint action count does not match the current session")
     agent.online_network.load_state_dict(payload["online_network"])
@@ -472,6 +758,9 @@ def _evaluate(
     )
     return {
         "episodes": episodes,
+        "observation_profile": getattr(
+            env, "observation_profile", DEFAULT_OBSERVATION_PROFILE
+        ),
         "max_steps_per_episode": max_steps,
         "seed_offset": seed_offset,
         "seeds": seeds,
@@ -544,6 +833,9 @@ def _counterfactual_eval(
     )
     return {
         "episodes": episodes,
+        "observation_profile": getattr(
+            env, "observation_profile", DEFAULT_OBSERVATION_PROFILE
+        ),
         "forced_action": int(forced_action),
         "seed_offset": seed_offset,
         "seeds": seeds,
@@ -563,7 +855,9 @@ def train_run(
     steps: int = DEFAULT_STEPS,
     seed: int = DEFAULT_SEED,
     stack_size: int = DEFAULT_STACK_SIZE,
+    observation_profile: str | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    replay_capacity: int | None = None,
     warmup_steps: int = DEFAULT_WARMUP_STEPS,
     update_every: int = DEFAULT_UPDATE_EVERY,
     target_sync_interval: int = DEFAULT_TARGET_SYNC_INTERVAL,
@@ -630,11 +924,24 @@ def train_run(
         return min(32767, seed + episode_index)
 
     config = _load_variant_config()
+    effective_profile = _resolve_observation_profile(observation_profile, config)
     engine_config = dict(config.get("game", {}))
     model_config = dict(config.get("model", {}))
     replay_config = dict(config.get("replay", {}))
     target_config = dict(config.get("target", {}))
     exploration_config = dict(config.get("exploration", {}))
+    configured_capacity = replay_config.get("capacity", 100_000)
+    selected_capacity = (
+        configured_capacity if replay_capacity is None else replay_capacity
+    )
+    if isinstance(selected_capacity, bool):
+        raise ValueError("replay_capacity must be positive")
+    try:
+        selected_capacity = int(selected_capacity)
+    except (TypeError, ValueError) as error:
+        raise ValueError("replay_capacity must be positive") from error
+    if selected_capacity < 1:
+        raise ValueError("replay_capacity must be positive")
     step_frames = int(engine_config.get("step_frames", 4))
     num_actions = int(engine_config.get("action_count", ACTION_COUNT))
     selected_game = _native_game_config(
@@ -646,7 +953,14 @@ def train_run(
     _configure_torch_backend(chosen_device)
     _seed_everything(seed)
     rng = np.random.default_rng(seed)
-    observation_shape = (stack_size, 84, 84)
+    observation_shape_value = observation_shape(effective_profile, stack_size)
+    model_input_size = int(observation_shape_value[1])
+    replay_class, replay_storage = _replay_storage_plan(
+        observation_profile=effective_profile,
+        capacity=selected_capacity,
+        stack_size=stack_size,
+        observation_shape_value=observation_shape_value,
+    )
     if dueling is None:
         dueling_effective = bool(model_config.get("dueling", True))
     else:
@@ -680,11 +994,26 @@ def train_run(
         "variant_id": VARIANT_ID,
         "run_id": run_id,
         "seed": seed,
-        "engine": {
-            "observation_id": str(config.get("observation_id", "collision-image-v1")),
-            "collision_image_config": "world128-max-composite-u8-hw-v1",
-            "collision_image_version": 1,
+        "observation_profile": effective_profile,
+        "observation": {
+            "profile": effective_profile,
+            "shape": list(observation_shape_value),
+            "stack_size": stack_size,
+            "model_input_size": model_input_size,
         },
+        "engine": {
+            "observation_id": effective_profile,
+            "observation_profile": effective_profile,
+            "collision_image_config": (
+                "world128-max-composite-u8-hw-v1"
+                if effective_profile == COLLISION_PROFILE
+                else None
+            ),
+            "collision_image_version": (
+                1 if effective_profile == COLLISION_PROFILE else None
+            ),
+        },
+        "replay": dict(replay_storage),
         "trainer": "native-cnn-image-ddqn",
         "device": chosen_device,
         "initialization_id": INITIALIZATION_ID,
@@ -711,6 +1040,12 @@ def train_run(
         )
         if not isinstance(loaded_resume_payload, dict):
             raise ValueError("checkpoint must contain a mapping")
+        _validate_checkpoint_observation(
+            loaded_resume_payload,
+            observation_profile=effective_profile,
+            stack_size=stack_size,
+            expected_shape=observation_shape_value,
+        )
         resume_payload = loaded_resume_payload
         resumed_step = _checkpoint_global_step(resume_payload)
         manifest["resumed_from"] = str(resume_from)
@@ -727,6 +1062,10 @@ def train_run(
                 resume_payload, "optimizer_steps"
             ),
             "initialization_id": resume_payload.get("initialization_id"),
+            "observation_profile": _checkpoint_profile(resume_payload),
+            "stack_size": _checkpoint_stack_size(
+                resume_payload, _checkpoint_profile(resume_payload)
+            ),
         }
         manifest["resume_state"] = {
             "restored": ["online_network", "target_network", "optimizer"],
@@ -754,6 +1093,9 @@ def train_run(
     holdout_seeds = holdout_eval_seeds(eval_base_seed, eval_episodes)
     manifest["eval"] = {
         "protocol": "frozen-train-holdout-v1",
+        "observation_profile": effective_profile,
+        "observation_shape": list(observation_shape_value),
+        "stack_size": stack_size,
         "inner_offset": 10_000,
         "holdout_offset": 20_000,
         "counterfactual_offset": 30_000,
@@ -765,8 +1107,13 @@ def train_run(
         "variant_id": VARIANT_ID,
         "game": {"step_frames": step_frames, "action_count": num_actions},
         "observation": {
-            "id": str(config.get("observation_id", "collision-image-v1")),
-            "shape": list(observation_shape),
+            "id": effective_profile,
+            "profile": effective_profile,
+            "shape": list(observation_shape_value),
+            "stack_size": stack_size,
+            "frame_shape": [3, 128, 128]
+            if effective_profile == RGB_PROFILE
+            else [1, 84, 84],
             "storage_dtype": "uint8",
             "model_dtype": "float32",
         },
@@ -779,12 +1126,14 @@ def train_run(
             ),
             "dueling": dueling_effective,
             "learning_rate": lr_effective,
-            "input_channels": stack_size,
+            "input_channels": observation_shape_value[0],
+            "input_size": model_input_size,
             "initialization_id": INITIALIZATION_ID,
         },
         "replay": {
             **replay_config,
-            "capacity": int(replay_config.get("capacity", 100_000)),
+            **replay_storage,
+            "capacity": selected_capacity,
             "batch_size": batch_size,
             "warmup_steps": warmup_steps,
         },
@@ -801,6 +1150,9 @@ def train_run(
         },
         "evaluation": {
             "protocol": "frozen-train-holdout-v1",
+            "observation_profile": effective_profile,
+            "observation_shape": list(observation_shape_value),
+            "stack_size": stack_size,
             "inner_offset": 10_000,
             "holdout_offset": 20_000,
             "counterfactual_offset": 30_000,
@@ -864,27 +1216,50 @@ def train_run(
         "difficulty": int(selected_game["difficulty"]),
         "patterns": bool(selected_game["patterns"]),
         "powerups": bool(selected_game["powerups"]),
+        "observation_profile": effective_profile,
     }
     try:
         try:
             env = env_factory(**env_kwargs)
         except TypeError:
-            # Preserve the narrow factory seam used by the existing unit tests and
-            # by callers that provide a minimal fake environment.
+            # Preserve minimal legacy factory seams only for collision runs. An
+            # RGB run must never silently substitute a collision observation.
+            if effective_profile != COLLISION_PROFILE:
+                raise
             env = env_factory(stack_size=stack_size, step_frames=step_frames)
-        replay = ReplayBuffer(
-            capacity=int(replay_config.get("capacity", 100_000)),
-            seed=seed,
-            num_actions=num_actions,
-            observation_shape=observation_shape,
-        )
+        if replay_class is None:
+            replay = ReplayBuffer(
+                capacity=selected_capacity,
+                seed=seed,
+                num_actions=num_actions,
+                observation_shape=observation_shape_value,
+            )
+        else:
+            replay = replay_class(
+                capacity=selected_capacity,
+                seed=seed,
+                num_actions=num_actions,
+                stack_size=stack_size,
+            )
 
         def _network_factory(actions: int) -> torch.nn.Module:
-            return AtariCnnQNetwork(
-                actions,
-                dueling=dueling_effective,
-                input_channels=observation_shape[0],
-            )
+            try:
+                return AtariCnnQNetwork(
+                    actions,
+                    dueling=dueling_effective,
+                    input_channels=observation_shape_value[0],
+                    input_size=model_input_size,
+                )
+            except TypeError:
+                # Old model factories remain valid for legacy collision runs;
+                # RGB must fail rather than construct an 84x84 network.
+                if effective_profile != COLLISION_PROFILE:
+                    raise
+                return AtariCnnQNetwork(
+                    actions,
+                    dueling=dueling_effective,
+                    input_channels=observation_shape_value[0],
+                )
 
         agent = DoubleDQNAgent(
             num_actions=num_actions,
@@ -892,11 +1267,16 @@ def train_run(
             learning_rate=lr_effective,
             device=chosen_device,
             seed=seed,
-            observation_shape=observation_shape,
+            observation_shape=observation_shape_value,
             network_factory=_network_factory,
         )
         if resume_from is not None:
-            _load_checkpoint(agent, Path(resume_from))
+            _load_checkpoint(
+                agent,
+                Path(resume_from),
+                observation_profile=effective_profile,
+                stack_size=stack_size,
+        )
         start_time = time.perf_counter()
         observation, _ = env.reset(seed=game_seed(0))
     except Exception as error:
@@ -948,6 +1328,7 @@ def train_run(
     last_target_mean = 0.0
     last_pre_clip_grad_norm = 0.0
     last_dead_units = 0.0
+    last_diagnostic_optimizer_step: int | None = None
     target_sync_count_start = (
         _checkpoint_counter(resume_payload, "target_sync_count")
         if resume_payload is not None
@@ -973,10 +1354,13 @@ def train_run(
             "difficulty": int(settings["difficulty"]),
             "patterns": bool(settings["patterns"]),
             "powerups": bool(settings["powerups"]),
+            "observation_profile": effective_profile,
         }
         try:
             return env_factory(**kwargs)
         except TypeError:
+            if effective_profile != COLLISION_PROFILE:
+                raise
             return env_factory(
                 stack_size=stack_size,
                 step_frames=int(settings["native_step_frames"]),
@@ -1005,6 +1389,8 @@ def train_run(
                             agent,
                             step=resumed_step + step,
                             seed=seed,
+                            observation_profile=effective_profile,
+                            stack_size=stack_size,
                             run_id=run_id,
                             target_sync_count=target_sync_count,
                             source=source_provenance,
@@ -1033,7 +1419,12 @@ def train_run(
                     control.emit(TrainingEvent("load", False, "Model path is missing"))
                     continue
                 try:
-                    payload = _load_checkpoint(agent, command.path)
+                    payload = _load_checkpoint(
+                        agent,
+                        command.path,
+                        observation_profile=effective_profile,
+                        stack_size=stack_size,
+                    )
                     control.emit(
                         TrainingEvent(
                             "load",
@@ -1062,6 +1453,8 @@ def train_run(
                     env.close()
                     env = build_environment(selected_game)
                     observation, _ = env.reset(seed=game_seed(episode))
+                    if replay_class is not None:
+                        replay.reset(observation)
                     episode_reward = 0.0
                     episode_frames = 0
                     episode_deaths = 0
@@ -1152,10 +1545,10 @@ def train_run(
             else:
                 train_reward = float(reward)
             replay.add(
-                _observation_to_uint8(observation, observation_shape),
+                _observation_to_uint8(observation, observation_shape_value),
                 action,
                 train_reward,
-                _observation_to_uint8(next_observation, observation_shape),
+                _observation_to_uint8(next_observation, observation_shape_value),
                 done,
             )
             observation = next_observation
@@ -1188,16 +1581,33 @@ def train_run(
                 len(replay) >= max(batch_size, warmup_steps)
                 and step % update_every == 0
             ):
-                update = agent.update(replay.sample(batch_size))
-                last_loss = update.loss
+                diagnostics_requested = _diagnostics_requested(
+                    step=step,
+                    update_every=update_every,
+                    log_interval=log_interval,
+                    steps=steps,
+                    optimizer_step=agent.optimizer_steps,
+                    optimizer_step_start=optimizer_step_start,
+                )
+                batch = (
+                    replay.sample_packed(batch_size)
+                    if effective_profile == RGB_PROFILE
+                    else replay.sample(batch_size)
+                )
+                update = agent.update(
+                    batch, diagnostics=diagnostics_requested
+                )
                 last_update_step = update.optimizer_step
-                last_td_mean = float(update.td_error_mean)
-                last_td_std = float(update.td_error_std)
-                last_target_std = float(update.target_std)
-                last_q_std = float(update.q_std)
-                last_q_mean = float(update.mean_q)
-                last_target_mean = float(update.mean_target)
-                last_pre_clip_grad_norm = float(update.pre_clip_grad_norm)
+                if update.diagnostics_sampled:
+                    last_diagnostic_optimizer_step = update.optimizer_step
+                    last_loss = update.loss
+                    last_td_mean = float(update.td_error_mean)
+                    last_td_std = float(update.td_error_std)
+                    last_target_std = float(update.target_std)
+                    last_q_std = float(update.q_std)
+                    last_q_mean = float(update.mean_q)
+                    last_target_mean = float(update.mean_target)
+                    last_pre_clip_grad_norm = float(update.pre_clip_grad_norm)
                 if update.optimizer_step % target_sync_interval == 0:
                     agent.sync_target()
                     target_sync_count += 1
@@ -1302,7 +1712,6 @@ def train_run(
                     "total_spawns": total_spawns,
                     "policy_entropy": _epsilon_entropy(epsilon, num_actions),
                     "best_score": best_score,
-                    "loss": last_loss,
                     "epsilon": epsilon,
                     "epsilon_decay_effective": decay_effective,
                     "epsilon_decay_configured": decay_configured,
@@ -1313,15 +1722,6 @@ def train_run(
                     "segment_optimizer_step": (
                         last_update_step - optimizer_step_start
                     ),
-                    "td_error_mean": last_td_mean,
-                    "td_error_std": last_td_std,
-                    "target_std": last_target_std,
-                    "q_std": last_q_std,
-                    "q_mean": last_q_mean,
-                    "target_mean": last_target_mean,
-                    "q_target_mean_delta": last_q_mean - last_target_mean,
-                    "pre_clip_grad_norm": last_pre_clip_grad_norm,
-                    "gradient_clipped": last_pre_clip_grad_norm > MAX_GRAD_NORM,
                     "reward_zero_share": mix["zero_share"],
                     "reward_mean": mix["mean"],
                     "reward_mean_nonzero": mix["mean_nonzero"],
@@ -1341,6 +1741,30 @@ def train_run(
                     ),
                     "completed_episodes": list(completed_episodes_since_log),
                 }
+                metrics["diagnostic_sample_cadence"] = DIAGNOSTIC_SAMPLE_CADENCE
+                metrics["diagnostic_sampled"] = (
+                    last_diagnostic_optimizer_step is not None
+                )
+                if last_diagnostic_optimizer_step is not None:
+                    metrics.update(
+                        {
+                            "diagnostic_optimizer_step": (
+                                last_diagnostic_optimizer_step
+                            ),
+                            "loss": last_loss,
+                            "td_error_mean": last_td_mean,
+                            "td_error_std": last_td_std,
+                            "target_std": last_target_std,
+                            "q_std": last_q_std,
+                            "q_mean": last_q_mean,
+                            "target_mean": last_target_mean,
+                            "q_target_mean_delta": last_q_mean - last_target_mean,
+                            "pre_clip_grad_norm": last_pre_clip_grad_norm,
+                            "gradient_clipped": (
+                                last_pre_clip_grad_norm > MAX_GRAD_NORM
+                            ),
+                        }
+                    )
                 writer.append_metrics(metrics)
                 completed_episodes_since_log.clear()
                 writer.update_status(
@@ -1356,7 +1780,12 @@ def train_run(
                 snapshot_path.parent.mkdir(parents=True, exist_ok=True)
                 torch.save(
                     _checkpoint_payload(
-                        agent, step=global_step, seed=seed, run_id=run_id,
+                        agent,
+                        step=global_step,
+                        seed=seed,
+                        observation_profile=effective_profile,
+                        stack_size=stack_size,
+                        run_id=run_id,
                         target_sync_count=target_sync_count, source=source_provenance,
                     ),
                     snapshot_path,
@@ -1395,6 +1824,8 @@ def train_run(
                 agent,
                 step=global_step_end,
                 seed=seed,
+                observation_profile=effective_profile,
+                stack_size=stack_size,
                 run_id=run_id,
                 target_sync_count=target_sync_count,
                 source=source_provenance,
@@ -1477,6 +1908,9 @@ def train_run(
         )
         evaluation = {
             "protocol": "frozen-train-holdout-v1",
+            "observation_profile": effective_profile,
+            "observation_shape": list(observation_shape_value),
+            "stack_size": stack_size,
             "inner": evaluation_inner,
             "holdout": evaluation_holdout,
             "train_holdout_gap": train_holdout_gap,
@@ -1512,7 +1946,6 @@ def train_run(
             if isinstance(best_eval, dict)
             else 0.0,
             "best_eval_episode": best_eval,
-            "loss": last_loss,
             "epsilon": epsilon,
             "epsilon_decay_effective": decay_effective,
             "throughput": steps / max(time.perf_counter() - start_time, 1e-9),
@@ -1520,12 +1953,6 @@ def train_run(
             "optimizer_step": last_update_step,
             "global_optimizer_step": last_update_step,
             "segment_optimizer_step": last_update_step - optimizer_step_start,
-            "td_error_mean": last_td_mean,
-            "td_error_std": last_td_std,
-            "target_mean": last_target_mean,
-            "q_target_mean_delta": last_q_mean - last_target_mean,
-            "pre_clip_grad_norm": last_pre_clip_grad_norm,
-            "gradient_clipped": last_pre_clip_grad_norm > MAX_GRAD_NORM,
             "reward_zero_share": float(final_mix["zero_share"]),
             "action_balance": final_balance,
             "least_used_action": int(least_used_final),
@@ -1538,7 +1965,25 @@ def train_run(
             "segment_target_sync_count": (
                 target_sync_count - target_sync_count_start
             ),
+            "diagnostic_sample_cadence": DIAGNOSTIC_SAMPLE_CADENCE,
+            "diagnostic_sampled": last_diagnostic_optimizer_step is not None,
         }
+        if last_diagnostic_optimizer_step is not None:
+            final_metrics.update(
+                {
+                    "diagnostic_optimizer_step": last_diagnostic_optimizer_step,
+                    "loss": last_loss,
+                    "td_error_mean": last_td_mean,
+                    "td_error_std": last_td_std,
+                    "target_std": last_target_std,
+                    "q_std": last_q_std,
+                    "q_mean": last_q_mean,
+                    "target_mean": last_target_mean,
+                    "q_target_mean_delta": last_q_mean - last_target_mean,
+                    "pre_clip_grad_norm": last_pre_clip_grad_norm,
+                    "gradient_clipped": last_pre_clip_grad_norm > MAX_GRAD_NORM,
+                }
+            )
         report = {
             "result": "bounded_baseline_complete",
             "quality_gate": gate,
@@ -1568,6 +2013,8 @@ def train_run(
                     last_update_step - optimizer_step_start
                 ),
                 "global_optimizer_updates": int(last_update_step),
+                "diagnostic_sample_cadence": DIAGNOSTIC_SAMPLE_CADENCE,
+                "diagnostic_optimizer_step": last_diagnostic_optimizer_step,
                 "segment_target_sync_count": (
                     target_sync_count - target_sync_count_start
                 ),
@@ -1600,7 +2047,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stack-size", type=_positive_int, choices=(1, 2, 4, 8), default=4
     )
+    parser.add_argument(
+        "--observation-profile",
+        choices=OBSERVATION_PROFILES,
+        default=None,
+        help="observation profile; omitted uses the variant config (legacy collision)",
+    )
     parser.add_argument("--batch-size", type=_positive_int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--replay-capacity", type=_positive_int, default=None)
     parser.add_argument(
         "--warmup-steps", type=_positive_int, default=DEFAULT_WARMUP_STEPS
     )
@@ -1646,7 +2100,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         training_seed_count=args.training_seed_count,
         evaluation_seed=args.evaluation_seed,
         stack_size=args.stack_size,
+        observation_profile=args.observation_profile,
         batch_size=args.batch_size,
+        replay_capacity=args.replay_capacity,
         warmup_steps=args.warmup_steps,
         update_every=args.update_every,
         target_sync_interval=args.target_sync_interval,

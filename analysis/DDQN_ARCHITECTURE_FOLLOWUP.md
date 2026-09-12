@@ -1,8 +1,55 @@
 # DDQN seed diversity and architecture follow-up
 
-Evidence reviewed 2026-09-11. Seed-pool implementation: `bd8bd77`.
-The two pool runs are experiments in progress; this document does not report
-their eventual outcomes.
+## Latest implementation and experiment constraints
+
+Both 500k A100 seed-pool runs are now collected locally; the assignment was
+released. On the same 128 held-out scenarios, the 700-seed run averaged 348.94
+reward (349.94 survival frames), versus 264.49 reward (265.49 survival frames)
+for the 5000-seed run. Neither evaluation was censored. The paired reward
+difference, 5000 minus 700, is −84.45; a 10,000-resample paired bootstrap with
+RNG seed 1729 gives a 95% interval of [−108.14, −60.46]. This describes these
+two checkpoints from learner seed 42, not variability across learner seeds.
+More training scenarios alone did not improve this experiment.
+
+The requested next observation is the full native 128×128 RGB display, including
+particles and HUD, with four temporal frames. Existing collision checkpoints
+keep their original profile. The reported enemy-position mismatch in the viewer
+was an oldest/current-frame comparison, not evidence of a collision encoder bug.
+
+The initial dense RGB storage proposal was rejected: 100k duplicated state/next
+stacks would consume 39.32 GB. The replacement must retain exact pixels using
+losslessly packed palette frames and temporal references, stay below 2 GB at
+100k transitions, and pass measured insertion/sampling throughput gates.
+
+The current learner also extracted eight CPU diagnostic scalars on every
+optimizer update. A new opt-out path skips those reductions/transfers, and the
+sampled path transfers one eight-value vector. Unit tests require identical
+weight updates with diagnostics enabled or disabled. This is not yet evidence
+of an end-to-end GPU speedup. Long-run promotion requires matched GPU timings;
+web rendering, explanations, and replay inspection remain outside training.
+
+Routine telemetry has a 5% added-wall-time promotion budget against minimal
+logging, using at least three alternating paired GPU trials with the same
+configuration, seed, and update count. Report training-loop and all-in times
+separately. This gate is still pending; CPU microbenchmarks do not satisfy it.
+
+Local verification now passes 150 Python tests, Ruff, both browser replay
+contract suites, and a 32-decision native RGB training/evaluation smoke run.
+Packed batches reconstruct exactly the same normalized pixels and produce
+identical CPU weight updates as dense batches. The replay allocation estimate
+is 1,644,541,040 bytes for 100k transitions and four frames; this is replay-array
+storage, not total process RAM. No 100k buffer was allocated locally.
+
+After the pixel/storage gate, the first model ablation remains target refresh
+at 1,000 versus 10,000 optimizer updates. Reward changes and multi-step returns
+should be separate experiments so a score change remains interpretable. Pickup,
+kill, and hazard-distance rewards require native event/quantity contracts;
+the missing signals must not be inferred from rendered brightness or mislabeled
+aggregate counters.
+
+The sections below preserve the original 2026-09-11 experiment rationale and
+execution notes. Seed-pool implementation: `bd8bd77`. Completion status and
+results are reported above.
 
 The most promising learning change is faster target propagation. The completed
 A100 baseline has 120,001 optimizer updates but only 12 target copies. Its

@@ -15,6 +15,7 @@ import torch
 from ...batch import NativeBatchEnvironment
 from .agent import DoubleDQNAgent
 from .env import CNNImageDDQNEnv
+from .pixels import PICO8_PALETTE
 from .run import _choose_device, _configure_torch_backend, _load_checkpoint
 
 FRAME_HEIGHT: Final = 84
@@ -22,26 +23,6 @@ FRAME_WIDTH: Final = 84
 GAME_HEIGHT: Final = 128
 GAME_WIDTH: Final = 128
 MAX_REPLAY_STEPS: Final = 600
-# Standard PICO-8 palette; native pixels are palette indices and the default
-# theme maps them identically (theme_background=12, theme_shadow=1).
-PICO8_PALETTE: Final = (
-    (0, 0, 0),
-    (29, 43, 83),
-    (126, 37, 83),
-    (0, 135, 81),
-    (171, 82, 54),
-    (95, 87, 79),
-    (194, 195, 199),
-    (255, 241, 232),
-    (255, 0, 77),
-    (255, 163, 0),
-    (255, 236, 39),
-    (0, 228, 54),
-    (41, 173, 255),
-    (131, 118, 156),
-    (255, 119, 168),
-    (255, 204, 170),
-)
 DEFAULT_REPLAY_STEPS: Final = 360
 ACTION_NAMES: Final = (
     "neutral",

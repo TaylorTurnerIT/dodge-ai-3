@@ -1,4 +1,4 @@
-"""Gymnasium environment for the native collision-image DDQN variant."""
+"""Gymnasium environment for versioned native DDQN image observations."""
 
 from __future__ import annotations
 
@@ -10,11 +10,15 @@ import numpy as np
 from gymnasium import spaces
 
 from .image import (
-    FRAME_HEIGHT,
-    FRAME_WIDTH,
     NativeBatchResultError,
     NativeCollisionImageUnavailable,
     collision_image_from_result,
+)
+from .pixels import (
+    COLLISION_PROFILE,
+    RGB_PROFILE,
+    native_rgb_from_result,
+    observation_shape,
 )
 from .temporal import TemporalFrameStack
 
@@ -90,10 +94,10 @@ def _native_seed(seed: int | np.integer | None, rng: np.random.Generator) -> int
 
 
 class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
-    """One native Dodge lane with a grayscale temporal CNN observation.
+    """One native Dodge lane with a versioned temporal CNN observation.
 
     Rust remains responsible for game state, collision semantics, reward,
-    termination, and the collision-image contents. Python only validates the
+    termination, and the image contents. Python only validates the
     native image, maintains the requested frame history, and translates the
     batch result to Gymnasium's API.
     """
@@ -108,6 +112,7 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
         difficulty: int = 2,
         patterns: bool = True,
         powerups: bool = True,
+        observation_profile: str = COLLISION_PROFILE,
         native_environment: NativeBatchBoundary | None = None,
     ) -> None:
         if isinstance(step_frames, bool) or not isinstance(step_frames, int):
@@ -121,14 +126,19 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
         if not isinstance(patterns, bool) or not isinstance(powerups, bool):
             raise TypeError("patterns and powerups must be booleans")
 
+        shape = observation_shape(observation_profile, stack_size)
+        self.observation_profile = observation_profile
         self.action_space = spaces.Discrete(ACTION_COUNT)
+        rgb = observation_profile == RGB_PROFILE
         self.observation_space = spaces.Box(
-            low=np.float32(0.0),
-            high=np.float32(1.0),
-            shape=(stack_size, FRAME_HEIGHT, FRAME_WIDTH),
-            dtype=np.float32,
+            low=0 if rgb else np.float32(0.0),
+            high=255 if rgb else np.float32(1.0),
+            shape=shape,
+            dtype=np.uint8 if rgb else np.float32,
         )
-        self._frames = TemporalFrameStack(stack_size)
+        self._frames = TemporalFrameStack(
+            stack_size, frame_shape=(shape[0] // stack_size, *shape[1:])
+        )
         self._step_frames = step_frames
         self._difficulty = difficulty
         self._patterns = patterns
@@ -138,6 +148,7 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
             difficulty=difficulty,
             patterns=patterns,
             powerups=powerups,
+            observation_profile=observation_profile,
         )
         self._episode_ended = False
         self._closed = False
@@ -149,20 +160,20 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
         difficulty: int = 2,
         patterns: bool = True,
         powerups: bool = True,
+        observation_profile: str = COLLISION_PROFILE,
     ) -> NativeBatchBoundary:
-        # Keep the rendered pixel and board payloads off. The variant consumes
-        # only the native collision_image field when the boundary provides it.
+        # Observation flags affect exposed payloads, not native game behavior.
         from ...batch import NativeBatchEnvironment
 
         return NativeBatchEnvironment(
             step_frames=step_frames,
             full_state=False,
-            pixels=False,
+            pixels=observation_profile == RGB_PROFILE,
             board=False,
             difficulty=difficulty,
             patterns_enabled=patterns,
             powerups_enabled=powerups,
-            collision_image=True,
+            collision_image=observation_profile == COLLISION_PROFILE,
         )
 
     @property
@@ -204,7 +215,7 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
         result = self._native.reset_batch(
             np.asarray([native_seed], dtype=np.uint32), startup=startup
         )
-        observation = self._frames.reset(collision_image_from_result(result))
+        observation = self._frames.reset(self._image(result))
         self._episode_ended = False
         return observation, self._info(result, native_seed=native_seed)
 
@@ -218,7 +229,7 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
             raise ValueError(f"action must be an integer in [0, {ACTION_COUNT - 1}]")
 
         result = self._native.step_batch(np.asarray([int(action)], dtype=np.uint8))
-        observation = self._frames.append(collision_image_from_result(result))
+        observation = self._frames.append(self._image(result))
         terminated = bool(_lane_scalar(result, "done"))
         self._episode_ended = terminated
         reward = float(_lane_scalar(result, "rewards"))
@@ -234,6 +245,11 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
         """This image variant has no Python-side renderer."""
 
         return None
+
+    def _image(self, result: object) -> np.ndarray:
+        if self.observation_profile == RGB_PROFILE:
+            return native_rgb_from_result(result)
+        return collision_image_from_result(result)
 
     def close(self) -> None:
         if not self._closed:

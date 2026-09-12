@@ -5,15 +5,23 @@ from __future__ import annotations
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .model import IMAGE_SHAPE, AtariCnnQNetwork, to_float_observations
+from .model import (
+    IMAGE_SHAPE,
+    AtariCnnQNetwork,
+    to_float_observations,
+    validate_observation_shape,
+)
 from .replay import ReplayBatch
+
+if TYPE_CHECKING:
+    from .pixel_replay import PackedPixelReplayBatch
 
 NetworkFactory = Callable[[int], nn.Module]
 MAX_GRAD_NORM: Final = 10.0
@@ -35,6 +43,7 @@ class DDQNUpdate:
     td_error_std: float = 0.0
     target_std: float = 0.0
     q_std: float = 0.0
+    diagnostics_sampled: bool = True
 
 
 class DoubleDQNAgent:
@@ -64,18 +73,13 @@ class DoubleDQNAgent:
             raise ValueError("gamma must be finite and between 0 and 1")
         if not np.isfinite(learning_rate) or learning_rate <= 0.0:
             raise ValueError("learning_rate must be finite and positive")
-        if (
-            not isinstance(observation_shape, tuple)
-            or len(observation_shape) != 3
-            or observation_shape[0] < 1
-            or tuple(observation_shape[1:]) != (84, 84)
-        ):
-            raise ValueError("observation_shape must be (channels, 84, 84)")
-        self.observation_shape = tuple(int(item) for item in observation_shape)
+        self.observation_shape = validate_observation_shape(observation_shape)
         if online_network is None:
             if network_factory is AtariCnnQNetwork:
                 online_network = network_factory(
-                    int(num_actions), input_channels=self.observation_shape[0]
+                    int(num_actions),
+                    input_channels=self.observation_shape[0],
+                    input_size=self.observation_shape[1],
                 )
             else:
                 online_network = network_factory(int(num_actions))
@@ -128,18 +132,30 @@ class DoubleDQNAgent:
             return int(greedy_actions[0])
         return greedy_actions
 
-    def update(self, batch: ReplayBatch) -> DDQNUpdate:
+    def update(
+        self, batch: ReplayBatch | PackedPixelReplayBatch, *, diagnostics: bool = True
+    ) -> DDQNUpdate:
         """Run one Huber-loss Double-DQN update from an explicit batch."""
 
-        if not isinstance(batch, ReplayBatch):
+        from .pixel_replay import PackedPixelReplayBatch
+
+        if not isinstance(batch, (ReplayBatch, PackedPixelReplayBatch)):
             raise TypeError("batch must be a ReplayBatch")
         if batch.observation_shape != self.observation_shape:
             raise ValueError(
                 "batch observation shape does not match the agent: "
                 f"{batch.observation_shape} != {self.observation_shape}"
             )
-        observations, _ = self._observation_tensor(batch.observations)
-        next_observations, _ = self._observation_tensor(batch.next_observations)
+        # Validate the small owned CPU action array before transfer. GPU scalar
+        # boolean checks here would introduce two synchronization points.
+        if np.any(batch.actions < 0) or np.any(batch.actions >= self.num_actions):
+            raise ValueError("batch actions contain an out-of-range action")
+        if isinstance(batch, PackedPixelReplayBatch):
+            observations = self._packed_observation_tensor(batch.observations)
+            next_observations = self._packed_observation_tensor(batch.next_observations)
+        else:
+            observations, _ = self._observation_tensor(batch.observations)
+            next_observations, _ = self._observation_tensor(batch.next_observations)
         actions = torch.as_tensor(batch.actions, dtype=torch.long, device=self.device)
         rewards = torch.as_tensor(
             batch.rewards, dtype=torch.float32, device=self.device
@@ -147,8 +163,6 @@ class DoubleDQNAgent:
         dones = torch.as_tensor(batch.dones, dtype=torch.float32, device=self.device)
         if actions.ndim != 1 or actions.shape[0] != batch.size:
             raise ValueError("batch actions must have shape (N,)")
-        if torch.any(actions < 0) or torch.any(actions >= self.num_actions):
-            raise ValueError("batch actions contain an out-of-range action")
 
         self.online_network.train()
         q_values = self._checked_q_values(self.online_network, observations)
@@ -174,34 +188,40 @@ class DoubleDQNAgent:
         self.optimizer.step()
         self.optimizer_steps += 1
 
-        with torch.no_grad():
-            td_errors = targets.detach() - chosen_q_values.detach()
-            td_mean = float(td_errors.mean().cpu().item()) if td_errors.numel() else 0.0
-            td_std = (
-                float(td_errors.std().cpu().item()) if td_errors.numel() > 1 else 0.0
-            )
-            target_std = (
-                float(targets.detach().std().cpu().item())
-                if targets.numel() > 1
-                else 0.0
-            )
-            q_std = (
-                float(chosen_q_values.detach().std().cpu().item())
-                if chosen_q_values.numel() > 1
-                else 0.0
+        if not diagnostics:
+            # Unsampled metrics are explicitly missing, never measured zeros.
+            return DDQNUpdate(
+                loss=float("nan"), mean_q=float("nan"), mean_target=float("nan"),
+                pre_clip_grad_norm=float("nan"), batch_size=batch.size,
+                optimizer_step=self.optimizer_steps, td_error_mean=float("nan"),
+                td_error_std=float("nan"), target_std=float("nan"),
+                q_std=float("nan"), diagnostics_sampled=False,
             )
 
+        with torch.no_grad():
+            td_errors = targets.detach() - chosen_q_values.detach()
+            zero = loss.detach().new_zeros(())
+            # One transfer for the entire sampled diagnostic vector, not one
+            # synchronization for every statistic on every optimizer update.
+            values = torch.stack((
+                loss.detach(), chosen_q_values.detach().mean(),
+                targets.detach().mean(), pre_clip_grad_norm.detach(),
+                td_errors.mean(), td_errors.std() if batch.size > 1 else zero,
+                targets.detach().std() if batch.size > 1 else zero,
+                chosen_q_values.detach().std() if batch.size > 1 else zero,
+            )).cpu().tolist()
+
         return DDQNUpdate(
-            loss=float(loss.detach().cpu().item()),
-            mean_q=float(chosen_q_values.detach().mean().cpu().item()),
-            mean_target=float(targets.detach().mean().cpu().item()),
-            pre_clip_grad_norm=float(pre_clip_grad_norm.detach().cpu().item()),
+            loss=values[0],
+            mean_q=values[1],
+            mean_target=values[2],
+            pre_clip_grad_norm=values[3],
             batch_size=batch.size,
             optimizer_step=self.optimizer_steps,
-            td_error_mean=td_mean,
-            td_error_std=td_std,
-            target_std=target_std,
-            q_std=q_std,
+            td_error_mean=values[4],
+            td_error_std=values[5],
+            target_std=values[6],
+            q_std=values[7],
         )
 
     @torch.no_grad()
@@ -274,6 +294,25 @@ class DoubleDQNAgent:
             ),
             single,
         )
+
+    def _packed_observation_tensor(self, observations: np.ndarray) -> torch.Tensor:
+        """Expand exact packed native colors on-device, not in CPU telemetry."""
+        from .pixels import PICO8_PALETTE
+
+        if self.observation_shape[1:] != (128, 128):
+            raise ValueError("packed palette batches require native RGB128")
+        packed = torch.as_tensor(observations, dtype=torch.uint8, device=self.device)
+        indices = torch.stack((packed >> 4, packed & 15), dim=-1).flatten(-2)
+        palette = getattr(self, "_display_palette", None)
+        if palette is None:
+            palette = torch.tensor(PICO8_PALETTE, dtype=torch.float32,
+                                   device=self.device) / 255.0
+            self._display_palette = palette
+        rgb = palette[indices.long()]
+        batch_size, stack_size = observations.shape[:2]
+        return rgb.reshape(batch_size, stack_size, 128, 128, 3).permute(
+            0, 1, 4, 2, 3
+        ).reshape(batch_size, stack_size * 3, 128, 128)
 
     @staticmethod
     def _validate_epsilon(epsilon: float) -> float:

@@ -4,17 +4,17 @@ Isolated major-model variant. Native Rust remains the only source of game
 transitions, collision geometry, rewards, and terminal state.
 
 §G
-G1|Train a CNN policy/value function from collision-only grayscale images.
-G2|Start with `collision-image-v1` + four-frame stack; vary stack length later.
+G1|Train CNN DDQN from full native rendered RGB pixels; collision-image runs retained as explicit baseline.
+G2|Version observation profiles; new pixel experiments use `native-rgb-v1` + four temporal frames.
 G3|Use a standard Atari-style convolutional trunk with a dueling Double-DQN head.
 G4|Keep this experiment isolated so future model variants cannot silently share
    observation or training assumptions.
 G5|Launch bounded runs and show live metrics/controls in LaunchSpark-parity Pygame dashboard.
 
 §C
-C1|No rendered framebuffer, particles, palette, UI, or visual effects.
-C2|Native collision raster is `u8[84,84]`; Python converts to bounded float32.
-C3|Default Gym observation is `float32[4,84,84]`; stack length is configurable.
+C1|`collision-image-v1` excludes rendered effects; `native-rgb-v1` uses full native framebuffer including particles, UI, palette + camera; no cropping/resizing/masking.
+C2|Collision native raster `u8[84,84]`; RGB native framebuffer palette expands losslessly to `u8[3,128,128]`; no Python game semantics.
+C3|Legacy default stays collision `float32[N,84,84]`; explicit RGB profile `uint8[3N,128,128]`, oldest→newest RGB triplets; normalize once at model boundary; stack length configurable.
 C4|Existing nine native actions and default `step_frames=4` remain unchanged.
 C5|Native reward/termination are passed through; Python adds no game semantics.
 C6|Initial learner is image-only; scalar/state MLP inputs are a later variant.
@@ -23,6 +23,8 @@ C8|Watch Agent opens a separate read-only browser replay generated from a saved 
 
 §I
 native: `collision-image-v1` → deterministic grayscale collision raster
+native: `native-rgb-v1` → native 128×128 framebuffer, lossless PICO-8 palette → RGB; particles + HUD retained
+cli: `--observation-profile collision-image-v1|native-rgb-v1` → same profile in train/eval/checkpoint/replay; missing legacy metadata means collision only
 env: `CollisionImageEnv` → Gymnasium `Env`, `Discrete(9)` → `Box(0,1,(N,84,84))`
 stack: `FrameStack` → exactly N newest native frames, default N=4
 model: `CNNQNetwork` → dueling Q-values, no softmax
@@ -33,6 +35,7 @@ dashboard: `TrainingDashboard` → LaunchSpark-parity Pygame charts/modals/contr
  compare: `run_replay` → run's own checkpoint + game settings + frozen inner/holdout seeds → labeled best/median/worst `NativeReplay` set → side-by-side `/compare` page
 
 §M
+profile: declarations below = collision84; RGB128 uses input `(B,3N,128,128)`, sameconvkernels → `(B,64,12,12)`, flatten9216→shared512
 input: `(B,4,84,84)`
 conv1: `Conv2d(4,32,8,4)` + ReLU → `(B,32,20,20)`
 conv2: `Conv2d(32,64,4,2)` + ReLU → `(B,64,9,9)`
@@ -55,33 +58,33 @@ L10|Dashboard queues pause/save/load/game-config requests; learner applies them 
 L11|Watch Agent loads the newest checkpoint in a separate worker, greedily replays a fresh native lane, and opens its browser URL.
 
 §V
-V1|No variant observation reads native rendered pixels or particle state.
+V1|Collision profile never reads rendered pixels; RGB profile reads native framebuffer only, never collision geometry or hidden-state features.
 V2|Every native collision image is exactly 84×84, finite, deterministic, and bounded.
 V3|Frame stack contains exactly N frames in oldest→newest channel order.
-V4|Reset fills all N channels with the same initial frame; each step appends one frame.
+V4|Reset fills all N temporal slots with same initial frame; each step appends one frame (RGB triplet for RGB profile).
 V5|Env action/reward/termination/step cadence match the native boundary.
 V6|Same seed + same action trace produces identical image hashes and stacked arrays.
-V7|CNN layer shapes are exactly the declared Atari-style architecture.
+V7|Collision CNN retains declared 84×84 architecture; RGB128 uses same conv kernels/strides, 64×12×12 final maps + shared512; input12 channels for stack4.
 V8|Q output is raw action values; no softmax or probability normalization.
 V9|Default head is dueling: `Q=V+(A-mean(A))`, with one scalar V and one A per action.
 V10|Double-DQN target selects next action with online Q and evaluates it with target Q.
 V11|Terminal transitions zero the bootstrap term; nonterminal transitions bootstrap.
 V12|Replay stores owned uint8 frames and converts/normalizes only at update time.
 V13|Every optimizer update clips gradient norm to at most 10.0.
-V14|No batch normalization, max-pooling, RGB input, or spatial augmentation is used.
+V14|No batch normalization, max-pooling, or spatial augmentation; RGB input exclusive to explicit RGB profile.
 V15|Replay samples have validated shapes/dtypes and do not alias mutable storage.
 V16|Changing stack length changes only observation channel count, not native state/action semantics.
 V17|Variant code and artifacts remain under this variant namespace.
 V18|Every run has an immutable manifest, atomic status, append-only metrics, and final report or explicit failure.
 V19|Malformed/incomplete runs are visible as invalid; dashboard never presents them as passing.
 V20|Dashboard renderer copies telemetry under lock, then renders outside lock; control requests never mutate mid-step.
-V21|Live `CNNImageDDQNEnv` construction enables the native collision-image flag; a `None` payload never becomes a visual fallback.
-V22|ReplayBuffer.sample preserves its configured `(C,84,84)` shape through ReplayBatch and the agent update boundary for every supported stack size.
+V21|Live environment enables native payload for selected profile; unavailable payload errors, never substitutes another view.
+V22|ReplayBuffer.sample preserves configured `(C,H,W)` shape through ReplayBatch + agent; supported spatial sizes 84×84 and128×128.
 V23|Dashboard controls save/load native `.pt` checkpoints and persist reward/game panel values without bypassing artifact contract.
 V24|Pygame remains the local LaunchSpark control window; Watch Agent uses a separate browser/Tailscale replay transport.
 V25|CPU trainer disables NNPACK before first CNN forward when using native CPU backend; bounded run publishes terminal artifact.
 V26|Browser replay code never shadows the training `ReplayBuffer`; both replay surfaces import and construct independently.
-V27|Every replay image is the Rust `collision-image-v1` raster from a fresh lane; the live trainer lane and control queue are never shared.
+V27|Replay uses checkpoint's declared observation profile from fresh native lane; live trainer lane/control queue never shared.
 V28|Replay output is bounded to at most 600 decisions and 8 in-memory replays; HTTP routes expose only generated tokens, metadata, and PNG frames.
 V29|Watch Agent opens the generated Tailscale URL when possible and reports the URL in the dashboard event stream when browser launch is unavailable.
 V30|Every log row carries reward mix, TD error mean/std, action balance/counts, dead-unit share, and effective epsilon schedule; no Python game semantics.
@@ -113,6 +116,14 @@ V55|Offline feature/channel examples use real captured observations; channel sup
 V56|Realtime replay awaits decoded native image before advancing aligned input/Q cursor; slow loads never repeatedly blank/cancel image; pause/seek/episode switch invalidate pending playback; native cache bounded.
 V57|Viewer uses viewport panes + pagination, preserves access to replay/analysis controls without document scrolling at 1280×720 and 1366×768.
 V58|Each input-stack tile/selector labels native frame; single-frame default newest; historical input warns when compared with current native image; reset-padding labels initial native frame.
+V59|RGB input round-trips exactly to native display palette, 128×128, includes effects; reset fills temporal slots, each step appends RGB triplet; same actions preserve native reward/done/frame.
+V60|Observation profile + spatial shape + temporal depth immutable in config/manifest/checkpoint; mismatched resume/replay rejects; legacy missing profile resolves collision only.
+V61|RGB replay stores lossless packed native palette frames + temporal references, ≤2GB at100k transitions/stack4; no duplicated RGB stacks; long run requires measured RAM + add/sample throughput + native parity; no silent capacity reduction.
+V62|Pixel experiments use fresh learner, frozen disjoint train/inner/holdout seeds, unchanged reward/game/cadence; retain10k/200k/500k checkpoints; high-score claims include held-out distribution + censoring, not selected maximum alone.
+V63|Expensive optimizer diagnostics sampled at logging cadence; unsampled updates transfer no diagnostic scalars toCPU and preserve identical weight updates; sampled vector ≤1 CPU transfer; metric sample step explicit; GPU throughput/telemetry overhead measured before long-run promotion.
+V64|Packed replay reconstructs exact chronological RGB stacks across identical consecutive images, terminal/reset padding + ring wrap; ≤2 newframe nodes pertransition; reference tests capacities1/2/7, stacks1/4/8, repeatedcolors + shortepisodes.
+V65|Training samples packed palette frames; palette expansion + normalization on training device, no CPU RGB minibatch expansion; decoded inputs and DDQN updates equal denseRGB reference; timings include device decode.
+V66|Routine telemetry promotion budget ≤5% added wall time vs minimal logging on matched GPU training workloads; ≥3 alternating paired trials, same device/config/seed/update count; report training-loop and all-in times separately; expensive explanation inference offline only; microbenchmarks alone cannot pass gate.
 
 §T
 id|status|task|cites
@@ -132,6 +143,10 @@ T12|x|Add nested game-seed pools, measured exposure, and 10k/200k checkpoints fo
 T13|x|Add checkpoint-backed held-out explanation replay, signed perturbations, feature examples + channel ablations|V51-V55
 T14|x|Fix slow-network native playback + fit explanation viewer to viewport|V54-V57
 T15|x|Label temporal input timestamps + default same-time comparison after reported enemy displacement|V54,V58
+T16|x|Add full native RGB profile +128 CNN/replay shape support; gate exactpixel/nativeparity + legacytests before trainingintegration|V1,V3-V9,V14-V17,V21,V22,V59
+T17|~|Wire profile through CLI/train/eval/checkpoint; gate bounded CPU update/checkpoint/native rollout before remote launch; RGB inspector expansion deferred by user|V18,V27,V59,V60
+T18|.|Run bounded nativeRGB10k/200k/500k experiment on A/H Colab, collect artifacts + paired baseline report; depends T16,T17 gates|V48-V50,V61,V62
+T19|~|Remove per-update diagnostic transfers; sample at log cadence + benchmark overhead separately before remote promotion|V46,V63,V66
 
 §B
 id|date|cause|fix
@@ -160,3 +175,10 @@ B22|2026-09-11|Native action replay test line exceeded Ruff limit|Wrap zip argum
 B23|2026-09-11|First viewport draft clipped timeline + left core replay controls in scrolling cards|V57; inspect actual element bounds + panel overflow, not document height alone
 B24|2026-09-11|Viewport initialization needed DOM APIs absent from Node stub|Extend stub + tab/pagination contracts; playback-only harness excludes layout startup
 B25|2026-09-12|Oldest input default compared native193 with current205 → apparent enemy displacement|V58; newest default + temporal labels; matching newest screenshot aligns enemies
+B26|2026-09-12|Telemetry test imported nonexistent top-level tests package|Use relative sibling import; mechanical harness failure, no new invariant
+B27|2026-09-12|Agent extracted8 CPU diagnostic scalars on everyoptimizerupdate despite sparse logging|V63; sampled diagnostics + onevectortransfer + exactweightparity tests
+B28|2026-09-12|Benchmark draft exceeded Ruff line lengths; import classification pending newmodule creation|Format ownfiles + rerun lint afterintegration; no new invariant
+B29|2026-09-12|Concurrent test import observed partial run.py edit|Wait module handoff before integrated verification; harness failure, no new invariant
+B30|2026-09-12|Packed replay draft reused frameID for identicalimage and erased elapsed temporal position|V64; alwaysappend chronological node; exactreference wrap/reset/repeat tests
+B31|2026-09-12|CPU screen measured packedRGBsample32 108.74ms vsdense18.25ms despite memorysaving|V65; retainpacked minibatch throughCPU sampling + devicepalette expansion; rerunperformancegate
+B32|2026-09-12|Integrated telemetry test missing blank line between absolute and relative imports|Ruff import fix; mechanical failure, no new invariant
