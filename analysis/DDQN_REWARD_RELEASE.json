@@ -1,0 +1,31 @@
+{
+  "source_commit": "2f25c86",
+  "source_archive_sha256": "3f1a9785fbe509e1de1b0cc8e68a380e836a01fed5714d0711f92e12cab906be",
+  "native_wheel_sha256": "d389f1eb5426e90d20c177be6a9c39549e37a78ca13ca902ce6a54b33f6a84ac",
+  "status_at_recording": "corrected preflight running; 200k release conditional on all three paired trials",
+  "lanes": [
+    {
+      "session": "dodge-reward-control-death-v1",
+      "gpu": "Tesla T4",
+      "supervisor_pid": 4210,
+      "collector_pid": 1951395,
+      "queue": ["t4-rgbcontrol-200k-v1", "t4-rgbdeath-200k-v1"]
+    },
+    {
+      "session": "dodge-reward-boundary-events-v1",
+      "gpu": "Tesla T4",
+      "supervisor_pid": 3137,
+      "collector_pid": 1951396,
+      "queue": ["t4-rgbboundary-200k-v1", "t4-rgbevents-200k-v1"]
+    }
+  ],
+  "remote_history": "/content/t4-history",
+  "remote_log": "/content/t4-campaign.log",
+  "local_destination": "history/dodge/gymnasium/cnn-image-ddqn",
+  "failure_destination": "history/dodge/gymnasium/rejected-campaigns",
+  "release_policy": "every paired training-loop logging overhead <= 5%; worker smoke then 200k; collect all results before unassign",
+  "failure_policy": "supervisor publishes atomic failure archive; collector downloads and validates it before unassign",
+  "first_release_rejected": "native repeated Death events for one life; fixed by V73; original preflight archives retained",
+  "evaluation_reward": "unshaped survival frames",
+  "observation": "native-rgb-v1, stack4; no native reward terms in policy input"
+}
