@@ -49,10 +49,14 @@ def main() -> None:
     torch.manual_seed(42)
     shape = (12, 128, 128)
     compact = NativePixelReplayBuffer(capacity=args.capacity, stack_size=4, seed=42)
+    palette_direct = NativePixelReplayBuffer(
+        capacity=args.capacity, stack_size=4, seed=42
+    )
     dense = ReplayBuffer(capacity=args.capacity, observation_shape=shape, seed=42)
     env = CNNImageDDQNEnv(observation_profile=RGB_PROFILE)
     times: dict[str, list[float]] = {
         "compact_add": [],
+        "palette_direct_add": [],
         "dense_add": [],
         "compact_sample32": [],
         "dense_sample32": [],
@@ -60,20 +64,27 @@ def main() -> None:
     }
     seed = 42
     try:
-        observation, _ = env.reset(seed=seed)
+        observation, info = env.reset(seed=seed)
+        palette_direct.reset_palette_ids(info["native_palette_indices"])
         previous = observation
         for step in range(args.decisions):
             action = step % 9
-            observation, reward, done, _, _ = env.step(action)
+            observation, reward, done, _, info = env.step(action)
             following = observation
             for name, replay in (("compact", compact), ("dense", dense)):
                 started = time.perf_counter()
                 replay.add(previous, action, reward, following, done)
                 times[name + "_add"].append(time.perf_counter() - started)
+            started = time.perf_counter()
+            palette_direct.add_palette_ids(
+                info["native_palette_indices"], action, reward, done
+            )
+            times["palette_direct_add"].append(time.perf_counter() - started)
             previous = following
             if done:
                 seed += 1
-                observation, _ = env.reset(seed=seed)
+                observation, info = env.reset(seed=seed)
+                palette_direct.reset_palette_ids(info["native_palette_indices"])
                 previous = observation
         for _ in range(50):
             for name, replay in (("compact", compact), ("dense", dense)):
@@ -145,7 +156,7 @@ def main() -> None:
             del agent
 
     result = {
-        "benchmark": "pixel-replay-and-optimizer-microbench-v2",
+        "benchmark": "pixel-replay-and-optimizer-microbench-v3",
         "device": args.device,
         "hardware": torch.cuda.get_device_name(0)
         if args.device == "cuda"

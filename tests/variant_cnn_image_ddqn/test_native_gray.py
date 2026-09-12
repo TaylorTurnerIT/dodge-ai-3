@@ -125,7 +125,7 @@ def test_gray_env_preserves_native_action_reward_done_and_temporal_order() -> No
         native_environment=native,
     )
     try:
-        observation, _ = env.reset(seed=7)
+        observation, info = env.reset(seed=7)
         assert env.observation_space.shape == (4, 128, 128)
         assert env.observation_space.dtype == np.dtype(np.uint8)
         assert observation.dtype == np.uint8
@@ -133,6 +133,9 @@ def test_gray_env_preserves_native_action_reward_done_and_temporal_order() -> No
             {"pixels": _palette_indices(7)[None, ...]}
         )[0]
         np.testing.assert_array_equal(observation, _gray_stack(expected_initial))
+        np.testing.assert_array_equal(
+            info["native_palette_indices"], _palette_indices(7)
+        )
 
         previous = observation
         stepped, reward, terminated, truncated, info = env.step(3)

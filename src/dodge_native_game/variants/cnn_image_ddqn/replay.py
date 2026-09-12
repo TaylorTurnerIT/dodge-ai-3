@@ -54,6 +54,32 @@ class ReplayBatch:
     discounts: np.ndarray | None = None
 
     def __post_init__(self) -> None:
+        self._validate_and_store(copy=True)
+
+    @classmethod
+    def _from_owned(
+        cls,
+        *,
+        observations: np.ndarray,
+        actions: np.ndarray,
+        rewards: np.ndarray,
+        next_observations: np.ndarray,
+        dones: np.ndarray,
+        discounts: np.ndarray | None = None,
+    ) -> ReplayBatch:
+        """Build from sampler-owned arrays without making a second copy."""
+
+        value = object.__new__(cls)
+        object.__setattr__(value, "observations", observations)
+        object.__setattr__(value, "actions", actions)
+        object.__setattr__(value, "rewards", rewards)
+        object.__setattr__(value, "next_observations", next_observations)
+        object.__setattr__(value, "dones", dones)
+        object.__setattr__(value, "discounts", discounts)
+        value._validate_and_store(copy=False)
+        return value
+
+    def _validate_and_store(self, *, copy: bool) -> None:
         observations = np.asarray(self.observations)
         next_observations = np.asarray(self.next_observations)
         actions = np.asarray(self.actions)
@@ -86,21 +112,37 @@ class ReplayBatch:
         validate_observation_shape(
             tuple(int(value) for value in observations.shape[1:])
         )
+        if not copy:
+            arrays = [observations, next_observations, actions, rewards, dones]
+            if discounts is not None:
+                arrays.append(discounts)
+            if not all(value.flags.owndata for value in arrays):
+                raise ValueError("owned replay batch arrays must own their storage")
         object.__setattr__(
-            self, "observations", np.array(observations, dtype=np.uint8, copy=True)
+            self,
+            "observations",
+            np.array(observations, dtype=np.uint8, copy=True) if copy else observations,
         )
         object.__setattr__(
             self,
             "next_observations",
-            np.array(next_observations, dtype=np.uint8, copy=True),
+            np.array(next_observations, dtype=np.uint8, copy=True)
+            if copy
+            else next_observations,
         )
-        object.__setattr__(self, "actions", np.array(actions, copy=True))
-        object.__setattr__(self, "rewards", np.array(rewards, copy=True))
-        object.__setattr__(self, "dones", np.array(dones, copy=True))
+        object.__setattr__(
+            self, "actions", np.array(actions, copy=True) if copy else actions
+        )
+        object.__setattr__(
+            self, "rewards", np.array(rewards, copy=True) if copy else rewards
+        )
+        object.__setattr__(self, "dones", np.array(dones, copy=True) if copy else dones)
         object.__setattr__(
             self,
             "discounts",
-            None if discounts is None else np.array(discounts, copy=True),
+            None
+            if discounts is None
+            else (np.array(discounts, copy=True) if copy else discounts),
         )
 
     @property
@@ -242,13 +284,18 @@ class ReplayBuffer:
         if batch_size > self._size:
             raise ValueError("cannot sample more transitions than are stored")
         indices = self._rng.choice(self._size, size=int(batch_size), replace=False)
+        observations = self._observations[indices]
+        actions = self._actions[indices]
+        rewards = self._rewards[indices]
+        next_observations = self._next_observations[indices]
+        dones = self._dones[indices]
         discounts = None if self._discounts is None else self._discounts[indices]
-        return ReplayBatch(
-            observations=self._observations[indices],
-            actions=self._actions[indices],
-            rewards=self._rewards[indices],
-            next_observations=self._next_observations[indices],
-            dones=self._dones[indices],
+        return ReplayBatch._from_owned(
+            observations=observations,
+            actions=actions,
+            rewards=rewards,
+            next_observations=next_observations,
+            dones=dones,
             discounts=discounts,
         )
 

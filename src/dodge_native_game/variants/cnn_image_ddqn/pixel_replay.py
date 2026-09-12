@@ -76,6 +76,32 @@ class PackedPixelReplayBatch:
     observation_profile: str = RGB_PROFILE
 
     def __post_init__(self) -> None:
+        self._validate_and_store(copy=True)
+
+    @classmethod
+    def _from_owned(
+        cls,
+        *,
+        observations: np.ndarray,
+        actions: np.ndarray,
+        rewards: np.ndarray,
+        next_observations: np.ndarray,
+        dones: np.ndarray,
+        observation_profile: str,
+    ) -> PackedPixelReplayBatch:
+        """Build from sampler-owned arrays without making a second copy."""
+
+        value = object.__new__(cls)
+        object.__setattr__(value, "observations", observations)
+        object.__setattr__(value, "actions", actions)
+        object.__setattr__(value, "rewards", rewards)
+        object.__setattr__(value, "next_observations", next_observations)
+        object.__setattr__(value, "dones", dones)
+        object.__setattr__(value, "observation_profile", observation_profile)
+        value._validate_and_store(copy=False)
+        return value
+
+    def _validate_and_store(self, *, copy: bool) -> None:
         observations = np.asarray(self.observations)
         next_observations = np.asarray(self.next_observations)
         actions = np.asarray(self.actions)
@@ -99,17 +125,30 @@ class PackedPixelReplayBatch:
             raise ValueError("rewards must have shape (N,)")
         if dones.shape != (batch_size,):
             raise ValueError("dones must have shape (N,)")
+        if not copy and not all(
+            value.flags.owndata
+            for value in (observations, next_observations, actions, rewards, dones)
+        ):
+            raise ValueError("owned replay batch arrays must own their storage")
         object.__setattr__(
-            self, "observations", np.array(observations, dtype=np.uint8, copy=True)
+            self,
+            "observations",
+            np.array(observations, dtype=np.uint8, copy=True) if copy else observations,
         )
         object.__setattr__(
             self,
             "next_observations",
-            np.array(next_observations, dtype=np.uint8, copy=True),
+            np.array(next_observations, dtype=np.uint8, copy=True)
+            if copy
+            else next_observations,
         )
-        object.__setattr__(self, "actions", np.array(actions, copy=True))
-        object.__setattr__(self, "rewards", np.array(rewards, copy=True))
-        object.__setattr__(self, "dones", np.array(dones, copy=True))
+        object.__setattr__(
+            self, "actions", np.array(actions, copy=True) if copy else actions
+        )
+        object.__setattr__(
+            self, "rewards", np.array(rewards, copy=True) if copy else rewards
+        )
+        object.__setattr__(self, "dones", np.array(dones, copy=True) if copy else dones)
         object.__setattr__(self, "observation_profile", profile)
 
     @property
@@ -244,6 +283,57 @@ class NativePixelReplayBuffer:
         self._awaiting_reset = True
         return value.copy()
 
+    def reset_palette_ids(self, frame: object) -> None:
+        """Stage one native palette frame without expanding it to RGB or luma."""
+
+        palette_ids = _validate_palette_ids(frame)
+        self._pending_reset_observation = None
+        self._pending_reset_packed = _pack_palette_ids(palette_ids)
+        self._awaiting_reset = True
+
+    def add_palette_ids(
+        self,
+        next_frame: object,
+        action: int,
+        reward: float,
+        done: bool,
+    ) -> None:
+        """Store a sequential transition directly from native palette IDs."""
+
+        if isinstance(action, bool) or not isinstance(action, (int, np.integer)):
+            raise TypeError("action must be an integer")
+        action_value = int(action)
+        if self.num_actions is not None and not 0 <= action_value < self.num_actions:
+            raise ValueError(f"action must be between 0 and {self.num_actions - 1}")
+        reward_value = float(reward)
+        if not np.isfinite(reward_value):
+            raise ValueError("reward must be finite")
+        next_packed = _pack_palette_ids(_validate_palette_ids(next_frame))
+
+        if self._pending_reset_packed is not None:
+            observation_frame_id = self._append_frame(
+                self._pending_reset_packed, parent_id=None
+            )
+            self._pending_reset_packed = None
+        else:
+            if self._last_frame_id is None or self._awaiting_reset:
+                raise RuntimeError("reset_palette_ids must be called before add")
+            observation_frame_id = self._last_frame_id
+            self._checked_frame_slot(observation_frame_id)
+        next_frame_id = self._append_frame(next_packed, parent_id=observation_frame_id)
+
+        transition_index = self._next_index
+        self._observation_frame_ids[transition_index] = observation_frame_id
+        self._next_observation_frame_ids[transition_index] = next_frame_id
+        self._actions[transition_index] = action_value
+        self._rewards[transition_index] = reward_value
+        self._dones[transition_index] = bool(done)
+        self._next_index = (transition_index + 1) % self.capacity
+        self._size = min(self.capacity, self._size + 1)
+        self._last_frame_id = int(next_frame_id)
+        self._last_observation = None
+        self._awaiting_reset = bool(done)
+
     def add(
         self,
         observation: object,
@@ -357,12 +447,17 @@ class NativePixelReplayBuffer:
         indices = self._sample_indices(batch_size)
         observation_ids = self._observation_frame_ids[indices]
         next_observation_ids = self._next_observation_frame_ids[indices]
-        return PackedPixelReplayBatch(
-            observations=self._reconstruct_packed_stacks(observation_ids),
-            actions=self._actions[indices],
-            rewards=self._rewards[indices],
-            next_observations=self._reconstruct_packed_stacks(next_observation_ids),
-            dones=self._dones[indices],
+        observations = self._reconstruct_packed_stacks(observation_ids)
+        actions = self._actions[indices]
+        rewards = self._rewards[indices]
+        next_observations = self._reconstruct_packed_stacks(next_observation_ids)
+        dones = self._dones[indices]
+        return PackedPixelReplayBatch._from_owned(
+            observations=observations,
+            actions=actions,
+            rewards=rewards,
+            next_observations=next_observations,
+            dones=dones,
             observation_profile=self.observation_profile,
         )
 
@@ -581,6 +676,15 @@ def _pack_palette_ids(palette_ids: np.ndarray) -> np.ndarray:
     return np.bitwise_or(flat_ids[0::2] << 4, flat_ids[1::2]).astype(
         np.uint8, copy=True
     )
+
+
+def _validate_palette_ids(frame: object) -> np.ndarray:
+    palette_ids = np.asarray(frame)
+    if palette_ids.shape != (128, 128) or palette_ids.dtype != np.uint8:
+        raise ValueError("native palette frame must have shape (128, 128) and uint8")
+    if np.any(palette_ids > 15):
+        raise ValueError("native palette frame values must be between 0 and 15")
+    return palette_ids
 
 
 __all__ = [

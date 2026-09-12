@@ -77,6 +77,9 @@ def test_live_rgb_matches_entire_native_display_and_transition() -> None:
                 as_bytes(observation[-3:]).transpose(1, 2, 0),
                 palette[native.pixels[0]],
             )
+            np.testing.assert_array_equal(
+                info["native_palette_indices"], native.pixels[0]
+            )
             assert info["native_frame"] == int(native.frames[0])
             action = index % 9
             previous = observation

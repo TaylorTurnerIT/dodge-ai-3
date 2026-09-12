@@ -19,6 +19,7 @@ from .pixels import (
     GRAY_PROFILE,
     RGB_PROFILE,
     native_gray_from_result,
+    native_palette_indices_from_result,
     native_rgb_from_result,
     observation_shape,
 )
@@ -278,6 +279,10 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
             )
         if getattr(result, "reward_terms", None) is not None:
             info["native_reward_terms"] = np.asarray(result.reward_terms)[0].copy()
+        if self.observation_profile in (RGB_PROFILE, GRAY_PROFILE):
+            info["native_palette_indices"] = np.array(
+                native_palette_indices_from_result(result), copy=True
+            )
         if native_seed is not None:
             info["native_seed"] = native_seed
         return info

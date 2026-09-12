@@ -29,18 +29,26 @@ class _RgbEnv:
             "native_seed": seed,
             "native_frame": 13,
             "native_frames_advanced": 13,
+            "native_palette_indices": np.zeros((128, 128), dtype=np.uint8),
         }
 
     def step(self, action: int):
         del action
-        return self.observation.copy(), 0.0, False, False, {
-            "native_frame": 17,
-            "native_frames_advanced": 4,
-            "native_event_flags": 0,
-            "native_mode": 2,
-            "native_shattered": 0,
-            "native_score": 0.0,
-        }
+        return (
+            self.observation.copy(),
+            0.0,
+            False,
+            False,
+            {
+                "native_frame": 17,
+                "native_frames_advanced": 4,
+                "native_event_flags": 0,
+                "native_mode": 2,
+                "native_shattered": 0,
+                "native_score": 0.0,
+                "native_palette_indices": np.zeros((128, 128), dtype=np.uint8),
+            },
+        )
 
     def close(self) -> None:
         self.closed = True
@@ -67,6 +75,8 @@ class _TinyQNetwork(nn.Module):
 class _TinyPixelReplay:
     constructed = False
     packed_samples = 0
+    palette_adds = 0
+    palette_resets = 0
 
     @classmethod
     def estimated_storage_bytes(cls, capacity: int, stack_size: int) -> int:
@@ -83,6 +93,7 @@ class _TinyPixelReplay:
         del seed, num_actions, stack_size
         type(self).constructed = True
         self.capacity = capacity
+        self.observation = np.zeros((12, 128, 128), dtype=np.uint8)
         self.items: list[tuple[object, int, float, object, bool]] = []
 
     def __len__(self) -> int:
@@ -100,6 +111,19 @@ class _TinyPixelReplay:
         done: bool,
     ) -> None:
         self.items.append((observation, action, reward, next_observation, done))
+
+    def reset_palette_ids(self, frame: object) -> None:
+        assert np.asarray(frame).shape == (128, 128)
+        type(self).palette_resets += 1
+
+    def add_palette_ids(
+        self, frame: object, action: int, reward: float, done: bool
+    ) -> None:
+        assert np.asarray(frame).shape == (128, 128)
+        type(self).palette_adds += 1
+        self.items.append(
+            (self.observation, action, reward, self.observation.copy(), done)
+        )
 
     def sample(self, batch_size: int) -> ReplayBatch:
         rows = self.items[:batch_size]
@@ -130,6 +154,8 @@ def test_native_rgb_run_records_profile_shape_and_packed_replay(
     monkeypatch.setattr(run, "_available_host_memory_bytes", lambda: 1 << 30)
     _TinyPixelReplay.constructed = False
     _TinyPixelReplay.packed_samples = 0
+    _TinyPixelReplay.palette_adds = 0
+    _TinyPixelReplay.palette_resets = 0
 
     root = run.train_run(
         history_root=tmp_path,
@@ -157,6 +183,8 @@ def test_native_rgb_run_records_profile_shape_and_packed_replay(
     expected_shape = list(observation_shape(RGB_PROFILE, 4))
     assert _TinyPixelReplay.constructed
     assert _TinyPixelReplay.packed_samples == 1
+    assert _TinyPixelReplay.palette_resets == 1
+    assert _TinyPixelReplay.palette_adds == 2
     assert calls and all(call["observation_profile"] == RGB_PROFILE for call in calls)
     assert manifest["observation_profile"] == RGB_PROFILE
     assert manifest["observation"]["shape"] == expected_shape

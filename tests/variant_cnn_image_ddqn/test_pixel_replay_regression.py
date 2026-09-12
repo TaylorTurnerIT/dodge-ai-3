@@ -17,6 +17,10 @@ def rgb(color: int) -> np.ndarray:
     ).copy()
 
 
+def palette_ids(color: int) -> np.ndarray:
+    return np.full((128, 128), color, dtype=np.uint8)
+
+
 @pytest.mark.parametrize("capacity", [1, 2, 7])
 @pytest.mark.parametrize("stack_size", [1, 4, 8])
 def test_identical_frames_keep_time_and_ring_wrap_preserves_every_transition(
@@ -47,3 +51,48 @@ def test_identical_frames_keep_time_and_ring_wrap_preserves_every_transition(
             if terminal
             else (next_observation)
         )
+
+
+def test_native_palette_ingest_matches_rgb_reference_and_keeps_samples_owned() -> None:
+    reference = NativePixelReplayBuffer(16, stack_size=4, seed=19)
+    direct = NativePixelReplayBuffer(16, stack_size=4, seed=19)
+    observation = np.concatenate([rgb(0)] * 4)
+    direct.reset_palette_ids(palette_ids(0))
+
+    for step in range(8):
+        color = (step + 1) % 16
+        next_observation = np.concatenate((observation[3:], rgb(color)))
+        terminal = step == 3
+        reference.add(
+            observation,
+            step % 9,
+            float(step),
+            next_observation,
+            terminal,
+        )
+        direct.add_palette_ids(
+            palette_ids(color),
+            step % 9,
+            float(step),
+            terminal,
+        )
+        if terminal:
+            reset_color = 9
+            observation = np.concatenate([rgb(reset_color)] * 4)
+            direct.reset_palette_ids(palette_ids(reset_color))
+        else:
+            observation = next_observation
+
+    expected = reference.sample(len(reference))
+    actual = direct.sample(len(direct))
+    np.testing.assert_array_equal(actual.observations, expected.observations)
+    np.testing.assert_array_equal(actual.next_observations, expected.next_observations)
+    np.testing.assert_array_equal(actual.actions, expected.actions)
+    np.testing.assert_array_equal(actual.rewards, expected.rewards)
+    np.testing.assert_array_equal(actual.dones, expected.dones)
+
+    stored = direct._packed_frames.copy()
+    packed = direct.sample_packed(len(direct))
+    packed.observations.fill(0)
+    packed.next_observations.fill(0)
+    np.testing.assert_array_equal(direct._packed_frames, stored)

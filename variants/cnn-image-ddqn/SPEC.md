@@ -135,6 +135,9 @@ V70|Pickup event emitted exactly once for collected personality2/3/4; explosion 
 V71|Native boundary field bounded/symmetric/flat interior; narrow shallow edge term + wider corner overlap; finite validated inputs; no center bonus; geometry tests cover monotonicity and perimeter route.
 V72|Reward experiments keep survival scale, count terminal penalty once, separate component totals + immutable weights; no live mutation; pixel observations unchanged; promotion requires matched evaluation +≤5% telemetry overhead.
 V73|Multiple native Death events from overlapping hazards in one decision → one life penalty; positive pickup/destruction multiplicity retained; no game transition changes.
+V74|Epsilon-greedy samples exploration before Q inference; fully random action skips online forward while preserving observation validation + seeded action trace.
+V75|Evaluation decision uses one online-network forward for Q values, greedy action + dead-unit probe; reported values match separate reference calls.
+V76|Native pixel replay accepts owned palette-ID frames from native result; sampled RGB/gray tensors exact current reconstruction + no mutable-storage alias.
 
 §T
 id|status|task|cites
@@ -164,6 +167,7 @@ T22|~|Deploy bounded T4 screens nstep3, grayscale + learner43/44 replicas; colle
 T23|x|Native reward foundation: exact pickup count boundary + tested edge/corner field; preserve game/RNG/pixel parity|V5,V6,V70,V71
 T24|~|Wire versioned native reward components + weights/train/eval/resume contract; death/pickup/destruction isolated treatments; no default change|V18,V60,V63,V72
 T25|.|Broaden screenshot-only diagnostic corpus; integrate learning gate + inner checkpoint selector; run independent architecture/reward screens after correctness gate|V47,V55,V62,V66,V72
+T26|x|Remove redundant action/eval inference + native-pixel replay conversion/copies; benchmark bounded trainer path|V12,V15,V31,V59,V63-V66,V74-V76
 
 §B
 id|date|cause|fix

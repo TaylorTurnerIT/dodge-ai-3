@@ -739,12 +739,12 @@ def _evaluate(
         episode_terminated = False
         for _ in range(max_steps):
             try:
-                q_values = agent.q_values_for(observation)
+                q_values, dead_fraction = agent.evaluation_values(observation)
                 q_samples.append([float(value) for value in q_values.reshape(-1)])
-                dead_units.append(float(agent.dead_unit_fraction(observation)))
+                dead_units.append(float(dead_fraction))
+                action = int(q_values.reshape(-1).argmax())
             except (RuntimeError, ValueError):
-                pass
-            action = int(agent.select_action(observation, 0.0))
+                action = int(agent.select_action(observation, 0.0))
             action_counts[action] += 1
             observation, reward, terminated, truncated, info = env.step(action)
             episode_reward += reward
@@ -1314,7 +1314,11 @@ def train_run(
                 stack_size=stack_size,
             )
         start_time = time.perf_counter()
-        observation, _ = env.reset(seed=game_seed(0))
+        observation, reset_info = env.reset(seed=game_seed(0))
+        palette_reset = getattr(replay, "reset_palette_ids", None)
+        palette_frame = reset_info.get("native_palette_indices")
+        if callable(palette_reset) and palette_frame is not None:
+            palette_reset(palette_frame)
         accumulator = None
         if n_step > 1:
             from .n_step import NStepAccumulator
@@ -1496,9 +1500,14 @@ def train_run(
                     )
                     env.close()
                     env = build_environment(selected_game)
-                    observation, _ = env.reset(seed=game_seed(episode))
+                    observation, reset_info = env.reset(seed=game_seed(episode))
                     if replay_class is not None:
-                        replay.reset(observation)
+                        palette_reset = getattr(replay, "reset_palette_ids", None)
+                        palette_frame = reset_info.get("native_palette_indices")
+                        if callable(palette_reset) and palette_frame is not None:
+                            palette_reset(palette_frame)
+                        else:
+                            replay.reset(observation)
                     episode_reward = 0.0
                     episode_frames = 0
                     episode_deaths = 0
@@ -1599,21 +1608,28 @@ def train_run(
             else:
                 train_reward = float(reward)
                 component_totals[0] += float(reward)
-            stored_observation = _observation_to_uint8(
-                observation, observation_shape_value
-            )
-            stored_next_observation = _observation_to_uint8(
-                next_observation, observation_shape_value
-            )
             if accumulator is None:
-                replay.add(
-                    stored_observation,
-                    action,
-                    train_reward,
-                    stored_next_observation,
-                    done,
-                )
+                palette_add = getattr(replay, "add_palette_ids", None)
+                palette_frame = info.get("native_palette_indices")
+                if callable(palette_add) and palette_frame is not None:
+                    palette_add(palette_frame, action, train_reward, done)
+                else:
+                    replay.add(
+                        _observation_to_uint8(observation, observation_shape_value),
+                        action,
+                        train_reward,
+                        _observation_to_uint8(
+                            next_observation, observation_shape_value
+                        ),
+                        done,
+                    )
             else:
+                stored_observation = _observation_to_uint8(
+                    observation, observation_shape_value
+                )
+                stored_next_observation = _observation_to_uint8(
+                    next_observation, observation_shape_value
+                )
                 transitions = accumulator.add(
                     stored_observation,
                     action,
@@ -1725,9 +1741,13 @@ def train_run(
                         "enemies_killed": int(finished_kills),
                     }
                 )
-                observation, _ = env.reset(
+                observation, reset_info = env.reset(
                     seed=game_seed(episode),
                 )
+                palette_reset = getattr(replay, "reset_palette_ids", None)
+                palette_frame = reset_info.get("native_palette_indices")
+                if callable(palette_reset) and palette_frame is not None:
+                    palette_reset(palette_frame)
                 episode_reward = 0.0
                 episode_shaped = 0.0
                 episode_frames = 0

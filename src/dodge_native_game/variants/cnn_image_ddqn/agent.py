@@ -118,20 +118,33 @@ class DoubleDQNAgent:
         """Select greedy or random actions for one or many image observations."""
 
         epsilon_value = self._validate_epsilon(epsilon)
-        tensor, single = self._observation_tensor(observations)
-        with torch.no_grad():
-            q_values = self._checked_q_values(self.online_network, tensor)
-        greedy_actions = q_values.argmax(dim=1).cpu().numpy().astype(np.int64)
-
+        tensor, single = self._validated_observation_batch(observations)
         random_source = self._rng if rng is None else rng
-        random_mask = random_source.random(greedy_actions.shape) < epsilon_value
+        random_mask = random_source.random(tensor.shape[0]) < epsilon_value
+        actions = np.empty(tensor.shape[0], dtype=np.int64)
         if np.any(random_mask):
-            greedy_actions[random_mask] = random_source.integers(
+            actions[random_mask] = random_source.integers(
                 0, self.num_actions, size=int(np.count_nonzero(random_mask))
             )
+        greedy_indices = np.flatnonzero(~random_mask)
+        if greedy_indices.size:
+            selected = (
+                tensor
+                if greedy_indices.size == tensor.shape[0]
+                else tensor[greedy_indices.tolist()]
+            )
+            selected = to_float_observations(
+                selected.to(device=self.device),
+                expected_shape=self.observation_shape,
+            )
+            with torch.no_grad():
+                q_values = self._checked_q_values(self.online_network, selected)
+            actions[greedy_indices] = (
+                q_values.argmax(dim=1).cpu().numpy().astype(np.int64)
+            )
         if single:
-            return int(greedy_actions[0])
-        return greedy_actions
+            return int(actions[0])
+        return actions
 
     def update(
         self, batch: ReplayBatch | PackedPixelReplayBatch, *, diagnostics: bool = True
@@ -267,6 +280,32 @@ class DoubleDQNAgent:
         return q_values.detach().cpu().numpy().astype(np.float64, copy=True)
 
     @torch.no_grad()
+    def evaluation_values(self, observations: object) -> tuple[np.ndarray, float]:
+        """Return Q values and feature sparsity from one online-network forward."""
+
+        tensor, _ = self._observation_tensor(observations)
+        features = getattr(self.online_network, "features", None)
+        captured: list[torch.Tensor] = []
+        handle = None
+        if isinstance(features, nn.Module):
+            handle = features.register_forward_hook(
+                lambda _module, _inputs, output: captured.append(output.detach())
+            )
+        try:
+            q_values = self._checked_q_values(self.online_network, tensor)
+        finally:
+            if handle is not None:
+                handle.remove()
+        dead_fraction = (
+            (captured[-1] == 0.0).to(dtype=torch.float32).mean()
+            if captured and captured[-1].numel()
+            else q_values.new_zeros(())
+        )
+        transferred = torch.cat((q_values.detach().reshape(-1), dead_fraction[None]))
+        values = transferred.cpu().numpy().astype(np.float64, copy=True)
+        return values[:-1].reshape(tuple(q_values.shape)), float(values[-1])
+
+    @torch.no_grad()
     def dead_unit_fraction(self, observations: object) -> float:
         """Share of trunk activations that are exactly zero.
 
@@ -300,6 +339,18 @@ class DoubleDQNAgent:
         return q_values
 
     def _observation_tensor(self, observations: object) -> tuple[torch.Tensor, bool]:
+        tensor, single = self._validated_observation_batch(observations)
+        return (
+            to_float_observations(
+                tensor.to(device=self.device),
+                expected_shape=self.observation_shape,
+            ),
+            single,
+        )
+
+    def _validated_observation_batch(
+        self, observations: object
+    ) -> tuple[torch.Tensor, bool]:
         tensor = (
             observations
             if isinstance(observations, torch.Tensor)
@@ -314,13 +365,7 @@ class DoubleDQNAgent:
                 f"{self.observation_shape} or (N, *{self.observation_shape}), "
                 f"got {tuple(tensor.shape)}"
             )
-        return (
-            to_float_observations(
-                tensor.to(device=self.device),
-                expected_shape=self.observation_shape,
-            ),
-            single,
-        )
+        return tensor, single
 
     def _packed_observation_tensor(
         self,
