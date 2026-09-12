@@ -1182,6 +1182,12 @@
       $("stack-grid").hidden = state.inputMode !== "all";
     }
 
+    function inputNativeFrame(channel, count) {
+      if (!state.trace) return null;
+      const sourceIndex = Math.max(0, state.index - (count - 1 - channel));
+      return finiteNumber(state.trace.frames[sourceIndex]?.native_frame);
+    }
+
     function updateChannelOptions() {
       const count = inputChannelCount(currentFrame());
       const safeCount = Math.max(1, count);
@@ -1193,7 +1199,8 @@
         for (let channel = 0; channel < safeCount; channel++) {
           const option = document.createElement("option");
           option.value = String(channel);
-          option.textContent = `Frame ${channel}${channel === 0 ? " · oldest" : channel === safeCount - 1 ? " · newest" : ""}`;
+          const nativeFrame = inputNativeFrame(channel, safeCount);
+          option.textContent = `Frame ${channel}${channel === safeCount - 1 ? " · newest" : channel === 0 ? " · oldest" : ""}${nativeFrame === null ? "" : ` · native ${nativeFrame}`}`;
           select.appendChild(option);
         }
         select.value = String(select === $("map-frame-select") ? state.mapFrame : state.inputChannel);
@@ -1226,6 +1233,7 @@
       if (state.inputMode === "single") {
         const valid = drawInputSource($("input-canvas"), source, state.inputChannel, state.inputRegion);
         $("input-canvas").hidden = false;
+        if (state.inputChannel !== count - 1) $("input-warning").textContent = `Historical input: native frame ${inputNativeFrame(state.inputChannel, count) ?? "unknown"}. Native view shows ${frame.native_frame}. Select newest for a same-time comparison.`;
         if (!valid && !source.error) $("input-warning").textContent = "Input dimensions differ from the declared 84×84 contract.";
         return;
       }
@@ -1240,7 +1248,7 @@
         canvas.setAttribute("aria-label", `Input frame ${index}`);
         const valid = drawInputSource(canvas, source, index, index === latestChannel ? state.inputRegion : null);
         const label = document.createElement("small");
-        label.textContent = `frame ${index}`;
+        label.textContent = `native ${inputNativeFrame(index, count) ?? "?"}${index === latestChannel ? " · now" : ""}`;
         tile.append(canvas, label);
         tile.addEventListener("click", () => {
           state.inputChannel = index;
@@ -2095,7 +2103,7 @@
       state.gameCache.clear();
       state.trace = trace;
       state.index = 0;
-      state.inputChannel = 0;
+      state.inputChannel = Math.max(0, inputChannelCount(trace.frames[0]) - 1);
       state.mapFrame = 0;
       state.alternative = "auto";
       state.channel = 0;

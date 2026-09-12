@@ -91,6 +91,10 @@ vm.runInContext(`
   assert.ok(negative[2]>negative[0]);
   assert.ok(Math.max(...zero.slice(0,3))<30);
   state.trace=trace;
+  state.index=1;
+  assert.equal(inputNativeFrame(0,4),0,'reset-padded input uses initial frame');
+  assert.equal(inputNativeFrame(3,4),4,'newest input matches current native frame');
+  state.index=0;
   renderFrameStats(trace.frames[0]);
   assert.ok(document.getElementById('stat-event').textContent.includes('collision'));
   assert.ok(!document.getElementById('stat-event').textContent.includes('death'));

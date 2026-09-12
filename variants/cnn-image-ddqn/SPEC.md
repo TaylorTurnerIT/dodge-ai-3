@@ -112,6 +112,7 @@ V54|Explanation replay pause/scrub aligns game image, exact oldest→newest inpu
 V55|Offline feature/channel examples use real captured observations; channel suppression changes inference activation only; activation ≠ importance; traces ≤4096 decisions each, explanation cache + inference concurrency bounded.
 V56|Realtime replay awaits decoded native image before advancing aligned input/Q cursor; slow loads never repeatedly blank/cancel image; pause/seek/episode switch invalidate pending playback; native cache bounded.
 V57|Viewer uses viewport panes + pagination, preserves access to replay/analysis controls without document scrolling at 1280×720 and 1366×768.
+V58|Each input-stack tile/selector labels native frame; single-frame default newest; historical input warns when compared with current native image; reset-padding labels initial native frame.
 
 §T
 id|status|task|cites
@@ -130,6 +131,7 @@ T11|x|Fix DDQN measurement integrity: sync units, resume/provenance, completed e
 T12|x|Add nested game-seed pools, measured exposure, and 10k/200k checkpoints for 500k A100 comparison|V48-V50
 T13|x|Add checkpoint-backed held-out explanation replay, signed perturbations, feature examples + channel ablations|V51-V55
 T14|x|Fix slow-network native playback + fit explanation viewer to viewport|V54-V57
+T15|x|Label temporal input timestamps + default same-time comparison after reported enemy displacement|V54,V58
 
 §B
 id|date|cause|fix
@@ -157,3 +159,4 @@ B21|2026-09-11|Every playback tick hid native image + replaced pending src befor
 B22|2026-09-11|Native action replay test line exceeded Ruff limit|Wrap zip arguments; mechanical failure, no new invariant
 B23|2026-09-11|First viewport draft clipped timeline + left core replay controls in scrolling cards|V57; inspect actual element bounds + panel overflow, not document height alone
 B24|2026-09-11|Viewport initialization needed DOM APIs absent from Node stub|Extend stub + tab/pagination contracts; playback-only harness excludes layout startup
+B25|2026-09-12|Oldest input default compared native193 with current205 → apparent enemy displacement|V58; newest default + temporal labels; matching newest screenshot aligns enemies
