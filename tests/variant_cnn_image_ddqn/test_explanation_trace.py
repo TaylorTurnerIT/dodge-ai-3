@@ -261,3 +261,35 @@ def test_live_native_small_trace_smoke(tmp_path: Path) -> None:
     assert len(trace.observations) == len(trace.game_pngs) == 1
     assert trace.observations[0].shape == (1, 84, 84)
     assert trace.metadata["frames"][0]["native_frame"] >= 0
+
+
+def test_recorded_actions_reproduce_native_pixels_without_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("dodge_native")
+    from dodge_native_game.batch import NativeBatchEnvironment
+    from dodge_native_game.variants.cnn_image_ddqn.native_replay import rgb_png
+
+    checkpoint, _ = _write_checkpoint(tmp_path)
+    trace = generate_explanation_trace(checkpoint, seed=42, steps=32, device="cpu")
+
+    def forbid_inference(*args: object, **kwargs: object) -> None:
+        pytest.fail("action playback must not ask the policy to choose again")
+
+    monkeypatch.setattr(AtariCnnQNetwork, "forward", forbid_inference)
+    lane = NativeBatchEnvironment(
+        step_frames=4, full_state=False, pixels=True, board=False,
+        difficulty=2, patterns_enabled=True, powerups_enabled=True, ml=True,
+    )
+    try:
+        result = lane.reset_batch(np.asarray([42], dtype=np.uint32))
+        for row, expected_png in zip(
+            trace.metadata["frames"], trace.game_pngs, strict=True
+        ):
+            assert int(result.frames[0]) == row["native_frame"]
+            assert rgb_png(result.pixels[0]) == expected_png
+            result = lane.step_batch(np.asarray([row["action"]], dtype=np.uint8))
+            assert bool(result.done[0]) == row["done"]
+        assert rgb_png(result.pixels[0]) == trace.final_game_png
+    finally:
+        lane.close()

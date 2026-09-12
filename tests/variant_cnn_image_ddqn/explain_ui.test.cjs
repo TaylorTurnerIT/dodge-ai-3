@@ -8,23 +8,62 @@ const html = fs.readFileSync(path.join(__dirname,
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1]
   .replace('loadEpisodesThenTrace().catch((error) => showError(error.message));', '');
 const nodes = new Map();
+const observers = new Map();
 function node() {
   const canvasContext=new Proxy({createImageData(w,h){return {data:new Uint8ClampedArray(w*h*4)};},
     measureText(){return {width:10};}}, {get(target,key){return key in target?target[key]:()=>{};}});
+  const classes = new Set();
+  const listeners = new Map();
+  const notify = (target) => (observers.get(target) || []).forEach((callback) => callback([{type:'childList',target}]));
   return {style:{}, children:[], textContent:'', hidden:false, clientWidth:800,
-    parentElement:{clientWidth:800}, dataset:{}, value:'value',
-    classList:{add(){},remove(){},toggle(){}},
-    addEventListener(){},setAttribute(){},removeAttribute(){},replaceChildren(){this.children=[];},
-    append(...items){this.children.push(...items);},
-    appendChild(item){this.children.push(item);},getContext(){return canvasContext;}};
+    parentElement:{clientWidth:800}, dataset:{}, value:'value', listeners,
+    classList:{add(...names){names.forEach((name)=>classes.add(name));},
+      remove(...names){names.forEach((name)=>classes.delete(name));},
+      toggle(name, force){const active=force === undefined ? !classes.has(name) : Boolean(force);if(active)classes.add(name);else classes.delete(name);return active;},
+      contains(name){return classes.has(name);}},
+    addEventListener(type,callback){listeners.set(type,callback);},
+    setAttribute(name,value){this[name]=String(value);},removeAttribute(name){delete this[name];},
+    replaceChildren(...items){this.children=items;notify(this);},
+    append(...items){this.children.push(...items);notify(this);},
+    appendChild(item){this.children.push(item);notify(this);return item;},
+    focus(){},getContext(){return canvasContext;}};
 }
-const document = {getElementById(id){if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);},
-  createElement:node,querySelectorAll(){return [];}};
+const shell = node();
+const inspectorTabs = ['heatmaps','conv','features','help'].map((name) => {
+  const tab = node(); tab.dataset.inspectorTab = name; return tab;
+});
+const inspectorPanels = ['heatmaps','conv','features','help'].map((name) => {
+  const panel = node(); panel.dataset.inspectorPanel = name; return panel;
+});
+const mobileTabs = ['replay','inspector'].map((name) => {
+  const tab = node(); tab.dataset.mobileView = name; return tab;
+});
+['inspector-heatmaps-tab','inspector-conv-tab','inspector-features-tab','inspector-help-tab']
+  .forEach((id,index) => nodes.set(id, inspectorTabs[index]));
+['inspector-panel-heatmaps','inspector-panel-conv','inspector-panel-features','inspector-panel-help']
+  .forEach((id,index) => nodes.set(id, inspectorPanels[index]));
+nodes.set('mobile-replay-tab', mobileTabs[0]);
+nodes.set('mobile-inspector-tab', mobileTabs[1]);
+const document = {
+  getElementById(id){if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);},
+  createElement:node,
+  querySelector(selector){return selector === '.viewport-shell' ? shell : null;},
+  querySelectorAll(selector){
+    if(selector === '[data-inspector-tab]') return inspectorTabs;
+    if(selector === '[data-inspector-panel]') return inspectorPanels;
+    if(selector === '[data-mobile-view]') return mobileTabs;
+    return [];
+  }
+};
+class MutationObserver {
+  constructor(callback){this.callback=callback;}
+  observe(target){const callbacks=observers.get(target) || [];callbacks.push(this.callback);observers.set(target,callbacks);}
+}
 let nextTimer=0;
 const timers = new Map();
 const context = vm.createContext({assert,document,URLSearchParams,AbortController,
-  Uint8Array,console,Image:class {set src(value){this._src=value;}},
-  window:{location:{search:''},addEventListener(){},
+  Uint8Array,console,MutationObserver,Image:class {set src(value){this._src=value;}},
+  window:{location:{search:''},innerWidth:1280,requestAnimationFrame(callback){callback();},addEventListener(){},
     atob:(value)=>Buffer.from(value,'base64').toString('binary'),
     setTimeout(callback,delay){timers.set(++nextTimer,{callback,delay});return nextTimer;},
     clearTimeout(id){timers.delete(id);}}, timers,
@@ -63,6 +102,21 @@ vm.runInContext(`
   renderExplanation();
   assert.equal(document.getElementById('conv-grid').children.length,64);
   assert.equal(document.getElementById('contribution-list').children.length,512);
+  assert.equal(document.getElementById('conv-page-label').textContent,'Channels 1–16 / 64');
+  assert.equal(document.getElementById('contribution-page-label').textContent,'Features 1–16 / 512');
+  assert.equal(document.getElementById('conv-pagination').hidden,false);
+  assert.equal(document.getElementById('contribution-pagination').hidden,false);
+  document.getElementById('conv-page-next').listeners.get('click')();
+  assert.equal(document.getElementById('conv-page-label').textContent,'Channels 17–32 / 64');
+  assert.equal(document.getElementById('conv-grid').children[0].hidden,true);
+  assert.equal(document.getElementById('conv-grid').children[16].hidden,false);
+  setInspectorTab('conv');
+  assert.equal(document.getElementById('inspector-panel-conv').hidden,false);
+  assert.equal(document.getElementById('inspector-panel-heatmaps').hidden,true);
+  assert.equal(document.querySelectorAll('[data-inspector-tab]')[1]['aria-selected'],'true');
+  setInspectorTab('features');
+  assert.equal(document.getElementById('inspector-panel-features').hidden,false);
+  assert.equal(document.getElementById('inspector-panel-conv').hidden,true);
   let explanations=0;
   requestExplanation=()=>{explanations++;};
   renderFrame=()=>{};

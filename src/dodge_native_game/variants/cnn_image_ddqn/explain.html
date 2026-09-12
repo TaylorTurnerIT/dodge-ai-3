@@ -155,7 +155,7 @@
       overflow: hidden;
       background: #000;
     }
-    .native-frame img {
+    .native-frame img, .native-frame canvas {
       display: block;
       width: min(100%, 320px);
       aspect-ratio: 1;
@@ -366,6 +366,199 @@
       .conv-grid { max-height: 280px; }
       .control-row > .label { min-width: 5.2rem; }
     }
+
+    /* Viewport shell: replay and collision stay present while dense evidence
+       moves into one inspector panel at a time. The shell owns the viewport;
+       only a panel may scroll when its content cannot fit. */
+    html, body { height: 100%; overflow: hidden; }
+    body { min-height: 100%; }
+    main {
+      width: min(1500px, 100%);
+      height: 100dvh;
+      min-height: 0;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow: hidden;
+    }
+    header { flex: 0 0 auto; align-items: center; margin-bottom: 0; gap: 12px; }
+    h1 { font-size: 20px; }
+    .subtitle { font-size: 12px; }
+    .notice { flex: 0 0 auto; max-height: 3.2rem; margin: 0; overflow: auto; padding: 6px 9px; }
+    .toolbar { flex: 0 0 auto; min-height: 0; margin: 0; padding: 8px 10px; gap: 6px; }
+    .toolbar .grow { min-width: 1rem; }
+    .meta-line { gap: 4px 9px; font-size: 12px; line-height: 1.2; }
+    .toolbar select, .toolbar button { min-height: 30px; padding-top: 4px; padding-bottom: 4px; }
+    #loading, #trace-content { flex: 1 1 auto; min-height: 0; }
+    #trace-content { display: flex; flex-direction: column; overflow: hidden; }
+
+    .mobile-view-tabs { display: none; }
+    .viewport-shell {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1.18fr) minmax(360px, .82fr);
+      gap: 10px;
+    }
+    .replay-pane, .inspector-pane, .inspector-panels { min-width: 0; min-height: 0; }
+    .replay-pane { display: grid; grid-template-rows: minmax(0, 1fr) minmax(76px, 102px); gap: 8px; }
+    .replay-layout {
+      min-height: 0;
+      height: auto;
+      grid-template-columns: minmax(0, 1.05fr) minmax(310px, .95fr);
+      gap: 10px;
+      align-items: stretch;
+    }
+    .replay-layout > .card { min-height: 0; overflow: auto; padding: 10px; }
+    .replay-visuals { min-height: 0; gap: 7px; }
+    .visual-box { padding: 7px; }
+    .native-frame, .input-stage { min-height: 150px; }
+    .native-frame img, .native-frame canvas, .input-canvas { width: min(100%, 210px); }
+    .stack-grid { max-height: 155px; grid-template-columns: repeat(2, minmax(55px, 1fr)); gap: 5px; }
+    .stack-tile { padding: 3px; }
+    .replay-controls { margin-top: 8px; gap: 5px; }
+    .replay-controls button { padding: 5px 8px; }
+    .replay-layout .post-state { gap: 5px; margin-bottom: 8px; }
+    .replay-layout .stat { padding: 6px; }
+    .replay-layout .stat label { font-size: 12px; }
+    .replay-layout .stat strong { font-size: 14px; }
+    .replay-layout .q-bars { gap: 2px; }
+    .replay-layout .q-row { min-height: 24px; padding: 2px 4px; }
+    .replay-layout #events { max-height: 52px !important; font-size: 12px !important; }
+    .replay-layout > article:first-child details:not([open]) > :not(summary) { display: none; }
+    .replay-layout > article:nth-child(2) .q-bars { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 4px; }
+    .replay-layout > article:nth-child(2) .q-row { grid-template-columns: 25px minmax(0, 1fr) 48px; gap: 3px; padding: 3px 2px; }
+    .replay-layout > article:nth-child(2) .q-row .q-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .replay-layout > article:nth-child(2) .value-note,
+    .replay-layout > article:nth-child(2) .event-note { max-height: 2.6em; overflow: auto; }
+    .replay-layout > article:first-child > .control-row { gap: 4px; }
+    .replay-layout > article:first-child > .control-row > .label { min-width: 0; }
+    .replay-layout > article:first-child > .control-row .segmented button { padding-left: 5px; padding-right: 5px; }
+    .replay-layout > article:first-child > .control-row select { width: 112px; min-width: 0; padding-left: 5px; padding-right: 5px; }
+    .replay-layout > article:first-child .replay-controls { gap: 4px; }
+    .replay-layout > article:first-child .replay-controls .timeline-input { min-width: 90px; }
+    .replay-layout > article:first-child .frame-label { min-width: 4rem; }
+    .timeline-card { min-height: 0; margin: 0; overflow: auto; padding: 8px 10px; }
+    .timeline-card .section-head { margin-bottom: 3px; }
+    #timeline-chart { height: 54px !important; }
+    .timeline-card .chart-note, .timeline-card .timeline-events { font-size: 12px; }
+
+    .inspector-pane { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 7px; }
+    .inspector-tabs { display: flex; min-width: 0; gap: 4px; overflow-x: auto; }
+    .inspector-tabs button { flex: 1 1 0; min-width: 78px; min-height: 32px; padding: 5px 8px; font-size: 12px; }
+    .inspector-tabs button[aria-selected="true"] { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+    .inspector-panels { overflow: hidden; }
+    .inspector-panel-group { display: contents; }
+    .inspector-panel {
+      display: none;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      margin: 0 !important;
+      overflow: auto;
+      padding: 10px;
+      scrollbar-gutter: stable;
+    }
+    .inspector-panel.is-active { display: block; }
+    .inspector-panel .section-head { margin-bottom: 6px; }
+    .inspector-panel .map-shell { min-height: 0; padding: 8px; }
+    .inspector-panel .map-wrap { min-height: 210px; }
+    .inspector-panel #heatmap-canvas { width: min(100%, 280px); max-height: 250px; }
+    .inspector-panel .map-empty { padding: 36px 12px; }
+    .inspector-panel .conv-layout { grid-template-columns: minmax(130px, .32fr) minmax(0, .68fr); gap: 8px; }
+    .inspector-panel .conv-canvas-wrap { min-height: 125px; }
+    .inspector-panel #conv-canvas { width: min(100%, 150px); }
+    .inspector-panel .conv-grid, .inspector-panel .contribution-list { max-height: none; overflow: visible; }
+    .inspector-panel .conv-grid { grid-template-columns: repeat(auto-fill, minmax(45px, 1fr)); gap: 4px; }
+    .inspector-panel .conv-tile { padding: 2px; }
+    .inspector-panel .contribution-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 7px; }
+    .inspector-panel .contribution-row { padding: 2px 3px; }
+    .inspector-panel .ablation { margin-top: 8px; padding-top: 8px; }
+    .list-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .list-pagination button { min-width: 76px; min-height: 30px; padding: 4px 7px; font-size: 12px; }
+    .list-pagination button:disabled { opacity: .42; }
+    .list-pagination [aria-live] { flex: 1 1 auto; text-align: center; }
+
+    /* Core playback stays in view; dense inspection has its own tabs. */
+    .viewport-shell { grid-template-columns: minmax(0, 1fr) minmax(490px, 1fr); }
+    .replay-pane { grid-template-rows: minmax(0, 1fr) 145px; }
+    .replay-layout { grid-template-columns: minmax(0, 1fr); }
+    .native-frame, .input-stage { min-height: 190px; }
+    .stack-grid { max-height: none; }
+    .stack-tile canvas { max-height: 72px; width: auto; }
+    .replay-layout .control-row { gap: 5px; }
+    .replay-layout .control-row > .label { min-width: auto; }
+    .replay-layout .control-row button, .replay-layout select { padding: 4px 7px; min-height: 28px; font-size: 12px; }
+    .replay-layout .chart-note { margin: 5px 0 0; }
+    .inspector-tabs button { min-width: 0; padding: 5px 3px; }
+    .timeline-card { overflow: auto; }
+    .timeline-card select { min-height: 26px; padding: 3px 6px; }
+    .timeline-card .chart-note, .timeline-card .timeline-events { margin: 3px 0 0; font-size: 11px; line-height: 1.25; }
+    #inspector-panel-predictions .post-state { gap: 5px; margin-bottom: 6px; }
+    #inspector-panel-predictions .stat { padding: 5px; }
+    #inspector-panel-predictions .stat label { font-size: 11px; }
+    #inspector-panel-predictions .stat strong { font-size: 14px; }
+    #inspector-panel-predictions .q-bars { gap: 2px; }
+    #inspector-panel-predictions .q-row { min-height: 24px; padding: 2px 4px; }
+    #inspector-panel-predictions .value-grid { margin-top: 6px; }
+    #inspector-panel-predictions .value-box { padding: 5px; }
+    #inspector-panel-predictions .value-box strong { font-size: 16px; }
+    #inspector-panel-predictions :where(.value-note,.advantage-line,.event-note) { font-size: 11px; margin: 4px 0; line-height: 1.25; }
+    #inspector-panel-predictions #events { max-height: 45px !important; }
+    .inspector-panel .control-row { gap: 5px; }
+    .inspector-panel .control-row > .label { min-width: 70px; font-size: 11px; }
+    .inspector-panel .control-row :where(button,select) { padding: 4px 6px; min-height: 28px; font-size: 12px; }
+    .inspector-panel .explain-controls { gap: 5px; }
+    .inspector-panel .map-wrap { min-height: 160px; }
+    .inspector-panel #heatmap-canvas { width: 180px; max-height: 180px; }
+    .inspector-panel :where(.map-caption,.grid-position-note,.caveat) { font-size: 11px; margin: 5px 0 0; line-height: 1.25; }
+
+    /* Keep dense labels readable in the compact shell. */
+    .viewport-shell :where(.visual-title, .meta-line, .chart-note, .timeline-events,
+      .input-warning, .input-region-note, .event-flag, .event-note, .q-row .q-name,
+      .value-box label, .conv-note, .conv-scale, .conv-tile small, .ablation-metrics,
+      .ablation-row, .contribution-row, .example-list button, .help-copy) { font-size: 12px; }
+
+    @media (max-width: 1100px) {
+      .viewport-shell { grid-template-columns: minmax(0, 1.08fr) minmax(330px, .92fr); }
+      .replay-layout { grid-template-columns: minmax(0, 1fr) minmax(285px, .9fr); }
+    }
+    @media (max-width: 980px) {
+      main { padding: 8px; gap: 6px; }
+      .mobile-view-tabs { display: flex; flex: 0 0 auto; gap: 4px; }
+      .mobile-view-tabs button { flex: 1 1 0; min-height: 32px; padding: 5px 8px; font-size: 12px; }
+      .mobile-view-tabs button[aria-selected="true"] { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+      .viewport-shell { display: block; }
+      .replay-pane, .inspector-pane { height: 100%; }
+      .inspector-pane { display: none; }
+      .viewport-shell.mobile-inspector .replay-pane { display: none; }
+      .viewport-shell.mobile-inspector .inspector-pane { display: grid; }
+      .replay-pane { grid-template-rows: minmax(0, 1fr) 90px; }
+      .replay-layout { grid-template-columns: minmax(0, 1fr) minmax(300px, .9fr); }
+    }
+    @media (max-width: 700px) {
+      .meta-line { max-height: 2.6em; overflow: auto; }
+      .replay-layout { grid-template-columns: 1fr; overflow: auto; }
+      .replay-layout > .card { overflow: visible; }
+      .replay-visuals { grid-template-columns: 1fr 1fr; }
+      .native-frame, .input-stage { min-height: 130px; }
+      .replay-pane { grid-template-rows: minmax(0, 1fr) 84px; }
+      .post-state { grid-template-columns: repeat(2, minmax(75px, 1fr)); }
+      .inspector-panel .conv-layout { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 430px) {
+      .replay-visuals { grid-template-columns: 1fr; }
+      .replay-layout .post-state { grid-template-columns: repeat(2, minmax(75px, 1fr)); }
+    }
   </style>
 </head>
 <body>
@@ -400,13 +593,19 @@
 
     <section id="loading" class="card loading">Loading trace…</section>
     <div id="trace-content" hidden>
+      <nav class="mobile-view-tabs" role="tablist" aria-label="Dashboard view">
+        <button id="mobile-replay-tab" type="button" role="tab" aria-selected="true" data-mobile-view="replay">Replay</button>
+        <button id="mobile-inspector-tab" type="button" role="tab" aria-selected="false" data-mobile-view="inspector">Inspector</button>
+      </nav>
+      <div class="viewport-shell">
+        <div class="replay-pane">
       <section class="replay-layout">
         <article class="card">
           <div class="replay-visuals">
             <div class="visual-box">
               <div class="visual-title"><strong>Native game</strong><span id="game-caption">optional game_url</span></div>
               <div class="native-frame">
-                <img id="game-image" alt="Native Dodge game frame" hidden>
+                <canvas id="game-image" width="128" height="128" aria-label="Native Dodge game frame" hidden></canvas>
                 <div id="game-empty" class="empty-visual">No native image for this frame</div>
               </div>
             </div>
@@ -439,7 +638,7 @@
             <span id="frame-label" class="frame-label">0 / 0</span>
           </div>
           <p class="chart-note">Space toggles playback when the page is focused. Scrubbing pauses playback and requests a fresh explanation.</p>
-          <details style="margin-top:12px">
+          <details id="final-state-details" style="margin-top:12px">
             <summary>Final state after the last action</summary>
             <div class="post-label" style="margin-top:2px">Post-action terminal/cap snapshot</div>
             <div class="native-frame" style="margin-top:7px; min-height:150px">
@@ -451,7 +650,7 @@
           </details>
         </article>
 
-        <article class="card">
+        <article id="inspector-panel-predictions" class="card inspector-panel" data-inspector-panel="predictions" role="tabpanel" aria-labelledby="inspector-predictions-tab">
           <span class="pre-label">Pre-action prediction</span>
           <div class="post-state">
             <div class="stat"><label>Replay index</label><strong id="stat-index">—</strong></div>
@@ -469,7 +668,8 @@
           </div>
           <p id="value-note" class="value-note">V is the scalar value head for this checkpoint.</p>
           <p id="advantage-line" class="advantage-line"></p>
-          <span class="post-label" style="margin-top:12px">Post-action outcome</span>
+          <section id="inspector-panel-events" class="card inspector-panel" data-inspector-panel="events" role="tabpanel" aria-labelledby="inspector-events-tab">
+          <span class="post-label">Post-action outcome</span>
           <div class="post-state">
             <div class="stat"><label>Reward</label><strong id="stat-reward">—</strong></div>
             <div class="stat"><label>Done</label><strong id="stat-done">—</strong></div>
@@ -478,6 +678,7 @@
           <div id="event-flags" class="event-flags" aria-label="Native event flags"></div>
           <p class="event-note">Native flags only: enemy_spawn, collision, death, pattern_active, terminal. Pickups are unavailable in this trace.</p>
           <pre id="events" class="muted" style="max-height:90px; margin:0; overflow:auto; font:11px/1.35 ui-monospace,SFMono-Regular,monospace; white-space:pre-wrap"></pre>
+          </section>
         </article>
       </section>
 
@@ -497,8 +698,23 @@
         <p id="timeline-events-note" class="timeline-events">Event markers: loading</p>
       </section>
 
-      <section class="explain-layout">
-        <article class="card">
+        </div>
+        <aside class="inspector-pane" aria-label="Explanation inspector">
+          <nav class="inspector-tabs" role="tablist" aria-label="Explanation views">
+            <button id="inspector-predictions-tab" type="button" role="tab" aria-selected="true" aria-controls="inspector-panel-predictions" data-inspector-tab="predictions">Q values</button>
+            <button id="inspector-events-tab" type="button" role="tab" aria-selected="false" aria-controls="inspector-panel-events" data-inspector-tab="events">Events</button>
+            <button id="inspector-heatmaps-tab" type="button" role="tab" aria-selected="true" aria-controls="inspector-panel-heatmaps" data-inspector-tab="heatmaps">Heatmaps</button>
+            <button id="inspector-conv-tab" type="button" role="tab" aria-selected="false" aria-controls="inspector-panel-conv" data-inspector-tab="conv">Conv3</button>
+            <button id="inspector-ablation-tab" type="button" role="tab" aria-selected="false" aria-controls="inspector-panel-ablation" data-inspector-tab="ablation">Ablate</button>
+            <button id="inspector-features-tab" type="button" role="tab" aria-selected="false" aria-controls="inspector-panel-features" data-inspector-tab="features">Features</button>
+            <button id="inspector-help-tab" type="button" role="tab" aria-selected="false" aria-controls="inspector-panel-help" data-inspector-tab="help">Help</button>
+            <button id="inspector-final-tab" type="button" role="tab" aria-selected="false" aria-controls="inspector-panel-final" data-inspector-tab="final">Final</button>
+          </nav>
+          <div class="inspector-panels">
+            <section id="inspector-panel-final" class="card inspector-panel" data-inspector-panel="final" role="tabpanel" aria-labelledby="inspector-final-tab"></section>
+
+      <section class="explain-layout inspector-panel-group">
+        <article id="inspector-panel-heatmaps" class="card inspector-panel is-active" data-inspector-panel="heatmaps" role="tabpanel" aria-labelledby="inspector-heatmaps-tab">
           <div class="section-head">
             <h2>Signed input sensitivity</h2>
             <small id="explain-status">Waiting for a frame</small>
@@ -550,7 +766,7 @@
           </div>
         </article>
 
-        <article class="card">
+        <article id="inspector-panel-conv" class="card inspector-panel" data-inspector-panel="conv" role="tabpanel" aria-labelledby="inspector-conv-tab">
           <div class="section-head"><h2>Conv3 feature maps</h2><small>exactly 64 × 7 × 7</small></div>
           <div class="conv-layout">
             <div class="conv-selected">
@@ -562,7 +778,12 @@
             </div>
             <div id="conv-grid" class="conv-grid" aria-label="64 convolution feature maps"></div>
           </div>
-          <div class="ablation">
+          <div id="conv-pagination" class="list-pagination" hidden>
+            <button id="conv-page-prev" type="button">Previous</button>
+            <span id="conv-page-label" aria-live="polite">Channels</span>
+            <button id="conv-page-next" type="button">Next</button>
+          </div>
+          <div id="inspector-panel-ablation" class="card inspector-panel ablation" data-inspector-panel="ablation" role="tabpanel" aria-labelledby="inspector-ablation-tab">
             <div class="section-head"><h3>Channel ablation</h3><small>zero the selected Conv3 channel</small></div>
             <div class="ablation-metrics"><span>chosen <b id="ablation-chosen">—</b></span><span>alternative <b id="ablation-alternative">—</b></span><span>gap Δ <b id="ablation-gap">—</b></span><span>bias Δ <b id="bias-difference">—</b></span></div>
             <div id="ablation-q" class="ablation-q"></div>
@@ -578,13 +799,18 @@
         </article>
       </section>
 
-      <section class="card contrib-card">
+      <section id="inspector-panel-features" class="card contrib-card inspector-panel" data-inspector-panel="features" role="tabpanel" aria-labelledby="inspector-features-tab">
         <div class="section-head">
           <h2>512-feature contribution ranking</h2>
           <small id="contribution-count">0 / 512 features</small>
         </div>
         <p id="contribution-summary" class="contrib-summary">The 512-unit linear feature contribution vector is ranked by absolute magnitude. Select a feature to load its captured examples.</p>
         <div id="contribution-list" class="contribution-list" aria-label="Ranked 512 feature contributions"></div>
+        <div id="contribution-pagination" class="list-pagination" hidden>
+          <button id="contribution-page-prev" type="button">Previous</button>
+          <span id="contribution-page-label" aria-live="polite">Features</span>
+          <button id="contribution-page-next" type="button">Next</button>
+        </div>
         <div class="examples">
           <div class="control-row">
             <span class="label">Examples</span>
@@ -595,7 +821,7 @@
         </div>
       </section>
 
-      <section class="card" style="margin-top:14px">
+      <section id="inspector-panel-help" class="card inspector-panel" data-inspector-panel="help" role="tabpanel" aria-labelledby="inspector-help-tab">
         <details>
           <summary>How to read this page</summary>
           <div class="help-copy">
@@ -607,6 +833,9 @@
           </div>
         </details>
       </section>
+          </div>
+        </aside>
+      </div>
     </div>
   </main>
 
@@ -643,6 +872,8 @@
       mapScale: 1,
       playing: false,
       playTimer: null,
+      playSerial: 0,
+      gameCache: new Map(),
       traceSerial: 0,
       explainSerial: 0,
       traceController: null,
@@ -1021,31 +1252,84 @@
       }
     }
 
+    function nativeImageEntry(url) {
+      if (state.gameCache.has(url)) {
+        const entry = state.gameCache.get(url);
+        state.gameCache.delete(url);
+        state.gameCache.set(url, entry);
+        return entry;
+      }
+      const decoded = new Image();
+      const entry = { image: null, promise: null, cancel: null };
+      entry.promise = new Promise((resolve) => {
+        let settled = false;
+        const finish = (image) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeout);
+          decoded.onload = null;
+          decoded.onerror = null;
+          entry.image = image;
+          if (!image && state.gameCache.get(url) === entry) state.gameCache.delete(url);
+          resolve(image);
+        };
+        const timeout = window.setTimeout(() => { finish(null); decoded.src = ""; }, FETCH_TIMEOUT_MS);
+        decoded.onload = () => finish(decoded);
+        decoded.onerror = () => finish(null);
+        entry.cancel = () => { finish(null); decoded.src = ""; };
+      });
+      state.gameCache.set(url, entry);
+      decoded.src = url;
+      // A sliding window, not an entire decoded episode in memory.
+      while (state.gameCache.size > 24) {
+        const oldest = state.gameCache.keys().next().value;
+        const old = state.gameCache.get(oldest);
+        state.gameCache.delete(oldest);
+        if (!old.image) old.cancel();
+      }
+      return entry;
+    }
+
+    function prefetchNativeFrames() {
+      if (!state.trace) return;
+      for (let offset = 1; offset <= 4; offset++) {
+        const frame = state.trace.frames[state.index + offset];
+        if (frame && frame.game_url) nativeImageEntry(frame.game_url);
+      }
+    }
+
     function renderGameImage(frame) {
-      const image = $("game-image");
-      const empty = $("game-empty");
-      const url = frame && frame.game_url ? frame.game_url : "";
+      const canvas = $("game-image"), empty = $("game-empty");
       const serial = ++state.imageSerial;
-      image.hidden = true;
-      empty.hidden = false;
-      image.removeAttribute("src");
+      const url = frame && frame.game_url;
       if (!url) {
-        $("game-caption").textContent = "no game_url";
+        canvas.hidden = true; empty.hidden = false;
+        empty.textContent = "Native image unavailable";
+        $("game-caption").textContent = "no native image";
         return;
       }
-      $("game-caption").textContent = "native frame";
-      image.onload = () => {
+      const entry = nativeImageEntry(url);
+      const draw = (decoded) => {
         if (serial !== state.imageSerial) return;
-        image.hidden = false;
-        empty.hidden = true;
+        if (!decoded) {
+          canvas.hidden = true; empty.hidden = false;
+          empty.textContent = "Native image failed to load; step or play to retry";
+          return;
+        }
+        const context = canvas.getContext("2d");
+        context.imageSmoothingEnabled = false;
+        context.drawImage(decoded, 0, 0, 128, 128);
+        canvas.hidden = false; empty.hidden = true;
+        canvas.dataset.frameIndex = String(frame.index);
+        $("game-caption").textContent = `native frame ${frame.native_frame}`;
+        prefetchNativeFrames();
       };
-      image.onerror = () => {
-        if (serial !== state.imageSerial) return;
-        image.hidden = true;
-        empty.hidden = false;
-        empty.textContent = "Native image failed to load";
-      };
-      image.src = url;
+      if (entry.image) draw(entry.image);
+      else {
+        canvas.hidden = true; empty.hidden = false;
+        empty.textContent = "Buffering native image…";
+        entry.promise.then(draw);
+      }
     }
 
     function renderFinalState(trace) {
@@ -1242,7 +1526,7 @@
 
     function drawTimeline() {
       const canvas = $("timeline-chart");
-      const dimensions = resizeCanvas(canvas, 130);
+      const dimensions = resizeCanvas(canvas, 68);
       const context = canvas.getContext("2d");
       const width = dimensions.width;
       const height = dimensions.height;
@@ -1343,6 +1627,7 @@
     }
 
     function setPlaying(value) {
+      state.playSerial += 1;
       state.playing = Boolean(value && state.trace && state.trace.frames.length > 1);
       if (state.playing) {
         // Explanation requests are on-demand. Stop an in-flight request so
@@ -1351,7 +1636,7 @@
         if (state.explainController) state.explainController.abort();
         hideExplanationForPlayback();
       }
-      if (!state.playing && state.playTimer !== null) {
+      if (state.playTimer !== null) {
         window.clearTimeout(state.playTimer);
         state.playTimer = null;
       }
@@ -1383,16 +1668,36 @@
 
     function schedulePlayback() {
       if (!state.playing || state.playTimer !== null) return;
-      state.playTimer = window.setTimeout(() => {
+      const serial = state.playSerial, trace = state.trace, from = state.index;
+      state.playTimer = window.setTimeout(async () => {
         state.playTimer = null;
-        if (!state.playing || !state.trace) return;
+        const current = () => state.playing && serial === state.playSerial && state.trace === trace && state.index === from;
+        if (!current()) return;
         if (state.index >= state.trace.frames.length - 1) {
           setPlaying(false);
           requestExplanation();
           return;
         }
-        state.index += 1;
+        // Keep the existing native image and matching Q/input visible while
+        // buffering. Never advance the cursor beyond the decoded game frame.
+        for (const frame of [trace.frames[from], trace.frames[from + 1]]) {
+          if (!frame.game_url) continue;
+          const entry = nativeImageEntry(frame.game_url);
+          if (!entry.image) {
+            setStatus("Buffering", "busy");
+            const decoded = await entry.promise;
+            if (!current()) return;
+            if (!decoded) {
+              setPlaying(false);
+              showNotice("Native frame failed to load. Playback paused; press Play to retry.");
+              return;
+            }
+          }
+        }
+        if (!current()) return;
+        state.index = from + 1;
         renderFrame();
+        setStatus("Playing", "ready");
         schedulePlayback();
       }, playbackDelay());
     }
@@ -1785,6 +2090,9 @@
     }
 
     function applyTrace(trace) {
+      state.imageSerial += 1;
+      for (const entry of state.gameCache.values()) if (!entry.image) entry.cancel();
+      state.gameCache.clear();
       state.trace = trace;
       state.index = 0;
       state.inputChannel = 0;
@@ -1867,6 +2175,129 @@
       await selectEpisode(requested, { keepUrl: true });
     }
 
+    // Layout state is intentionally separate from replay state. It only owns
+    // viewport tabs and pagination, so selecting a view cannot alter a trace
+    // frame or an explanation request.
+    const layoutState = { inspector: "predictions", mobileView: "replay" };
+
+    function layoutAfterPaint(callback) {
+      if (typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(callback);
+      else window.setTimeout(callback, 0);
+    }
+
+    function setInspectorTab(name, focus = false) {
+      const tabs = Array.from(document.querySelectorAll("[data-inspector-tab]"));
+      const panels = Array.from(document.querySelectorAll("[data-inspector-panel]"));
+      if (!tabs.some((tab) => tab.dataset.inspectorTab === name)) name = "heatmaps";
+      layoutState.inspector = name;
+      tabs.forEach((tab) => {
+        const active = tab.dataset.inspectorTab === name;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+        tab.tabIndex = active ? 0 : -1;
+        if (focus && active) tab.focus();
+      });
+      panels.forEach((panel) => {
+        const active = panel.dataset.inspectorPanel === name;
+        panel.hidden = !active;
+        panel.classList.toggle("is-active", active);
+      });
+      layoutAfterPaint(() => {
+        // A canvas may be first measured while its panel is hidden. Redraw the
+        // lightweight views after a tab becomes visible.
+        if (name === "heatmaps" && state.explain) renderHeatmap();
+        drawTimeline();
+      });
+    }
+
+    function setMobileView(view, focus = false) {
+      const shell = document.querySelector(".viewport-shell");
+      const tabs = Array.from(document.querySelectorAll("[data-mobile-view]"));
+      if (!shell || !tabs.some((tab) => tab.dataset.mobileView === view)) view = "replay";
+      layoutState.mobileView = view;
+      if (shell) shell.classList.toggle("mobile-inspector", view === "inspector");
+      tabs.forEach((tab) => {
+        const active = tab.dataset.mobileView === view;
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+        tab.tabIndex = active ? 0 : -1;
+        if (focus && active) tab.focus();
+      });
+      layoutAfterPaint(drawTimeline);
+    }
+
+    function syncMobileLayout() {
+      const narrow = window.innerWidth <= 980;
+      const shell = document.querySelector(".viewport-shell");
+      if (!narrow && shell) shell.classList.remove("mobile-inspector");
+      if (narrow) setMobileView(layoutState.mobileView);
+      else setMobileView("replay");
+    }
+
+    function setupListPager(listId, pagerId, previousId, nextId, labelId, pageSize, itemLabel) {
+      const list = $(listId), pager = $(pagerId), previous = $(previousId), next = $(nextId), label = $(labelId);
+      if (!list || !pager || !previous || !next || !label) return;
+      const paging = { page: 0 };
+      const update = (followSelection = false) => {
+        const items = Array.from(list.children);
+        const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+        if (followSelection) {
+          const selected = items.findIndex((item) => item.classList.contains("selected"));
+          if (selected >= 0) paging.page = Math.floor(selected / pageSize);
+        }
+        paging.page = Math.max(0, Math.min(paging.page, pageCount - 1));
+        const start = paging.page * pageSize;
+        const end = Math.min(items.length, start + pageSize);
+        items.forEach((item, index) => { item.hidden = index < start || index >= end; });
+        pager.hidden = items.length <= pageSize;
+        previous.disabled = paging.page <= 0;
+        next.disabled = paging.page >= pageCount - 1;
+        label.textContent = items.length ? `${itemLabel} ${start + 1}–${end} / ${items.length}` : `${itemLabel} unavailable`;
+      };
+      previous.addEventListener("click", () => { paging.page -= 1; update(false); });
+      next.addEventListener("click", () => { paging.page += 1; update(false); });
+      if (typeof MutationObserver === "function") {
+        const observer = new MutationObserver(() => update(true));
+        observer.observe(list, { childList: true });
+      }
+      update(true);
+    }
+
+    function initialiseLayout() {
+      const panels = document.querySelector(".inspector-panels");
+      if (panels) {
+        panels.appendChild($("inspector-panel-predictions"));
+        panels.appendChild($("inspector-panel-events"));
+        panels.appendChild($("inspector-panel-ablation"));
+      }
+      const replayNote = document.querySelector(".replay-layout .chart-note");
+      if (replayNote) $("inspector-panel-help").appendChild(replayNote);
+      const finalDetails = $("final-state-details");
+      if (finalDetails) {
+        $("inspector-panel-final").appendChild(finalDetails);
+        finalDetails.open = true;
+      }
+      document.querySelectorAll("[data-inspector-tab]").forEach((tab) => {
+        tab.addEventListener("click", () => setInspectorTab(tab.dataset.inspectorTab));
+        tab.addEventListener("keydown", (event) => {
+          if (!(event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End")) return;
+          event.preventDefault();
+          const tabs = Array.from(document.querySelectorAll("[data-inspector-tab]"));
+          const index = tabs.indexOf(tab);
+          const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+          setInspectorTab(tabs[nextIndex].dataset.inspectorTab, true);
+        });
+      });
+      document.querySelectorAll("[data-mobile-view]").forEach((tab) => {
+        tab.addEventListener("click", () => setMobileView(tab.dataset.mobileView));
+      });
+      setupListPager("conv-grid", "conv-pagination", "conv-page-prev", "conv-page-next", "conv-page-label", 16, "Channels");
+      setupListPager("contribution-list", "contribution-pagination", "contribution-page-prev", "contribution-page-next", "contribution-page-label", 16, "Features");
+      setInspectorTab(layoutState.inspector);
+      syncMobileLayout();
+    }
+
+    initialiseLayout();
+
     $("episode-select").addEventListener("change", (event) => selectEpisode(event.target.value));
     $("play").addEventListener("click", togglePlayback);
     $("previous").addEventListener("click", () => setIndex(state.index - 1));
@@ -1888,7 +2319,7 @@
     $("channel-select").addEventListener("change", (event) => selectChannel(event.target.value));
     $("channel-examples").addEventListener("click", () => loadExamples("channel"));
     $("feature-examples").addEventListener("click", () => loadExamples("feature"));
-    window.addEventListener("resize", drawTimeline);
+    window.addEventListener("resize", () => { syncMobileLayout(); drawTimeline(); });
     window.addEventListener("keydown", (event) => {
       if (event.code !== "Space" || /INPUT|SELECT|TEXTAREA|BUTTON/.test(document.activeElement && document.activeElement.tagName)) return;
       event.preventDefault(); togglePlayback();

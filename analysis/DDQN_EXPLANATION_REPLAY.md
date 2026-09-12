@@ -118,6 +118,7 @@ scripts/uv-run python scripts/ddqn-explanation-proof.py \
 scripts/uv-run pytest -q
 scripts/uv-run ruff check .
 node tests/variant_cnn_image_ddqn/explain_ui.test.cjs
+node tests/variant_cnn_image_ddqn/explain_playback.test.cjs
 ```
 
 The real-checkpoint check reproduces held-out rewards 722, 343, and 193 on seeds
@@ -138,5 +139,48 @@ cadence, and pause cancellation with a small DOM stub. Live HTTP checks exercise
 the native PNGs, final post-action PNG, trace, explanation, and example endpoints.
 Final validation passed 116 Python tests, Ruff, the Node contracts, and a
 32-step CPU training smoke run in a temporary history directory.
-The built-in browser preview transport was unavailable during this work; these
-checks do **not** substitute for a visual browser inspection.
+The original T13 check could not access the browser preview. The follow-up
+playback fix was checked in a live browser: 12 normal-load samples and 16 samples
+with an added 250 ms image-load delay all showed a visible native frame whose
+index matched the replay cursor. Controlled JavaScript tests also cover pending
+loads interrupted by pause, seek, or episode replacement, failed-load retry, and
+the 24-image cache bound.
+
+The native view is rendered by the native game, not reconstructed from the
+collision image. Both capture lanes receive the same chosen action. A separate
+32-decision regression resets a fresh native pixel lane and feeds it the stored
+actions with model inference disabled; every pre-action PNG and the final PNG
+must match byte for byte, along with native frame numbers and termination flags.
+An action-only replay of the three served held-out episodes also passed: all
+316 decision images (181 best, 86 median, 49 worst), their post-action frame
+numbers and termination flags, and all three final images matched. That check
+used fresh native lanes and fetched the stored actions and PNGs from the viewer;
+it did not load a policy. The follow-up Python suite passed 117 tests, Ruff
+passed, and a 32-step CPU smoke run completed in a temporary history directory.
+
+## Playback buffering
+
+The viewer preloads four upcoming native images and retains at most 24 decoded
+or pending images. It draws ready images onto a canvas. If the next image is
+late, the current native frame, collision input, and predictions stay together
+until it arrives. A failed image pauses playback and can be retried with Play.
+Pause and seek invalidate pending playback callbacks.
+
+Playback targets the recorded native-frame cadence: four native frames per
+decision at 60 Hz means about 15 displayed decisions per second, not 60 distinct
+images per second. Slow image loads can reduce playback speed; the viewer does
+not advance the predictions ahead of the native image to conceal that delay.
+This change affects offline display only, not training or game behavior.
+
+## Viewport layout
+
+Native playback, the input stack, transport controls, and timeline remain on the
+left. Q values, events, heatmaps, convolution channels, ablation, shared features,
+help, and the final native state have separate inspector tabs. Channel and
+feature lists show 16 entries per page without discarding the remaining entries.
+
+Live browser checks at 1280×720 and 1366×768 found no document overflow and no
+overflow in the replay cards or any of the eight initial inspector views. Tabs
+and pagination also have JavaScript contract tests. Expanded help and loaded
+example lists can scroll within their pane; small screens use Replay/Inspector
+tabs instead of squeezing both columns together.

@@ -110,6 +110,8 @@ V52|Dueling explanation Q equals forward output; V equals mean Q; pairwise 512-f
 V53|Blur sensitivity = original minus perturbed V or fixed chosen-alternative Q gap; all-stack + single-frame modes explicit; sign, mask/grid, scale + sensitivity limitations visible; no model mutation.
 V54|Explanation replay pause/scrub aligns game image, exact oldest→newest input stack, predictions + timelines; native events unavailable → unknown, never fabricated zero.
 V55|Offline feature/channel examples use real captured observations; channel suppression changes inference activation only; activation ≠ importance; traces ≤4096 decisions each, explanation cache + inference concurrency bounded.
+V56|Realtime replay awaits decoded native image before advancing aligned input/Q cursor; slow loads never repeatedly blank/cancel image; pause/seek/episode switch invalidate pending playback; native cache bounded.
+V57|Viewer uses viewport panes + pagination, preserves access to replay/analysis controls without document scrolling at 1280×720 and 1366×768.
 
 §T
 id|status|task|cites
@@ -127,6 +129,7 @@ T10|.|Add run-anchored best/median/worst replay comparison over the run's own ch
 T11|x|Fix DDQN measurement integrity: sync units, resume/provenance, completed episodes, paired counterfactual, censoring, optimizer metrics, action coverage|V40-V47
 T12|x|Add nested game-seed pools, measured exposure, and 10k/200k checkpoints for 500k A100 comparison|V48-V50
 T13|x|Add checkpoint-backed held-out explanation replay, signed perturbations, feature examples + channel ablations|V51-V55
+T14|x|Fix slow-network native playback + fit explanation viewer to viewport|V54-V57
 
 §B
 id|date|cause|fix
@@ -150,3 +153,7 @@ B17|2026-09-11|One learner initialization seed was mistaken for one game seed de
 B18|2026-09-11|Explanation server draft exceeded Ruff line limit|Format draft before verification; mechanical failure, no new invariant
 B19|2026-09-11|Explanation draft suppressed input-stack channels instead of final convolution channels + exposed perturbed gap as signed sensitivity|V53,V55; test conv-channel 63 ablation against manual zeroing + signed fixed-pair map
 B20|2026-09-11|UI draft converted null V to zero, counted false event flags as events, and requested heatmaps during playback|V52,V54,V55; Node contracts preserve null + presence semantics and forbid playback inference; DOM stub extended for rendering
+B21|2026-09-11|Every playback tick hid native image + replaced pending src before slow load completed → native view only appeared when paused|V56; delayed-image regression + browser playback check
+B22|2026-09-11|Native action replay test line exceeded Ruff limit|Wrap zip arguments; mechanical failure, no new invariant
+B23|2026-09-11|First viewport draft clipped timeline + left core replay controls in scrolling cards|V57; inspect actual element bounds + panel overflow, not document height alone
+B24|2026-09-11|Viewport initialization needed DOM APIs absent from Node stub|Extend stub + tab/pagination contracts; playback-only harness excludes layout startup
