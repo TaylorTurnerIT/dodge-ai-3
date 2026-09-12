@@ -92,7 +92,7 @@ def main() -> None:
                 print(f"COLLECTED {run_id}", flush=True)
             if collected == expected:
                 state.client.unassign(args.endpoint)
-                print("COLLECTED_ALL_AND_RELEASED_A100", flush=True)
+                print("COLLECTED_ALL_AND_RELEASED_ASSIGNMENT", flush=True)
                 return
             print(f"WAITING {sorted(expected - collected)}", flush=True)
         except (

@@ -37,10 +37,26 @@ Colab admitted two additional T4 assignments; a third was rejected by the
 concurrent-assignment limit. The A100 RGB target-refresh campaign is unchanged.
 
 - `dodge-t4-replicates-v1`: seed 43, then seed 44. Frozen learner source `e7afc03`.
-- `dodge-t4-nstep-v1`: three-step returns, then grayscale, after local tests and
-  per-treatment GPU smoke checks pass.
+- `dodge-t4-nstep-v1`: frozen source `35b8204`; matched reference evaluation,
+  three-step returns, then grayscale. Per-treatment GPU smoke checks precede
+  training. Exact grayscale GPU reconstruction already passed.
 - Each session logs to `/content/t4-campaign.log` and writes `/content/t4-history`.
 - Replica collector: `/tmp/ddqn-t4-replicates-collector.log`.
+- Three-step/grayscale collector: `/tmp/ddqn-t4-screen-collector.log`.
+
+The local verification suite passed 178 tests and Ruff. Bounded native-game
+CPU smoke runs for both new paths completed. Seed43 completed its 200k T4 run
+and was collected locally; seed44 was observed running beyond 40k decisions.
+
+Frozen source archive SHA-256:
+
+- Replicas (`e7afc03`): `bfd4fcda985e510a9051fd081beecac7fd71f040fe993fe53c7a37744f743c9c`.
+- Three-step/grayscale (`35b8204`): `e0a848bcbcbc50007d76a94062a738035548084f28f7440ed51fb3beb1fc31dc`.
+
+The second archive's hash is verified on the T4 before unpacking and recorded
+in each run's execution provenance. Its completed archives include matched
+baseline evaluation and GPU smoke evidence. The already-running replica
+processes remain on their original frozen source; no live code was replaced.
 
 Collectors download completed archives into the local variant history and
 release only their exact assignment after all expected runs are collected.
