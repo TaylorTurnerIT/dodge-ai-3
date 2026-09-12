@@ -21,9 +21,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--destination", type=Path, required=True)
+    parser.add_argument("--run-id", action="append")
+    parser.add_argument("--remote-history", default="content/seed-history")
     args = parser.parse_args()
     state.auth_provider = AuthProvider.ADC
-    expected = {f"seedpool-{pool}-500k-s42-v1" for pool in (700, 5000)}
+    expected = set(
+        args.run_id or [f"seedpool-{pool}-500k-s42-v1" for pool in (700, 5000)]
+    )
+    if any(
+        not name
+        or any(
+            c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+            for c in name
+        )
+        or name in (".", "..")
+        for name in expected
+    ):
+        parser.error("run IDs must be safe path components")
     collected = set()
     deadline = time.monotonic() + 10800
     args.destination.mkdir(parents=True, exist_ok=True)
@@ -38,7 +52,7 @@ def main() -> None:
             }
             base = proxy.url.rstrip("/")
             for run_id in sorted(expected - collected):
-                remote = f"content/seed-history/{run_id}.tar.gz"
+                remote = f"{args.remote_history.strip('/')}/{run_id}.tar.gz"
                 response = requests.get(
                     f"{base}/api/contents/{remote}",
                     headers=headers,

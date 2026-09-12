@@ -145,7 +145,7 @@ T14|x|Fix slow-network native playback + fit explanation viewer to viewport|V54-
 T15|x|Label temporal input timestamps + default same-time comparison after reported enemy displacement|V54,V58
 T16|x|Add full native RGB profile +128 CNN/replay shape support; gate exactpixel/nativeparity + legacytests before trainingintegration|V1,V3-V9,V14-V17,V21,V22,V59
 T17|~|Wire profile through CLI/train/eval/checkpoint; gate bounded CPU update/checkpoint/native rollout before remote launch; RGB inspector expansion deferred by user|V18,V27,V59,V60
-T18|.|Run bounded nativeRGB10k/200k/500k experiment on A/H Colab, collect artifacts + paired baseline report; depends T16,T17 gates|V48-V50,V61,V62
+T18|~|Run bounded nativeRGB10k/200k/500k target1000vs10000 experiment on A/H Colab, collect artifacts + paired baseline report; depends T16,T17 gates|V48-V50,V61,V62
 T19|~|Remove per-update diagnostic transfers; sample at log cadence + benchmark overhead separately before remote promotion|V46,V63,V66
 
 §B
@@ -182,3 +182,4 @@ B29|2026-09-12|Concurrent test import observed partial run.py edit|Wait module h
 B30|2026-09-12|Packed replay draft reused frameID for identicalimage and erased elapsed temporal position|V64; alwaysappend chronological node; exactreference wrap/reset/repeat tests
 B31|2026-09-12|CPU screen measured packedRGBsample32 108.74ms vsdense18.25ms despite memorysaving|V65; retainpacked minibatch throughCPU sampling + devicepalette expansion; rerunperformancegate
 B32|2026-09-12|Integrated telemetry test missing blank line between absolute and relative imports|Ruff import fix; mechanical failure, no new invariant
+B33|2026-09-12|RGB campaign draft exceeded Ruff line limit|Wrap literals + comprehensions; mechanical failure, no new invariant
