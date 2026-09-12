@@ -752,6 +752,13 @@ fn observations_to_dict<'py>(
     result.set_item("frames", frames)?;
     result.set_item("frames_advanced", frames_advanced)?;
     result.set_item("rewards", rewards)?;
+    let terms: Vec<f32> = observations
+        .iter()
+        .flat_map(|value| value.reward_terms)
+        .collect();
+    let terms = Array2::from_shape_vec((lane_count, 6), terms)
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    result.set_item("reward_terms", terms.into_pyarray(py))?;
     result.set_item("done", done)?;
     result.set_item("seeds", seeds)?;
     result.set_item("state_hashes", state_hashes)?;
@@ -1051,6 +1058,7 @@ fn event_flags_code(events: &[FrameEvent]) -> u32 {
                 FrameEvent::PatternActive => 1 << 3,
                 FrameEvent::Terminal => 1 << 4,
                 FrameEvent::PowerupCollected => 1 << 5,
+                FrameEvent::EnemyDestroyed => 1 << 6,
             }
     })
 }

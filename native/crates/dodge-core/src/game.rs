@@ -140,6 +140,7 @@ pub enum FrameEvent {
     PatternActive,
     Terminal,
     PowerupCollected,
+    EnemyDestroyed,
 }
 
 impl FrameEvent {
@@ -151,6 +152,7 @@ impl FrameEvent {
             Self::PatternActive => "pattern_active",
             Self::Terminal => "terminal",
             Self::PowerupCollected => "powerup_collected",
+            Self::EnemyDestroyed => "enemy_destroyed",
         }
     }
 }
@@ -848,6 +850,7 @@ impl NativeGame {
             self.emit_sfx(55, Some(-2));
         }
         self.can_click = !self.input.btnp(Button::X);
+        let shattered_before = self.shattered;
         self.collision_check(events);
         self.update_player();
         self.update_particles();
@@ -858,6 +861,10 @@ impl NativeGame {
             self.update_enemies();
             self.update_pattern_schedule();
         }
+        events.extend(std::iter::repeat_n(
+            FrameEvent::EnemyDestroyed,
+            self.shattered.saturating_sub(shattered_before) as usize,
+        ));
     }
 
     fn begin_transition(&mut self, mode: Mode) {

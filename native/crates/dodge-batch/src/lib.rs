@@ -164,6 +164,7 @@ pub struct BatchObservation {
     pub frame: u32,
     pub frames_advanced: u32,
     pub reward: u32,
+    pub reward_terms: [f32; 6],
     pub survival_frames: u32,
     pub shattered: u32,
     pub score: f32,
@@ -2002,7 +2003,7 @@ fn observation_from_frame_result(
     let frames_advanced = result.frame.saturating_sub(previous_frame);
     let survival_now = result.snapshot.logical_state().survival_frames;
     let reward = survival_now.saturating_sub(previous_survival);
-    observation_from_snapshot(
+    let mut observation = observation_from_snapshot(
         lane,
         frames_advanced,
         result.done,
@@ -2011,7 +2012,47 @@ fn observation_from_frame_result(
         &result.snapshot,
         flags,
     )
-    .with_reward(reward)
+    .with_reward(reward);
+    let state = result.snapshot.logical_state();
+    let boundary = dodge_core::reward::boundary_costs(
+        state.player.x.to_f32(),
+        state.player.y.to_f32(),
+        2.0,
+        125.0,
+        2.0,
+        16.0,
+    );
+    let count = |event| {
+        result
+            .events
+            .iter()
+            .filter(|value| **value == event)
+            .count() as u32
+    };
+    if let Some(boundary) = boundary {
+        if let Some(terms) = dodge_core::reward::RewardTerms::new(
+            reward,
+            count(dodge_core::FrameEvent::Death),
+            count(dodge_core::FrameEvent::PowerupCollected),
+            count(dodge_core::FrameEvent::EnemyDestroyed),
+            boundary,
+            frames_advanced,
+        ) {
+            observation.reward_terms = [
+                terms.survival,
+                terms.death,
+                terms.pickups,
+                terms.enemy_deaths,
+                terms.edge,
+                terms.corner,
+            ];
+        } else {
+            observation.reward_terms = [f32::NAN; 6];
+        }
+    } else {
+        observation.reward_terms = [f32::NAN; 6];
+    }
+    observation
 }
 
 impl BatchObservation {
@@ -2038,6 +2079,7 @@ fn observation_from_snapshot(
         frames_advanced,
         reward: 0,
         survival_frames: logical_state.survival_frames,
+        reward_terms: [0.0; 6],
         shattered: logical_state.shattered,
         score: logical_state.score.to_f32(),
         done,

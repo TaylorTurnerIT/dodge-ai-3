@@ -161,7 +161,7 @@ T20|x|Add opt-in three-step collision returns + handcomputed terminal/truncation
 T21|x|Add fullnative grayscale profile + exact packed luma parity tests|V59,V60,V61,V68
 T22|~|Deploy bounded T4 screens nstep3, grayscale + learner43/44 replicas; collect before release; queue under quota|V48,V49,V69
 T23|x|Native reward foundation: exact pickup count boundary + tested edge/corner field; preserve game/RNG/pixel parity|V5,V6,V70,V71
-T24|.|Wire versioned native reward components + weights/train/eval/resume contract; death/pickup/destruction isolated treatments; no default change|V18,V60,V63,V72
+T24|~|Wire versioned native reward components + weights/train/eval/resume contract; death/pickup/destruction isolated treatments; no default change|V18,V60,V63,V72
 T25|.|Broaden screenshot-only diagnostic corpus; integrate learning gate + inner checkpoint selector; run independent architecture/reward screens after correctness gate|V47,V55,V62,V66,V72
 
 §B
@@ -204,3 +204,4 @@ B35|2026-09-12|Grayscale decoder draft guessed profile names + palette fallback 
 B36|2026-09-12|Gray ring regression import exceeded configured Ruff layout|Format imports; mechanical failure, no new invariant
 B37|2026-09-12|Host cargo binary does not support rustup +stable directive|Use rustup run stable cargo; existing root V22 covers toolchain selection
 B38|2026-09-12|Maturin CLI absent; new Python test guessed reset/step instead of existing reset_batch/step_batch|Rebuild via uv sync native; use actual batch API; mechanical harness fixes, no new invariant
+B39|2026-09-12|Reward campaign nested imports lacked Ruff separation|Format nested import block; mechanical failure, no new invariant

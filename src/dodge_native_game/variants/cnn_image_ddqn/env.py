@@ -276,6 +276,8 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
             info["native_powerups_collected"] = int(
                 _lane_scalar(result, "powerups_collected")
             )
+        if getattr(result, "reward_terms", None) is not None:
+            info["native_reward_terms"] = np.asarray(result.reward_terms)[0].copy()
         if native_seed is not None:
             info["native_seed"] = native_seed
         return info

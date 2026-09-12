@@ -14,10 +14,26 @@ from pathlib import Path
 
 
 def treatment(name: str) -> dict:
+    reward_names = {
+        "rgbcontrol": "survival-v1",
+        "rgbdeath": "death-v1",
+        "rgbevents": "events-v1",
+        "rgbboundary": "boundary-v1",
+    }
+    if name in reward_names:
+        return dict(
+            seed=42,
+            observation_profile="native-rgb-v1",
+            n_step=1,
+            reward_profile=reward_names[name],
+        )
     choices = {
+        "rep42": (42, "collision-image-v1", 1),
         "rep43": (43, "collision-image-v1", 1),
         "rep44": (44, "collision-image-v1", 1),
         "nstep3": (42, "collision-image-v1", 3),
+        "nstep3s43": (43, "collision-image-v1", 3),
+        "nstep3s44": (44, "collision-image-v1", 3),
         "gray": (42, "native-gray-v1", 1),
     }
     seed, profile, horizon = choices[name]
@@ -97,6 +113,9 @@ def worker(name: str, history: Path, smoke: bool) -> None:
         json.dumps(snapshots, indent=2) + "\n"
     )
     reference = history / "baseline_reference.json"
+    reward_gate = history / "reward_telemetry_gate.json"
+    if reward_gate.exists():
+        (root / "reward_telemetry_gate.json").write_bytes(reward_gate.read_bytes())
     if reference.exists():
         (root / "baseline_reference.json").write_bytes(reference.read_bytes())
     smoke_root = history / "cnn-image-ddqn" / f"t4-{name}-smoke-v1"
@@ -144,7 +163,19 @@ def main() -> None:
         "--treatments",
         nargs="+",
         required=True,
-        choices=("rep43", "rep44", "nstep3", "gray"),
+        choices=(
+            "rep42",
+            "rep43",
+            "rep44",
+            "nstep3",
+            "nstep3s43",
+            "nstep3s44",
+            "gray",
+            "rgbcontrol",
+            "rgbdeath",
+            "rgbevents",
+            "rgbboundary",
+        ),
     )
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--smoke", action="store_true")

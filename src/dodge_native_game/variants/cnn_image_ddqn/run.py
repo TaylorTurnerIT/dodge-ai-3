@@ -48,6 +48,8 @@ from .pixels import (
 )
 from .provenance import git_source_provenance, infer_parent_run_id, sha256_file
 from .replay import ReplayBuffer
+from .reward_profiles import PROFILES, weighted_components
+from .reward_profiles import contract as reward_contract
 from .rewards import UNCONTROLLED_SCORE_PER_ENEMY, RewardConfig
 from .run_artifacts import VARIANT_ID, RunArtifactWriter
 from .seed_pool import training_seed_pool
@@ -517,6 +519,7 @@ def _checkpoint_payload(
     stack_size: int | None = None,
     run_id: str | None = None,
     n_step: int = 1,
+    reward_profile: str = "survival-v1",
     target_sync_count: int = 0,
     source: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
@@ -540,6 +543,7 @@ def _checkpoint_payload(
         )
     return {
         "checkpoint_schema_version": 2,
+        "native_reward_contract": reward_contract(reward_profile),
         "variant_id": VARIANT_ID,
         "step": step,
         "global_environment_step": step,
@@ -877,6 +881,7 @@ def train_run(
     checkpoint_steps: Sequence[int] = (),
     n_step: int = 1,
     shaping: bool = False,
+    reward_profile: str = "survival-v1",
     w_survival: float | None = None,
     w_death: float | None = None,
     w_score: float | None = None,
@@ -985,6 +990,12 @@ def train_run(
     if epsilon_decay_steps is not None and epsilon_decay_steps < 1:
         raise ValueError("epsilon_decay_steps must be positive")
     reward_defaults = RewardConfig()
+    native_reward_contract = reward_contract(reward_profile)
+    if reward_profile != "survival-v1" and (shaping or control is not None):
+        raise ValueError(
+            "native reward profiles reject legacy shaping and live controls"
+        )
+    component_totals = np.zeros(6, dtype=np.float64)
 
     def _weight(flag: float | None, default: float) -> float:
         return float(flag) if flag is not None else float(default)
@@ -1001,6 +1012,7 @@ def train_run(
     source_provenance = git_source_provenance(_project_root())
 
     manifest = {
+        "native_reward_contract": native_reward_contract,
         "schema_version": 1,
         "variant_id": VARIANT_ID,
         "run_id": run_id,
@@ -1060,6 +1072,11 @@ def train_run(
             expected_shape=observation_shape_value,
         )
         resume_payload = loaded_resume_payload
+        if (
+            resume_payload.get("native_reward_contract", reward_contract("survival-v1"))
+            != native_reward_contract
+        ):
+            raise ValueError("checkpoint native reward contract does not match")
         if int(resume_payload.get("n_step", 1)) != n_step:
             raise ValueError("checkpoint n_step does not match training objective")
         resumed_step = _checkpoint_global_step(resume_payload)
@@ -1192,6 +1209,7 @@ def train_run(
             "enabled": shaping_enabled,
             **shaping_weights,
         },
+        "native_reward_contract": native_reward_contract,
         "dashboard_game_controls": {
             key: selected_game[key]
             for key in (
@@ -1416,6 +1434,7 @@ def train_run(
                             stack_size=stack_size,
                             run_id=run_id,
                             n_step=n_step,
+                            reward_profile=reward_profile,
                             target_sync_count=target_sync_count,
                             source=source_provenance,
                         ),
@@ -1558,7 +1577,17 @@ def train_run(
             agent_delta_tmp = max(
                 0.0, score_delta_tmp - UNCONTROLLED_SCORE_PER_ENEMY * kills_tmp
             )
-            if shaping_enabled:
+            if reward_profile != "survival-v1":
+                components = weighted_components(
+                    info.get("native_reward_terms"), reward_profile
+                )
+                if components[0] != float(reward):
+                    raise ValueError(
+                        "native reward components disagree with survival reward"
+                    )
+                component_totals += components
+                train_reward = float(components.sum())
+            elif shaping_enabled:
                 train_reward = (
                     shaping_weights["survival_per_frame"] * frames_now
                     + shaping_weights["score_weight"] * agent_delta_tmp
@@ -1569,6 +1598,7 @@ def train_run(
                 )
             else:
                 train_reward = float(reward)
+                component_totals[0] += float(reward)
             stored_observation = _observation_to_uint8(
                 observation, observation_shape_value
             )
@@ -1752,6 +1782,8 @@ def train_run(
                     "reward": last_metric_reward,
                     "shaped_reward": last_metric_shaped,
                     "shaping_enabled": shaping_enabled,
+                    "native_reward_profile": reward_profile,
+                    "reward_component_totals": component_totals.tolist(),
                     "survival_frames": last_metric_frames,
                     "episode_length": last_metric_frames / 60.0,
                     "enemies_killed": last_metric_kills,
@@ -1838,6 +1870,7 @@ def train_run(
                         stack_size=stack_size,
                         run_id=run_id,
                         n_step=n_step,
+                        reward_profile=reward_profile,
                         target_sync_count=target_sync_count,
                         source=source_provenance,
                     ),
@@ -1881,6 +1914,7 @@ def train_run(
                 stack_size=stack_size,
                 run_id=run_id,
                 n_step=n_step,
+                reward_profile=reward_profile,
                 target_sync_count=target_sync_count,
                 source=source_provenance,
             ),
@@ -2038,6 +2072,8 @@ def train_run(
             )
         report = {
             "result": "bounded_baseline_complete",
+            "native_reward_contract": native_reward_contract,
+            "reward_component_totals": component_totals.tolist(),
             "quality_gate": gate,
             "gate_reasons": gate_reasons,
             "reason": "; ".join(gate_reasons) if gate_reasons else "steady",
@@ -2138,6 +2174,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--w-survival", type=float, default=None)
     parser.add_argument("--w-death", type=float, default=None)
+    parser.add_argument(
+        "--reward-profile", choices=tuple(PROFILES), default="survival-v1"
+    )
     parser.add_argument("--w-score", type=float, default=None)
     parser.add_argument("--w-uncontrolled", type=float, default=None)
     return parser
@@ -2169,6 +2208,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         learning_rate=args.learning_rate,
         epsilon_decay_steps=args.epsilon_decay_steps,
         shaping=args.shaping,
+        reward_profile=args.reward_profile,
         w_survival=args.w_survival,
         w_death=args.w_death,
         w_score=args.w_score,
