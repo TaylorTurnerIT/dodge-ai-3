@@ -272,6 +272,10 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
             "native_shattered": _optional_lane_int(result, "shattered", 0),
             "native_score": _optional_lane_float(result, "score", 0.0),
         }
+        if getattr(result, "powerups_collected", None) is not None:
+            info["native_powerups_collected"] = int(
+                _lane_scalar(result, "powerups_collected")
+            )
         if native_seed is not None:
             info["native_seed"] = native_seed
         return info

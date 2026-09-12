@@ -139,6 +139,7 @@ pub enum FrameEvent {
     Death,
     PatternActive,
     Terminal,
+    PowerupCollected,
 }
 
 impl FrameEvent {
@@ -149,6 +150,7 @@ impl FrameEvent {
             Self::Death => "death",
             Self::PatternActive => "pattern_active",
             Self::Terminal => "terminal",
+            Self::PowerupCollected => "powerup_collected",
         }
     }
 }
@@ -1290,10 +1292,12 @@ impl NativeGame {
                 events.push(FrameEvent::Death);
             }
             2 => {
+                events.push(FrameEvent::PowerupCollected);
                 self.emit_sfx(60, None);
                 self.explode_powerup_enemy(index);
             }
             3 => {
+                events.push(FrameEvent::PowerupCollected);
                 self.remove_enemy_at(index);
                 self.freeze_active = true;
                 self.freeze_timer = 0;
@@ -1302,6 +1306,7 @@ impl NativeGame {
                 self.apply_difficulty(false);
             }
             4 => {
+                events.push(FrameEvent::PowerupCollected);
                 self.remove_enemy_at(index);
                 self.player.size = PicoFixed::from_int(2);
                 self.size_timer = PicoFixed::ZERO;
@@ -3077,6 +3082,13 @@ mod tests {
         }
 
         assert_eq!(game.score, PicoFixed::from_int(5));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == FrameEvent::PowerupCollected)
+                .count(),
+            1
+        );
         assert_eq!(game.enemies.len(), 1);
         assert_eq!(
             game.enemies.first().map(|enemy| enemy.personality),
@@ -3483,8 +3495,43 @@ mod tests {
         assert_eq!(result.as_ref().map(|value| value.done), Ok(false));
         let snapshot = game.snapshot();
         assert_eq!(snapshot.logical_state().player.size, PicoFixed::from_int(2));
+        assert_eq!(
+            result.as_ref().map(|value| value
+                .events
+                .iter()
+                .filter(|event| **event == FrameEvent::PowerupCollected)
+                .count()),
+            Ok(1)
+        );
         assert_eq!(game.score(), PicoFixed::ONE);
         assert!(game.enemies().is_empty());
+    }
+
+    #[test]
+    fn v70_each_collected_powerup_emits_one_event() {
+        for personality in [2, 3, 4] {
+            let mut game = NativeGame::new(NativeConfig::default());
+            start_game(&mut game);
+            let enemy = EnemyState {
+                personality,
+                ..EnemyState::normal(
+                    PicoFixed::from_int(60),
+                    PicoFixed::from_int(60),
+                    PicoFixed::from_int(3),
+                )
+            };
+            game.enemies.push(enemy);
+            let mut events = Vec::new();
+            game.collide_enemy(0, enemy, &mut events);
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| **event == FrameEvent::PowerupCollected)
+                    .count(),
+                1
+            );
+            assert!(!events.contains(&FrameEvent::Death));
+        }
     }
 
     #[test]

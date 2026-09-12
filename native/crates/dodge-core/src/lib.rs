@@ -8,6 +8,7 @@ mod game;
 mod input;
 mod lifecycle;
 mod patterns;
+pub mod reward;
 mod rng;
 mod snapshot;
 mod state;

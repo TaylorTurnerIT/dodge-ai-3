@@ -528,6 +528,7 @@ impl NativeBatchEnv {
 
 #[pymodule]
 fn dodge_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(reward_boundary_costs, module)?)?;
     module.add("BATCH_SCHEMA_VERSION", BATCH_SCHEMA_VERSION)?;
     module.add("BOARD_SHAPE", (BOARD_CHANNELS, BOARD_HEIGHT, BOARD_WIDTH))?;
     module.add(
@@ -612,6 +613,10 @@ fn observations_to_dict<'py>(
         .collect();
     let shattered: Vec<u32> = observations.iter().map(|value| value.shattered).collect();
     let score: Vec<f32> = observations.iter().map(|value| value.score).collect();
+    let pickups: Vec<u32> = observations
+        .iter()
+        .map(|value| pickup_count(&value.events))
+        .collect();
 
     let frames = Array1::from_vec(frames).into_pyarray(py);
     let lane_ids = Array1::from_vec(lane_ids).into_pyarray(py);
@@ -754,6 +759,10 @@ fn observations_to_dict<'py>(
     result.set_item("modes", modes)?;
     result.set_item("event_flags", event_flags)?;
     result.set_item("shattered", shattered)?;
+    result.set_item(
+        "powerups_collected",
+        Array1::from_vec(pickups).into_pyarray(py),
+    )?;
     result.set_item("score", score)?;
     result.set_item("pixels", pixels)?;
     result.set_item("board", board)?;
@@ -1041,14 +1050,48 @@ fn event_flags_code(events: &[FrameEvent]) -> u32 {
                 FrameEvent::Death => 1 << 2,
                 FrameEvent::PatternActive => 1 << 3,
                 FrameEvent::Terminal => 1 << 4,
+                FrameEvent::PowerupCollected => 1 << 5,
             }
     })
+}
+
+#[pyfunction]
+fn reward_boundary_costs(
+    x: f32,
+    y: f32,
+    minimum: f32,
+    maximum: f32,
+    edge_width: f32,
+    corner_width: f32,
+) -> PyResult<(f32, f32)> {
+    dodge_core::reward::boundary_costs(x, y, minimum, maximum, edge_width, corner_width)
+        .map(|value| (value.edge, value.corner))
+        .ok_or_else(|| PyValueError::new_err("invalid native reward boundary geometry"))
+}
+
+fn pickup_count(events: &[FrameEvent]) -> u32 {
+    events
+        .iter()
+        .filter(|event| **event == FrameEvent::PowerupCollected)
+        .count() as u32
 }
 
 #[cfg(test)]
 mod tests {
     use super::{action_from_index, event_flags_code, mode_code, NativeBatchEnv};
     use dodge_core::{Action, FrameEvent, Mode};
+
+    #[test]
+    fn v70_pickup_count_preserves_multiplicity_and_legacy_bits() {
+        let events = [
+            FrameEvent::PowerupCollected,
+            FrameEvent::Death,
+            FrameEvent::PowerupCollected,
+        ];
+        assert_eq!(super::pickup_count(&events), 2);
+        assert_eq!(event_flags_code(&events), (1 << 5) | (1 << 2));
+        assert_eq!(super::pickup_count(&[]), 0);
+    }
 
     #[test]
     fn action_indices_preserve_the_nine_action_contract() {

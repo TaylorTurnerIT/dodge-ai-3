@@ -20,6 +20,7 @@ C5|Native reward/termination are passed through; Python adds no game semantics.
 C6|Initial learner is image-only; scalar/state MLP inputs are a later variant.
 C7|Dashboard/run artifacts required; local pause/save/load/config controls only; HPO and broad campaign claims stay out of scope.
 C8|Watch Agent opens a separate read-only browser replay generated from a saved `.pt` checkpoint.
+C9|Approved reward experiments may extend native Rust event/reward boundary; policy remains fullnative pixels only; legacy reward/defaults unchanged; Python weights only.
 
 §I
 native: `collision-image-v1` → deterministic grayscale collision raster
@@ -30,6 +31,7 @@ env: `CollisionImageEnv` → Gymnasium `Env`, `Discrete(9)` → `Box(0,1,(N,84,8
 stack: `FrameStack` → exactly N newest native frames, default N=4
 model: `CNNQNetwork` → dueling Q-values, no softmax
 learner: `DoubleDQNAgent` → online/target networks, replay, Huber loss
+reward-foundation: native `PowerupCollected` bit5 + `powerups_collected` uint32 lane counts; `reward_boundary_costs` → validated edge/corner costs; no active training-profile change
 artifacts: `RunRecorder` → manifest, atomic status, metrics, evaluation, report
 dashboard: `TrainingDashboard` → LaunchSpark-parity Pygame charts/modals/controls over `DodgeDDQNSession`
  replay: `native_replay` → fresh native Rust lane + collision images → bounded `ReplayStore` → Tailscale browser page
@@ -129,6 +131,10 @@ V67|Three-step return sums gamma^i reward; bootstrap gamma^k at actual suffix le
 V68|Grayscale derives full native framebuffer via fixed integer luma (299R+587G+114B+500)//1000; uint8[N,128,128], no crop/resize/mask; packed palette replay exactluma +≤2GB at100k; RGB/collision defaults unchanged.
 V69|T4 branches freeze700gamepool, lr1e-4, warmup20k, epsilon500k, sync10000, update4, replay100k; compare nstep3/gray/learner43+44 at200k with10k snapshot; 10k explicitly untrained; fresh frozeneval base512,128episodes,4096decisioncap; active A100 untouched.
 
+V70|Pickup event emitted exactly once for collected personality2/3/4; explosion destroying other powerups emits no pickup; ordered counts survive batch/PyO3; existing event bits unchanged.
+V71|Native boundary field bounded/symmetric/flat interior; narrow shallow edge term + wider corner overlap; finite validated inputs; no center bonus; geometry tests cover monotonicity and perimeter route.
+V72|Reward experiments keep survival scale, count terminal penalty once, separate component totals + immutable weights; no live mutation; pixel observations unchanged; promotion requires matched evaluation +≤5% telemetry overhead.
+
 §T
 id|status|task|cites
 ---|---|---|---
@@ -154,6 +160,9 @@ T19|~|Remove per-update diagnostic transfers; sample at log cadence + benchmark 
 T20|x|Add opt-in three-step collision returns + handcomputed terminal/truncation tests|V10,V11,V63,V67
 T21|x|Add fullnative grayscale profile + exact packed luma parity tests|V59,V60,V61,V68
 T22|~|Deploy bounded T4 screens nstep3, grayscale + learner43/44 replicas; collect before release; queue under quota|V48,V49,V69
+T23|x|Native reward foundation: exact pickup count boundary + tested edge/corner field; preserve game/RNG/pixel parity|V5,V6,V70,V71
+T24|.|Wire versioned native reward components + weights/train/eval/resume contract; death/pickup/destruction isolated treatments; no default change|V18,V60,V63,V72
+T25|.|Broaden screenshot-only diagnostic corpus; integrate learning gate + inner checkpoint selector; run independent architecture/reward screens after correctness gate|V47,V55,V62,V66,V72
 
 §B
 id|date|cause|fix
@@ -193,3 +202,5 @@ B33|2026-09-12|RGB campaign draft exceeded Ruff line limit|Wrap literals + compr
 B34|2026-09-12|T4 screen draft protocol literal exceeded Ruff line limit|Shorten literal; mechanical failure, no new invariant
 B35|2026-09-12|Grayscale decoder draft guessed profile names + palette fallback and rebuilt GPU palette perupdate|Require exact RGB/gray IDs + fixed integer-luma LUT + devicecache; V60,V63,V68
 B36|2026-09-12|Gray ring regression import exceeded configured Ruff layout|Format imports; mechanical failure, no new invariant
+B37|2026-09-12|Host cargo binary does not support rustup +stable directive|Use rustup run stable cargo; existing root V22 covers toolchain selection
+B38|2026-09-12|Maturin CLI absent; new Python test guessed reset/step instead of existing reset_batch/step_batch|Rebuild via uv sync native; use actual batch API; mechanical harness fixes, no new invariant

@@ -101,6 +101,7 @@ class BatchResult:
     ml_observation: np.ndarray | None
     player_positions: np.ndarray | None
     snapshot_bytes: tuple[bytes | None, ...]
+    powerups_collected: np.ndarray | None = None
 
     @classmethod
     def from_payload(cls, payload: Payload) -> BatchResult:
@@ -123,6 +124,7 @@ class BatchResult:
             ml_observation=_optional_array(payload, "ml_observation"),
             player_positions=_optional_array(payload, "player_positions"),
             snapshot_bytes=_bytes_tuple(payload, "snapshot_bytes"),
+            powerups_collected=_optional_array(payload, "powerups_collected"),
         )
 
     @property
