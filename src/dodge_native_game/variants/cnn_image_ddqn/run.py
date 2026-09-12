@@ -1029,8 +1029,8 @@ def train_run(
         raise ValueError(f"learner_backend must be one of {LEARNER_BACKENDS}")
     if collector_execution not in ("serial", "parallel"):
         raise ValueError("collector_execution must be 'serial' or 'parallel'")
-    if collector_lanes > 1 and (n_step != 1 or control is not None):
-        raise ValueError("multi-lane collection requires n_step=1 and no live control")
+    if collector_lanes > 1 and control is not None:
+        raise ValueError("multi-lane collection does not support live control")
     if collector_lanes > 1 and env_factory is not CNNImageDDQNEnv:
         raise ValueError("multi-lane collection requires the native environment")
     eval_base_seed = seed if evaluation_seed is None else evaluation_seed
@@ -1480,10 +1480,15 @@ def train_run(
             if callable(palette_reset) and palette_frame is not None:
                 palette_reset(palette_frame)
         accumulator = None
+        vector_accumulators: list[Any] = []
         if n_step > 1:
             from .n_step import NStepAccumulator
 
-            accumulator = NStepAccumulator(n_step, gamma=agent.gamma)
+            vector_accumulators = [
+                NStepAccumulator(n_step, gamma=agent.gamma)
+                for _ in range(collector_lanes)
+            ]
+            accumulator = vector_accumulators[0]
     except Exception as error:
         writer.update_status(
             "failed",
@@ -1892,7 +1897,12 @@ def train_run(
                 stored_next_observation = _observation_to_uint8(
                     next_observation, observation_shape_value
                 )
-                transitions = accumulator.add(
+                active_accumulator = (
+                    vector_accumulators[lane_id]
+                    if collector_lanes > 1
+                    else accumulator
+                )
+                transitions = active_accumulator.add(
                     stored_observation,
                     action,
                     train_reward,
@@ -1901,7 +1911,11 @@ def train_run(
                     bool(truncated),
                 )
                 if step == steps:
-                    transitions.extend(accumulator.flush())
+                    if collector_lanes > 1:
+                        for lane_accumulator in vector_accumulators:
+                            transitions.extend(lane_accumulator.flush())
+                    else:
+                        transitions.extend(accumulator.flush())
                 for transition in transitions:
                     replay.add(
                         transition.observation,

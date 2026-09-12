@@ -139,3 +139,32 @@ def test_multilane_training_counts_native_transitions_exactly(
     assert report["final_metrics"]["replay_size"] == 8
     assert report["final_metrics"]["segment_optimizer_step"] == 4
     assert sum(report["diagnostics"]["training_seed_steps"].values()) == 8
+
+
+def test_multilane_nstep_flushes_each_lane_without_crossing_episodes(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(run, "AtariCnnQNetwork", _TinyQNetwork)
+    root = run.train_run(
+        history_root=tmp_path,
+        run_id="vector-nstep",
+        steps=10,
+        seed=9,
+        stack_size=1,
+        observation_profile=COLLISION_PROFILE,
+        n_step=3,
+        replay_capacity=16,
+        batch_size=2,
+        warmup_steps=4,
+        update_every=2,
+        log_interval=5,
+        eval_episodes=1,
+        eval_steps=1,
+        collector_lanes=4,
+        collector_execution="parallel",
+        device="cpu",
+    )
+    report = json.loads((root / "report.json").read_text())
+    assert report["final_metrics"]["step"] == 10
+    assert report["final_metrics"]["replay_size"] == 10
+    assert sum(report["diagnostics"]["training_seed_steps"].values()) == 10

@@ -142,6 +142,7 @@ V77|Opt-in multi-lane collector counts `steps` as exact native transitions; epsi
 V78|Batched evaluation freezes inactive native lanes + preserves seed order, rewards, survival, actions, termination, Q spread + dead-unit aggregate vs serial reference.
 V79|Learner backend explicit in config/checkpoint context; CUDA-only modes rejectCPU; AMP unscales before gradclip; fusedAdam/channels-last/compile/nonblocking transfer never alter eager checkpoint keys; baseline behavior unchanged.
 V80|Training benchmark reports native transitions/s + optimizerupdates/s with explicit training/all-in denominators, matched config/seed, alternating order, ≥3 trials; CPU result ! GPU claim; performance ! learning quality.
+V81|Multi-lane nstep owns one accumulator/lane; terminal/truncation/final-segment flush emits each transition once, preserves gamma^k suffix, never crosses lane or episode.
 
 §T
 id|status|task|cites
@@ -174,6 +175,7 @@ T25|.|Broaden screenshot-only diagnostic corpus; integrate learning gate + inner
 T26|x|Remove redundant action/eval inference + native-pixel replay conversion/copies; benchmark bounded trainer path|V12,V15,V31,V59,V63-V66,V74-V76
 T27|x|Add active full-native batch boundary, multi-lane temporal collector + stream-safe packed replay, exact transition accounting, and batched frozen evaluation|V5,V6,V12,V15,V31,V43,V48,V59,V77,V78
 T28|x|Add explicit AMP/compiled fused CUDA learner backend + matched bounded training benchmark; retain eager baseline + artifact compatibility|V13,V18,V42,V63,V66,V79,V80
+T29|x|Extend multi-lane collector to independent three-step returns + flush every lane at bounded segment end|V67,V77,V81
 
 §B
 id|date|cause|fix
