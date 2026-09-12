@@ -1,8 +1,8 @@
-"""Low-memory replay storage for native RGB observations.
+"""Low-memory replay storage for native RGB and grayscale observations.
 
-Native RGB observations contain only the sixteen colors of the final PICO-8
-display palette. This replay ring keeps those palette indices packed two per
-byte and reconstructs RGB stacks only when a minibatch is sampled.
+Native display observations contain only the sixteen colors of the final
+PICO-8 palette. This replay ring keeps those palette IDs packed two per byte
+and reconstructs the configured RGB or grayscale stacks only when sampled.
 """
 
 from __future__ import annotations
@@ -13,13 +13,26 @@ from typing import Final
 import numpy as np
 
 from .model import validate_observation_shape
-from .pixels import PICO8_PALETTE
+from .pixels import (
+    GRAY_PROFILE,
+    PICO8_LUMA_PALETTE,
+    PICO8_PALETTE,
+    RGB_PROFILE,
+)
 from .replay import ReplayBatch
 
 RGB_FRAME_SHAPE: Final = (3, 128, 128)
+GRAY_FRAME_SHAPE: Final = (1, 128, 128)
 RGB_FRAME_PIXELS: Final = 128 * 128
-PACKED_RGB_FRAME_BYTES: Final = RGB_FRAME_PIXELS // 2
+GRAY_FRAME_PIXELS: Final = RGB_FRAME_PIXELS
+PACKED_FRAME_BYTES: Final = RGB_FRAME_PIXELS // 2
+# Preserve the existing RGB name while exposing the profile-independent
+# storage width for callers that need to reason about grayscale replay too.
+PACKED_RGB_FRAME_BYTES: Final = PACKED_FRAME_BYTES
+PACKED_GRAY_FRAME_BYTES: Final = PACKED_FRAME_BYTES
+
 _PALETTE = np.asarray(PICO8_PALETTE, dtype=np.uint8)
+_LUMA_PALETTE = np.asarray(PICO8_LUMA_PALETTE, dtype=np.uint8)
 _PALETTE_CODES = (
     # packed RGB24 values, sorted for vectorized inverse lookup
     (_PALETTE[:, 0].astype(np.uint32) << 16)
@@ -28,17 +41,39 @@ _PALETTE_CODES = (
 )
 _PALETTE_ORDER = np.argsort(_PALETTE_CODES)
 _SORTED_PALETTE_CODES = _PALETTE_CODES[_PALETTE_ORDER]
+# Stable ordering selects the first equivalent palette entry when luma values
+# collide. Any equivalent ID decodes to the same grayscale value.
+_LUMA_ORDER = np.argsort(_LUMA_PALETTE, kind="stable")
+_SORTED_LUMA_VALUES = _LUMA_PALETTE[_LUMA_ORDER]
+
+
+def _validate_pixel_profile(profile: object) -> str:
+    if profile not in (RGB_PROFILE, GRAY_PROFILE):
+        raise ValueError(
+            "native pixel replay supports profiles "
+            f"{RGB_PROFILE!r} and {GRAY_PROFILE!r}"
+        )
+    return str(profile)
+
+
+def _profile_channels(profile: str) -> int:
+    return 3 if profile == RGB_PROFILE else 1
+
+
+def _profile_observation_shape(profile: str, stack_size: int) -> tuple[int, int, int]:
+    return (_profile_channels(profile) * stack_size, 128, 128)
 
 
 @dataclass(frozen=True, slots=True)
 class PackedPixelReplayBatch:
-    """Owned packed-palette minibatch with a logical RGB observation shape."""
+    """Owned packed-palette minibatch with a logical profile shape."""
 
     observations: np.ndarray
     actions: np.ndarray
     rewards: np.ndarray
     next_observations: np.ndarray
     dones: np.ndarray
+    observation_profile: str = RGB_PROFILE
 
     def __post_init__(self) -> None:
         observations = np.asarray(self.observations)
@@ -46,11 +81,12 @@ class PackedPixelReplayBatch:
         actions = np.asarray(self.actions)
         rewards = np.asarray(self.rewards)
         dones = np.asarray(self.dones)
+        profile = _validate_pixel_profile(self.observation_profile)
         if observations.ndim != 3:
             raise ValueError("packed observations must have shape (N, stack, 8192)")
         if observations.dtype != np.uint8 or next_observations.dtype != np.uint8:
             raise ValueError("packed observations must have dtype uint8")
-        if observations.shape[2] != PACKED_RGB_FRAME_BYTES:
+        if observations.shape[2] != PACKED_FRAME_BYTES:
             raise ValueError("packed observations must have shape (N, stack, 8192)")
         if observations.shape[1] < 1:
             raise ValueError("packed observations must contain at least one frame")
@@ -74,6 +110,7 @@ class PackedPixelReplayBatch:
         object.__setattr__(self, "actions", np.array(actions, copy=True))
         object.__setattr__(self, "rewards", np.array(rewards, copy=True))
         object.__setattr__(self, "dones", np.array(dones, copy=True))
+        object.__setattr__(self, "observation_profile", profile)
 
     @property
     def size(self) -> int:
@@ -85,7 +122,13 @@ class PackedPixelReplayBatch:
 
     @property
     def observation_shape(self) -> tuple[int, int, int]:
-        return (3 * self.stack_size, 128, 128)
+        return _profile_observation_shape(self.observation_profile, self.stack_size)
+
+    @property
+    def logical_shape(self) -> tuple[int, int, int]:
+        """Alias for the unpacked model-facing observation shape."""
+
+        return self.observation_shape
 
     @property
     def packed_observations(self) -> np.ndarray:
@@ -97,14 +140,17 @@ class PackedPixelReplayBatch:
 
 
 def estimated_storage_bytes(
-    capacity: int, stack_size: int = 4
+    capacity: int,
+    stack_size: int = 4,
+    observation_profile: str = RGB_PROFILE,
 ) -> int:
     """Estimate native-palette replay allocation without allocating it."""
 
     _validate_capacity(capacity)
     _validate_stack_size(stack_size)
+    _validate_pixel_profile(observation_profile)
     frame_capacity = 2 * int(capacity) + int(stack_size) + 1
-    frame_bytes = PACKED_RGB_FRAME_BYTES + 2 * np.dtype(np.int64).itemsize
+    frame_bytes = PACKED_FRAME_BYTES + 2 * np.dtype(np.int64).itemsize
     transition_bytes = (
         2 * np.dtype(np.int64).itemsize
         + np.dtype(np.int64).itemsize
@@ -115,13 +161,12 @@ def estimated_storage_bytes(
 
 
 class NativePixelReplayBuffer:
-    """Fixed-capacity RGB replay ring backed by packed palette frames.
+    """Fixed-capacity packed replay ring for native RGB or grayscale frames.
 
-    ``reset`` starts an episode from a repeated RGB stack. Each subsequent
-    ``add`` must provide the exact previous observation and its one-frame
-    temporal successor. RGB frames may be native ``uint8`` display values or
-    normalized floating-point values; only the successor's newest RGB frame
-    is inverted to palette IDs, while historical frames use exact equality.
+    ``reset`` starts an episode from a repeated stack. Each subsequent ``add``
+    must provide the exact previous observation and its one-frame temporal
+    successor. RGB frames use the display palette; grayscale frames use the
+    fixed integer-luma palette derived from those same sixteen colors.
     """
 
     def __init__(
@@ -131,9 +176,11 @@ class NativePixelReplayBuffer:
         stack_size: int = 4,
         seed: int | None = None,
         num_actions: int | None = None,
+        observation_profile: str = RGB_PROFILE,
     ) -> None:
         _validate_capacity(capacity)
         _validate_stack_size(stack_size)
+        profile = _validate_pixel_profile(observation_profile)
         if num_actions is not None and (
             isinstance(num_actions, bool) or num_actions < 1
         ):
@@ -141,14 +188,17 @@ class NativePixelReplayBuffer:
 
         self.capacity = int(capacity)
         self.stack_size = int(stack_size)
-        self.observation_shape = (3 * self.stack_size, 128, 128)
+        self.observation_profile = profile
+        self.channels = _profile_channels(profile)
+        self.frame_shape = (self.channels, 128, 128)
+        self.observation_shape = _profile_observation_shape(profile, self.stack_size)
         validate_observation_shape(self.observation_shape)
         self.num_actions = None if num_actions is None else int(num_actions)
         self.frame_capacity = 2 * self.capacity + self.stack_size + 1
         self._rng = np.random.default_rng(seed)
 
         self._packed_frames = np.empty(
-            (self.frame_capacity, PACKED_RGB_FRAME_BYTES), dtype=np.uint8
+            (self.frame_capacity, PACKED_FRAME_BYTES), dtype=np.uint8
         )
         self._frame_ids = np.empty(self.frame_capacity, dtype=np.int64)
         self._frame_parents = np.empty(self.frame_capacity, dtype=np.int64)
@@ -175,16 +225,22 @@ class NativePixelReplayBuffer:
     def allocated_bytes(self) -> int:
         """Return the bytes allocated by this packed replay ring."""
 
-        return estimated_storage_bytes(self.capacity, self.stack_size)
+        return estimated_storage_bytes(
+            self.capacity, self.stack_size, self.observation_profile
+        )
 
     def reset(self, observation: object) -> np.ndarray:
-        """Stage a repeated episode-start stack without changing stored frames."""
+        """Stage a repeated episode-start stack without storing frames."""
 
-        value = _validate_rgb_stack(observation, self.stack_size)
-        if not _is_repeated_stack(value, self.stack_size):
-            raise ValueError("reset observation must repeat one RGB frame")
+        value = _validate_native_stack(
+            observation, self.stack_size, self.observation_profile
+        )
+        if not _is_repeated_stack(value, self.stack_size, self.channels):
+            raise ValueError("reset observation must repeat one native frame")
         self._pending_reset_observation = value.copy()
-        self._pending_reset_packed = _rgb_frame_to_packed(value[-3:])
+        self._pending_reset_packed = _frame_to_packed(
+            value[-self.channels :], self.observation_profile
+        )
         self._awaiting_reset = True
         return value.copy()
 
@@ -196,7 +252,7 @@ class NativePixelReplayBuffer:
         next_observation: object,
         done: bool,
     ) -> None:
-        """Store one sequential RGB transition without duplicating its stack."""
+        """Store one sequential native transition without duplicating stacks."""
 
         if isinstance(action, bool) or not isinstance(action, (int, np.integer)):
             raise TypeError("action must be an integer")
@@ -206,13 +262,17 @@ class NativePixelReplayBuffer:
         reward_value = float(reward)
         if not np.isfinite(reward_value):
             raise ValueError("reward must be finite")
-        value = _validate_rgb_stack(observation, self.stack_size)
-        next_value = _validate_rgb_stack(next_observation, self.stack_size)
+        value = _validate_native_stack(
+            observation, self.stack_size, self.observation_profile
+        )
+        next_value = _validate_native_stack(
+            next_observation, self.stack_size, self.observation_profile
+        )
         if self._pending_reset_observation is None and (
             self._last_frame_id is None or self._awaiting_reset
         ):
             if self._last_frame_id is not None and not _is_repeated_stack(
-                value, self.stack_size
+                value, self.stack_size, self.channels
             ):
                 raise RuntimeError(
                     "a terminal transition requires a repeated reset stack"
@@ -224,13 +284,17 @@ class NativePixelReplayBuffer:
             initial_packed = self._pending_reset_packed
             if initial_packed is None:
                 raise RuntimeError("pending reset frame is unavailable")
-            if not np.array_equal(next_value[:-3], value[3:]):
+            if not np.array_equal(
+                next_value[: -self.channels], value[self.channels :]
+            ):
                 raise ValueError(
                     "next_observation is not a one-frame stack successor"
                 )
             # Decode all pixels before mutating the frame ring so malformed
             # transitions cannot consume frame slots.
-            next_packed = _rgb_frame_to_packed(next_value[-3:])
+            next_packed = _frame_to_packed(
+                next_value[-self.channels :], self.observation_profile
+            )
             observation_frame_id = self._append_frame(initial_packed, parent_id=None)
             next_frame_id = self._append_frame(
                 next_packed, parent_id=observation_frame_id
@@ -242,14 +306,18 @@ class NativePixelReplayBuffer:
                 raise RuntimeError("reset must be called before add")
             if not np.array_equal(value, self._last_observation):
                 raise ValueError("observation does not continue the replay sequence")
-            if not np.array_equal(next_value[:-3], value[3:]):
+            if not np.array_equal(
+                next_value[: -self.channels], value[self.channels :]
+            ):
                 raise ValueError(
                     "next_observation is not a one-frame stack successor"
                 )
 
-            # The inverse palette lookup is intentionally limited to the newest
-            # frame. Earlier frames are already validated by exact stack equality.
-            next_packed = _rgb_frame_to_packed(next_value[-3:])
+            # The inverse palette lookup is limited to the newest frame.
+            # Earlier frames are already validated by exact stack equality.
+            next_packed = _frame_to_packed(
+                next_value[-self.channels :], self.observation_profile
+            )
             observation_frame_id = self._last_frame_id
             self._checked_frame_slot(observation_frame_id)
             next_frame_id = self._append_frame(
@@ -270,7 +338,7 @@ class NativePixelReplayBuffer:
         self._awaiting_reset = bool(done)
 
     def sample(self, batch_size: int) -> ReplayBatch:
-        """Sample owned uint8 RGB stacks reconstructed from palette frames."""
+        """Sample owned uint8 stacks reconstructed for this profile."""
 
         indices = self._sample_indices(batch_size)
         observation_ids = self._observation_frame_ids[indices]
@@ -284,7 +352,7 @@ class NativePixelReplayBuffer:
         )
 
     def sample_packed(self, batch_size: int) -> PackedPixelReplayBatch:
-        """Sample packed stacks without CPU RGB unpacking or palette lookup."""
+        """Sample packed stacks without CPU palette expansion."""
 
         indices = self._sample_indices(batch_size)
         observation_ids = self._observation_frame_ids[indices]
@@ -295,6 +363,7 @@ class NativePixelReplayBuffer:
             rewards=self._rewards[indices],
             next_observations=self._reconstruct_packed_stacks(next_observation_ids),
             dones=self._dones[indices],
+            observation_profile=self.observation_profile,
         )
 
     def _sample_indices(self, batch_size: int) -> np.ndarray:
@@ -324,20 +393,21 @@ class NativePixelReplayBuffer:
         batch_size = frame_ids.shape[0]
         slots = (frame_ids - 1) % self.frame_capacity
         packed = self._packed_frames[slots]
-        palette_ids = np.empty(
-            (batch_size, self.stack_size, RGB_FRAME_PIXELS), dtype=np.uint8
-        )
-        palette_ids[..., 0::2] = packed >> 4
-        palette_ids[..., 1::2] = packed & 0x0F
-        rgb = _PALETTE[palette_ids]
-        rgb = rgb.reshape(batch_size, self.stack_size, 128, 128, 3)
-        rgb = rgb.transpose(0, 1, 4, 2, 3)
-        return np.ascontiguousarray(rgb).reshape(
-            batch_size, 3 * self.stack_size, 128, 128
+        palette_ids = _unpack_palette_ids(packed)
+        if self.observation_profile == RGB_PROFILE:
+            rgb = _PALETTE[palette_ids]
+            rgb = rgb.reshape(batch_size, self.stack_size, 128, 128, 3)
+            rgb = rgb.transpose(0, 1, 4, 2, 3)
+            return np.ascontiguousarray(rgb).reshape(
+                batch_size, 3 * self.stack_size, 128, 128
+            )
+        gray = _LUMA_PALETTE[palette_ids]
+        return np.ascontiguousarray(
+            gray.reshape(batch_size, self.stack_size, 128, 128)
         )
 
     def _reconstruct_packed_stacks(self, last_frame_ids: np.ndarray) -> np.ndarray:
-        """Gather packed stack frames; intentionally performs no RGB decoding."""
+        """Gather packed stack frames; intentionally performs no palette decode."""
 
         frame_ids = self._stack_frame_ids(last_frame_ids)
         slots = (frame_ids - 1) % self.frame_capacity
@@ -396,12 +466,58 @@ def _validate_rgb_stack(observation: object, stack_size: int) -> np.ndarray:
     return value
 
 
-def _is_repeated_stack(value: np.ndarray, stack_size: int) -> bool:
-    first = value[:3]
+def _validate_gray_stack(observation: object, stack_size: int) -> np.ndarray:
+    value = np.asarray(observation)
+    expected_shape = (stack_size, 128, 128)
+    if value.shape != expected_shape:
+        raise ValueError(
+            f"grayscale observation must have shape {expected_shape}, got {value.shape}"
+        )
+    if value.dtype == np.uint8:
+        return value
+    if not np.issubdtype(value.dtype, np.floating):
+        raise ValueError(
+            "grayscale observation must have dtype uint8 or floating point"
+        )
+    value = np.asarray(value, dtype=np.float32)
+    if not np.isfinite(value).all() or np.any(value < 0.0) or np.any(value > 1.0):
+        raise ValueError(
+            "floating grayscale observation must contain values in [0, 1]"
+        )
+    return value
+
+
+def _validate_native_stack(
+    observation: object, stack_size: int, profile: str
+) -> np.ndarray:
+    if profile == RGB_PROFILE:
+        return _validate_rgb_stack(observation, stack_size)
+    return _validate_gray_stack(observation, stack_size)
+
+
+def _is_repeated_stack(
+    value: np.ndarray, stack_size: int, channels: int
+) -> bool:
+    first = value[:channels]
     return all(
-        np.array_equal(value[offset : offset + 3], first)
-        for offset in range(3, 3 * stack_size, 3)
+        np.array_equal(value[offset : offset + channels], first)
+        for offset in range(channels, channels * stack_size, channels)
     )
+
+
+def _unpack_palette_ids(packed: np.ndarray) -> np.ndarray:
+    palette_ids = np.empty(
+        (*packed.shape[:-1], RGB_FRAME_PIXELS), dtype=np.uint8
+    )
+    palette_ids[..., 0::2] = packed >> 4
+    palette_ids[..., 1::2] = packed & 0x0F
+    return palette_ids
+
+
+def _frame_to_packed(frame: np.ndarray, profile: str) -> np.ndarray:
+    if profile == RGB_PROFILE:
+        return _rgb_frame_to_packed(frame)
+    return _gray_frame_to_packed(frame)
 
 
 def _rgb_frame_to_packed(frame: np.ndarray) -> np.ndarray:
@@ -431,6 +547,36 @@ def _rgb_frame_to_packed(frame: np.ndarray) -> np.ndarray:
         )
     if not np.array_equal(reconstructed, frame):
         raise ValueError("RGB frame is not an exact native-palette image")
+    return _pack_palette_ids(palette_ids)
+
+
+def _gray_frame_to_packed(frame: np.ndarray) -> np.ndarray:
+    is_uint8 = frame.dtype == np.uint8
+    values = frame[0]
+    scaled = (
+        values.astype(np.uint16, copy=False)
+        if is_uint8
+        else np.rint(values * np.float32(255.0)).astype(np.uint16)
+    )
+    positions = np.searchsorted(_SORTED_LUMA_VALUES, scaled)
+    safe_positions = np.minimum(positions, len(_SORTED_LUMA_VALUES) - 1)
+    valid = (positions < len(_SORTED_LUMA_VALUES)) & (
+        _SORTED_LUMA_VALUES[safe_positions] == scaled
+    )
+    if not bool(np.all(valid)):
+        raise ValueError("grayscale frame contains values outside native luma palette")
+    palette_ids = _LUMA_ORDER[safe_positions].astype(np.uint8, copy=False)
+    reconstructed = _LUMA_PALETTE[palette_ids][None, ...]
+    if not is_uint8:
+        reconstructed = reconstructed.astype(np.float32, copy=False) / np.float32(
+            255.0
+        )
+    if not np.array_equal(reconstructed, frame):
+        raise ValueError("grayscale frame is not an exact native-luma image")
+    return _pack_palette_ids(palette_ids)
+
+
+def _pack_palette_ids(palette_ids: np.ndarray) -> np.ndarray:
     flat_ids = palette_ids.reshape(-1)
     return np.bitwise_or(flat_ids[0::2] << 4, flat_ids[1::2]).astype(
         np.uint8, copy=True
@@ -438,7 +584,10 @@ def _rgb_frame_to_packed(frame: np.ndarray) -> np.ndarray:
 
 
 __all__ = [
+    "GRAY_FRAME_SHAPE",
     "NativePixelReplayBuffer",
+    "PACKED_FRAME_BYTES",
+    "PACKED_GRAY_FRAME_BYTES",
     "PACKED_RGB_FRAME_BYTES",
     "PackedPixelReplayBatch",
     "RGB_FRAME_SHAPE",

@@ -41,6 +41,7 @@ from .episode_metrics import (
 from .model import INITIALIZATION_ID, AtariCnnQNetwork
 from .pixels import (
     COLLISION_PROFILE,
+    GRAY_PROFILE,
     OBSERVATION_PROFILES,
     RGB_PROFILE,
     observation_shape,
@@ -236,6 +237,8 @@ def _profile_for_shape(shape: tuple[int, int, int]) -> str:
         and shape[0] % 3 == 0
     ):
         return RGB_PROFILE
+    if len(shape) == 3 and tuple(shape[1:]) == (128, 128) and shape[0] >= 1:
+        return GRAY_PROFILE
     raise ValueError(f"unsupported observation shape: {shape}")
 
 
@@ -264,9 +267,7 @@ def _checkpoint_shape(payload: Mapping[str, object]) -> tuple[int, int, int]:
     return shape
 
 
-def _checkpoint_stack_size(
-    payload: Mapping[str, object], profile: str
-) -> int:
+def _checkpoint_stack_size(payload: Mapping[str, object], profile: str) -> int:
     """Read stack depth, deriving it for old collision checkpoints."""
 
     raw_stack = payload.get("stack_size")
@@ -325,9 +326,7 @@ def _available_host_memory_bytes() -> int:
         available = int(psutil.virtual_memory().available)
     except ImportError:
         try:
-            available = int(
-                os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
-            )
+            available = int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
         except (AttributeError, OSError, ValueError) as error:
             raise RuntimeError("cannot measure available host memory") from error
     if available < 1:
@@ -335,9 +334,7 @@ def _available_host_memory_bytes() -> int:
     return available
 
 
-def _legacy_replay_storage_bytes(
-    capacity: int, shape: tuple[int, int, int]
-) -> int:
+def _legacy_replay_storage_bytes(capacity: int, shape: tuple[int, int, int]) -> int:
     """Estimate explicit uint8 state + next-state replay allocation."""
 
     image_bytes = int(np.prod(shape, dtype=np.int64)) * int(capacity) * 2
@@ -377,7 +374,7 @@ def _replay_storage_plan(
 ) -> tuple[type[Any] | None, dict[str, Any]]:
     """Plan replay storage and gate RGB allocation before constructing arrays."""
 
-    if observation_profile != RGB_PROFILE:
+    if observation_profile == COLLISION_PROFILE:
         return None, {
             "encoding": "uint8-state-next-v1",
             "capacity": capacity,
@@ -519,6 +516,7 @@ def _checkpoint_payload(
     observation_profile: str = DEFAULT_OBSERVATION_PROFILE,
     stack_size: int | None = None,
     run_id: str | None = None,
+    n_step: int = 1,
     target_sync_count: int = 0,
     source: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
@@ -546,6 +544,7 @@ def _checkpoint_payload(
         "step": step,
         "global_environment_step": step,
         "seed": seed,
+        "n_step": n_step,
         "run_id": run_id,
         "initialization_id": INITIALIZATION_ID,
         "observation_profile": profile,
@@ -585,6 +584,7 @@ def _load_checkpoint(
     *,
     observation_profile: str | None = None,
     stack_size: int | None = None,
+    expected_n_step: int | None = None,
 ) -> dict[str, Any]:
     """Load one native DDQN checkpoint into an existing learner."""
 
@@ -593,6 +593,8 @@ def _load_checkpoint(
         raise ValueError("checkpoint must contain a mapping")
     if payload.get("variant_id") != VARIANT_ID:
         raise ValueError("checkpoint variant does not match cnn-image-ddqn")
+    if expected_n_step is not None and payload.get("n_step", 1) != expected_n_step:
+        raise ValueError("checkpoint n_step does not match training objective")
     agent_shape = tuple(int(value) for value in agent.observation_shape)
     expected_profile = (
         _profile_for_shape(agent_shape)
@@ -637,9 +639,7 @@ def _checkpoint_counter(
     try:
         value = operator.index(raw)
     except TypeError as error:
-        raise ValueError(
-            f"checkpoint {key} must be a non-negative integer"
-        ) from error
+        raise ValueError(f"checkpoint {key} must be a non-negative integer") from error
     if value < 0:
         raise ValueError(f"checkpoint {key} must be a non-negative integer")
     return int(value)
@@ -875,6 +875,7 @@ def train_run(
     training_seed_count: int | None = None,
     evaluation_seed: int | None = None,
     checkpoint_steps: Sequence[int] = (),
+    n_step: int = 1,
     shaping: bool = False,
     w_survival: float | None = None,
     w_death: float | None = None,
@@ -908,7 +909,8 @@ def train_run(
             raise ValueError("evaluation seed range would clamp or overlap")
     pool = (
         training_seed_pool(training_seed_count)
-        if training_seed_count is not None else None
+        if training_seed_count is not None
+        else None
     )
     seed_steps: dict[int, int] = {}
     snapshot_steps = set(checkpoint_steps)
@@ -925,6 +927,12 @@ def train_run(
 
     config = _load_variant_config()
     effective_profile = _resolve_observation_profile(observation_profile, config)
+    if isinstance(n_step, bool) or not isinstance(n_step, int) or n_step not in (1, 3):
+        raise ValueError("n_step must be 1 or 3")
+    if n_step != 1 and effective_profile != COLLISION_PROFILE:
+        raise ValueError("n_step > 1 currently requires collision-image-v1")
+    if n_step != 1 and control is not None:
+        raise ValueError("n_step > 1 currently requires an uncontrolled bounded run")
     engine_config = dict(config.get("game", {}))
     model_config = dict(config.get("model", {}))
     replay_config = dict(config.get("replay", {}))
@@ -961,6 +969,9 @@ def train_run(
         stack_size=stack_size,
         observation_shape_value=observation_shape_value,
     )
+    if n_step > 1:
+        replay_storage["estimated_bytes"] += selected_capacity * 4
+        replay_storage["bootstrap_discount_dtype"] = "float32"
     if dueling is None:
         dueling_effective = bool(model_config.get("dueling", True))
     else:
@@ -995,6 +1006,7 @@ def train_run(
         "run_id": run_id,
         "seed": seed,
         "observation_profile": effective_profile,
+        "n_step": n_step,
         "observation": {
             "profile": effective_profile,
             "shape": list(observation_shape_value),
@@ -1020,7 +1032,8 @@ def train_run(
         "source": source_provenance,
         "training_seed_protocol": {
             "mode": (
-                "nested-shuffled-cycle-v1" if pool is not None
+                "nested-shuffled-cycle-v1"
+                if pool is not None
                 else "legacy-increment-clamp"
             ),
             "learner_seed": seed,
@@ -1047,6 +1060,8 @@ def train_run(
             expected_shape=observation_shape_value,
         )
         resume_payload = loaded_resume_payload
+        if int(resume_payload.get("n_step", 1)) != n_step:
+            raise ValueError("checkpoint n_step does not match training objective")
         resumed_step = _checkpoint_global_step(resume_payload)
         manifest["resumed_from"] = str(resume_from)
         manifest["resumed_step"] = resumed_step
@@ -1058,9 +1073,7 @@ def train_run(
                 Path(resume_from), resume_payload.get("run_id")
             ),
             "global_environment_step": resumed_step,
-            "optimizer_step": _checkpoint_counter(
-                resume_payload, "optimizer_steps"
-            ),
+            "optimizer_step": _checkpoint_counter(resume_payload, "optimizer_steps"),
             "initialization_id": resume_payload.get("initialization_id"),
             "observation_profile": _checkpoint_profile(resume_payload),
             "stack_size": _checkpoint_stack_size(
@@ -1113,7 +1126,7 @@ def train_run(
             "stack_size": stack_size,
             "frame_shape": [3, 128, 128]
             if effective_profile == RGB_PROFILE
-            else [1, 84, 84],
+            else ([1, 128, 128] if effective_profile == GRAY_PROFILE else [1, 84, 84]),
             "storage_dtype": "uint8",
             "model_dtype": "float32",
         },
@@ -1129,6 +1142,7 @@ def train_run(
             "input_channels": observation_shape_value[0],
             "input_size": model_input_size,
             "initialization_id": INITIALIZATION_ID,
+            "n_step": n_step,
         },
         "replay": {
             **replay_config,
@@ -1195,9 +1209,7 @@ def train_run(
     if resume_from is not None:
         run_config["run"]["resumed_from"] = str(resume_from)
         run_config["run"]["resumed_step"] = resumed_step
-        run_config["run"]["resume_mode"] = (
-            "optimizer-state-with-fresh-replay-rng-env"
-        )
+        run_config["run"]["resume_mode"] = "optimizer-state-with-fresh-replay-rng-env"
     writer = RunArtifactWriter.create(
         history_root,
         run_id,
@@ -1233,6 +1245,7 @@ def train_run(
                 seed=seed,
                 num_actions=num_actions,
                 observation_shape=observation_shape_value,
+                **({"store_discounts": True} if n_step > 1 else {}),
             )
         else:
             replay = replay_class(
@@ -1240,6 +1253,11 @@ def train_run(
                 seed=seed,
                 num_actions=num_actions,
                 stack_size=stack_size,
+                **(
+                    {"observation_profile": effective_profile}
+                    if effective_profile == GRAY_PROFILE
+                    else {}
+                ),
             )
 
         def _network_factory(actions: int) -> torch.nn.Module:
@@ -1276,9 +1294,14 @@ def train_run(
                 Path(resume_from),
                 observation_profile=effective_profile,
                 stack_size=stack_size,
-        )
+            )
         start_time = time.perf_counter()
         observation, _ = env.reset(seed=game_seed(0))
+        accumulator = None
+        if n_step > 1:
+            from .n_step import NStepAccumulator
+
+            accumulator = NStepAccumulator(n_step, gamma=agent.gamma)
     except Exception as error:
         writer.update_status(
             "failed",
@@ -1392,6 +1415,7 @@ def train_run(
                             observation_profile=effective_profile,
                             stack_size=stack_size,
                             run_id=run_id,
+                            n_step=n_step,
                             target_sync_count=target_sync_count,
                             source=source_provenance,
                         ),
@@ -1424,6 +1448,7 @@ def train_run(
                         command.path,
                         observation_profile=effective_profile,
                         stack_size=stack_size,
+                        expected_n_step=n_step,
                     )
                     control.emit(
                         TrainingEvent(
@@ -1544,13 +1569,40 @@ def train_run(
                 )
             else:
                 train_reward = float(reward)
-            replay.add(
-                _observation_to_uint8(observation, observation_shape_value),
-                action,
-                train_reward,
-                _observation_to_uint8(next_observation, observation_shape_value),
-                done,
+            stored_observation = _observation_to_uint8(
+                observation, observation_shape_value
             )
+            stored_next_observation = _observation_to_uint8(
+                next_observation, observation_shape_value
+            )
+            if accumulator is None:
+                replay.add(
+                    stored_observation,
+                    action,
+                    train_reward,
+                    stored_next_observation,
+                    done,
+                )
+            else:
+                transitions = accumulator.add(
+                    stored_observation,
+                    action,
+                    train_reward,
+                    stored_next_observation,
+                    bool(terminated),
+                    bool(truncated),
+                )
+                if step == steps:
+                    transitions.extend(accumulator.flush())
+                for transition in transitions:
+                    replay.add(
+                        transition.observation,
+                        transition.action,
+                        transition.reward,
+                        transition.next_observation,
+                        transition.done,
+                        discount=transition.bootstrap_discount,
+                    )
             observation = next_observation
             episode_reward += float(reward)
             episode_shaped += float(train_reward)
@@ -1578,7 +1630,10 @@ def train_run(
             total_kills += kills_tmp
 
             if (
-                len(replay) >= max(batch_size, warmup_steps)
+                len(replay) >= batch_size
+                and (
+                    len(replay) >= warmup_steps if n_step == 1 else step >= warmup_steps
+                )
                 and step % update_every == 0
             ):
                 diagnostics_requested = _diagnostics_requested(
@@ -1591,12 +1646,10 @@ def train_run(
                 )
                 batch = (
                     replay.sample_packed(batch_size)
-                    if effective_profile == RGB_PROFILE
+                    if effective_profile != COLLISION_PROFILE
                     else replay.sample(batch_size)
                 )
-                update = agent.update(
-                    batch, diagnostics=diagnostics_requested
-                )
+                update = agent.update(batch, diagnostics=diagnostics_requested)
                 last_update_step = update.optimizer_step
                 if update.diagnostics_sampled:
                     last_diagnostic_optimizer_step = update.optimizer_step
@@ -1719,9 +1772,7 @@ def train_run(
                     "replay_size": len(replay),
                     "optimizer_step": last_update_step,
                     "global_optimizer_step": last_update_step,
-                    "segment_optimizer_step": (
-                        last_update_step - optimizer_step_start
-                    ),
+                    "segment_optimizer_step": (last_update_step - optimizer_step_start),
                     "reward_zero_share": mix["zero_share"],
                     "reward_mean": mix["mean"],
                     "reward_mean_nonzero": mix["mean_nonzero"],
@@ -1786,7 +1837,9 @@ def train_run(
                         observation_profile=effective_profile,
                         stack_size=stack_size,
                         run_id=run_id,
-                        target_sync_count=target_sync_count, source=source_provenance,
+                        n_step=n_step,
+                        target_sync_count=target_sync_count,
+                        source=source_provenance,
                     ),
                     snapshot_path,
                 )
@@ -1827,6 +1880,7 @@ def train_run(
                 observation_profile=effective_profile,
                 stack_size=stack_size,
                 run_id=run_id,
+                n_step=n_step,
                 target_sync_count=target_sync_count,
                 source=source_provenance,
             ),
@@ -1962,9 +2016,7 @@ def train_run(
             "dead_units": last_dead_units,
             "train_holdout_gap": train_holdout_gap,
             "target_sync_count": target_sync_count,
-            "segment_target_sync_count": (
-                target_sync_count - target_sync_count_start
-            ),
+            "segment_target_sync_count": (target_sync_count - target_sync_count_start),
             "diagnostic_sample_cadence": DIAGNOSTIC_SAMPLE_CADENCE,
             "diagnostic_sampled": last_diagnostic_optimizer_step is not None,
         }
@@ -2055,6 +2107,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--batch-size", type=_positive_int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--replay-capacity", type=_positive_int, default=None)
+    parser.add_argument("--n-step", type=int, choices=(1, 3), default=1)
     parser.add_argument(
         "--warmup-steps", type=_positive_int, default=DEFAULT_WARMUP_STEPS
     )
@@ -2103,6 +2156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         observation_profile=args.observation_profile,
         batch_size=args.batch_size,
         replay_capacity=args.replay_capacity,
+        n_step=args.n_step,
         warmup_steps=args.warmup_steps,
         update_every=args.update_every,
         target_sync_interval=args.target_sync_interval,

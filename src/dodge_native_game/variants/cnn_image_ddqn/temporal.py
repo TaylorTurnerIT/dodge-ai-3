@@ -10,6 +10,8 @@ import numpy as np
 from .image import COLLISION_IMAGE_SHAPE, FRAME_HEIGHT, FRAME_WIDTH
 
 TEMPORAL_FRAME_SHAPE: Final = (FRAME_HEIGHT, FRAME_WIDTH)
+NATIVE_GRAY_FRAME_SHAPE: Final = (1, 128, 128)
+NATIVE_RGB_FRAME_SHAPE: Final = (3, 128, 128)
 
 
 def _validate_frame(
@@ -20,8 +22,11 @@ def _validate_frame(
         raise ValueError(
             f"a temporal frame must have shape {shape}; got {value.shape}"
         )
-    if shape == (3, 128, 128) and value.dtype == np.uint8:
-        return value
+    if shape in (NATIVE_GRAY_FRAME_SHAPE, NATIVE_RGB_FRAME_SHAPE):
+        if value.dtype == np.uint8:
+            return value
+        if shape == NATIVE_GRAY_FRAME_SHAPE:
+            raise ValueError("a native grayscale frame must have dtype uint8")
     if value.dtype != np.float32:
         raise ValueError("a temporal frame must have dtype float32")
     if not np.isfinite(value).all() or np.any(value < 0.0) or np.any(value > 1.0):
@@ -39,8 +44,15 @@ class TemporalFrameStack:
             raise TypeError("stack_size must be an integer")
         if stack_size < 1:
             raise ValueError("stack_size must be at least 1")
-        if frame_shape not in ((1, 84, 84), (3, 128, 128)):
-            raise ValueError("frame_shape must be collision84 or native RGB128")
+        if frame_shape not in (
+            (1, 84, 84),
+            NATIVE_GRAY_FRAME_SHAPE,
+            NATIVE_RGB_FRAME_SHAPE,
+        ):
+            raise ValueError(
+                "frame_shape must be collision84, native grayscale128, "
+                "or native RGB128"
+            )
         self.frame_shape = frame_shape
         self._frames: deque[np.ndarray] = deque(maxlen=stack_size)
 
@@ -81,6 +93,10 @@ class TemporalFrameStack:
         return self._stack()
 
     def _stack(self) -> np.ndarray:
+        if self.frame_shape == NATIVE_GRAY_FRAME_SHAPE:
+            return np.stack(tuple(self._frames), axis=0).astype(
+                np.uint8, copy=True
+            )
         if self.frame_shape[0] == 3:
             return np.concatenate(tuple(self._frames), axis=0)
         return np.stack(tuple(self._frames), axis=0).astype(np.float32, copy=True)

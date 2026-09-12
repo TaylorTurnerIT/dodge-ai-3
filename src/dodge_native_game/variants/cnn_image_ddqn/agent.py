@@ -18,6 +18,7 @@ from .model import (
     to_float_observations,
     validate_observation_shape,
 )
+from .pixels import GRAY_PROFILE, PICO8_LUMA_PALETTE, PICO8_PALETTE, RGB_PROFILE
 from .replay import ReplayBatch
 
 if TYPE_CHECKING:
@@ -151,8 +152,15 @@ class DoubleDQNAgent:
         if np.any(batch.actions < 0) or np.any(batch.actions >= self.num_actions):
             raise ValueError("batch actions contain an out-of-range action")
         if isinstance(batch, PackedPixelReplayBatch):
-            observations = self._packed_observation_tensor(batch.observations)
-            next_observations = self._packed_observation_tensor(batch.next_observations)
+            observation_profile = getattr(
+                batch, "observation_profile", RGB_PROFILE
+            )
+            observations = self._packed_observation_tensor(
+                batch.observations, observation_profile=observation_profile
+            )
+            next_observations = self._packed_observation_tensor(
+                batch.next_observations, observation_profile=observation_profile
+            )
         else:
             observations, _ = self._observation_tensor(batch.observations)
             next_observations, _ = self._observation_tensor(batch.next_observations)
@@ -161,6 +169,25 @@ class DoubleDQNAgent:
             batch.rewards, dtype=torch.float32, device=self.device
         )
         dones = torch.as_tensor(batch.dones, dtype=torch.float32, device=self.device)
+        discounts = getattr(batch, "discounts", None)
+        if discounts is None:
+            bootstrap_discounts: torch.Tensor | float = self.gamma
+        else:
+            discounts_array = np.asarray(discounts)
+            if discounts_array.shape != (batch.size,):
+                raise ValueError("batch discounts must have shape (N,)")
+            if not np.issubdtype(discounts_array.dtype, np.number):
+                raise ValueError("batch discounts must be numeric")
+            discounts_array = np.asarray(discounts_array, dtype=np.float32)
+            if (
+                not np.isfinite(discounts_array).all()
+                or np.any(discounts_array < 0.0)
+                or np.any(discounts_array > 1.0)
+            ):
+                raise ValueError("batch discounts must be finite and between 0 and 1")
+            bootstrap_discounts = torch.as_tensor(
+                discounts_array, dtype=torch.float32, device=self.device
+            )
         if actions.ndim != 1 or actions.shape[0] != batch.size:
             raise ValueError("batch actions must have shape (N,)")
 
@@ -177,7 +204,7 @@ class DoubleDQNAgent:
                 self.target_network, next_observations
             )
             next_q_values = next_target_q_values.gather(1, next_actions).squeeze(1)
-            targets = rewards + self.gamma * (1.0 - dones) * next_q_values
+            targets = rewards + bootstrap_discounts * (1.0 - dones) * next_q_values
 
         loss = F.smooth_l1_loss(chosen_q_values, targets)
         self.optimizer.zero_grad(set_to_none=True)
@@ -295,24 +322,72 @@ class DoubleDQNAgent:
             single,
         )
 
-    def _packed_observation_tensor(self, observations: np.ndarray) -> torch.Tensor:
-        """Expand exact packed native colors on-device, not in CPU telemetry."""
-        from .pixels import PICO8_PALETTE
+    def _packed_observation_tensor(
+        self,
+        observations: np.ndarray,
+        *,
+        observation_profile: str = RGB_PROFILE,
+    ) -> torch.Tensor:
+        """Decode packed palette IDs on-device into the agent's input shape."""
 
-        if self.observation_shape[1:] != (128, 128):
-            raise ValueError("packed palette batches require native RGB128")
-        packed = torch.as_tensor(observations, dtype=torch.uint8, device=self.device)
-        indices = torch.stack((packed >> 4, packed & 15), dim=-1).flatten(-2)
-        palette = getattr(self, "_display_palette", None)
-        if palette is None:
-            palette = torch.tensor(PICO8_PALETTE, dtype=torch.float32,
-                                   device=self.device) / 255.0
-            self._display_palette = palette
-        rgb = palette[indices.long()]
-        batch_size, stack_size = observations.shape[:2]
-        return rgb.reshape(batch_size, stack_size, 128, 128, 3).permute(
-            0, 1, 4, 2, 3
-        ).reshape(batch_size, stack_size * 3, 128, 128)
+        packed_value = np.asarray(observations)
+        if packed_value.ndim != 3 or packed_value.dtype != np.uint8:
+            raise ValueError("packed observations must have shape (N, stack, bytes)")
+        if observation_profile not in (RGB_PROFILE, GRAY_PROFILE):
+            raise ValueError(
+                "packed observations require profile "
+                f"{RGB_PROFILE!r} or {GRAY_PROFILE!r}"
+            )
+        profile_is_rgb = observation_profile == RGB_PROFILE
+
+        height, width = self.observation_shape[1:]
+        if (height, width) != (128, 128):
+            raise ValueError("packed palette batches require fixed 128x128 frames")
+        expected_channels = (
+            3 * int(packed_value.shape[1])
+            if profile_is_rgb
+            else int(packed_value.shape[1])
+        )
+        if self.observation_shape[0] != expected_channels:
+            raise ValueError(
+                "packed observation profile does not match the agent shape: "
+                f"{observation_profile!r} -> "
+                f"{(expected_channels, height, width)} != "
+                f"{self.observation_shape}"
+            )
+        expected_bytes = height * width // 2
+        if height * width % 2 or packed_value.shape[2] != expected_bytes:
+            raise ValueError(
+                "packed observations do not match the agent spatial shape: "
+                f"expected {expected_bytes} bytes per frame, "
+                f"got {packed_value.shape[2]}"
+            )
+
+        packed = torch.as_tensor(packed_value, dtype=torch.uint8, device=self.device)
+        indices = torch.stack((packed >> 4, packed & 15), dim=-1).flatten(-2).long()
+        if profile_is_rgb:
+            palette = getattr(self, "_display_palette", None)
+            if palette is None:
+                palette = torch.tensor(
+                    PICO8_PALETTE, dtype=torch.float32, device=self.device
+                ) / 255.0
+                self._display_palette = palette
+            rgb = palette[indices]
+            batch_size, stack_size = packed_value.shape[:2]
+            return rgb.reshape(
+                batch_size, stack_size, height, width, 3
+            ).permute(0, 1, 4, 2, 3).reshape(
+                batch_size, stack_size * 3, height, width
+            )
+
+        luma = getattr(self, "_display_luma_palette", None)
+        if luma is None:
+            luma = torch.tensor(
+                PICO8_LUMA_PALETTE, dtype=torch.float32, device=self.device
+            ) / 255.0
+            self._display_luma_palette = luma
+        batch_size, stack_size = packed_value.shape[:2]
+        return luma[indices].reshape(batch_size, stack_size, height, width)
 
     @staticmethod
     def _validate_epsilon(epsilon: float) -> float:

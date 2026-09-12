@@ -16,7 +16,9 @@ from .image import (
 )
 from .pixels import (
     COLLISION_PROFILE,
+    GRAY_PROFILE,
     RGB_PROFILE,
+    native_gray_from_result,
     native_rgb_from_result,
     observation_shape,
 )
@@ -129,12 +131,12 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
         shape = observation_shape(observation_profile, stack_size)
         self.observation_profile = observation_profile
         self.action_space = spaces.Discrete(ACTION_COUNT)
-        rgb = observation_profile == RGB_PROFILE
+        native_pixels = observation_profile in (RGB_PROFILE, GRAY_PROFILE)
         self.observation_space = spaces.Box(
-            low=0 if rgb else np.float32(0.0),
-            high=255 if rgb else np.float32(1.0),
+            low=0 if native_pixels else np.float32(0.0),
+            high=255 if native_pixels else np.float32(1.0),
             shape=shape,
-            dtype=np.uint8 if rgb else np.float32,
+            dtype=np.uint8 if native_pixels else np.float32,
         )
         self._frames = TemporalFrameStack(
             stack_size, frame_shape=(shape[0] // stack_size, *shape[1:])
@@ -168,7 +170,7 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
         return NativeBatchEnvironment(
             step_frames=step_frames,
             full_state=False,
-            pixels=observation_profile == RGB_PROFILE,
+            pixels=observation_profile in (RGB_PROFILE, GRAY_PROFILE),
             board=False,
             difficulty=difficulty,
             patterns_enabled=patterns,
@@ -249,6 +251,8 @@ class CNNImageDDQNEnv(gym.Env[np.ndarray, int]):
     def _image(self, result: object) -> np.ndarray:
         if self.observation_profile == RGB_PROFILE:
             return native_rgb_from_result(result)
+        if self.observation_profile == GRAY_PROFILE:
+            return native_gray_from_result(result)
         return collision_image_from_result(result)
 
     def close(self) -> None:

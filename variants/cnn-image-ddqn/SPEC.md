@@ -25,6 +25,7 @@ C8|Watch Agent opens a separate read-only browser replay generated from a saved 
 native: `collision-image-v1` → deterministic grayscale collision raster
 native: `native-rgb-v1` → native 128×128 framebuffer, lossless PICO-8 palette → RGB; particles + HUD retained
 cli: `--observation-profile collision-image-v1|native-rgb-v1` → same profile in train/eval/checkpoint/replay; missing legacy metadata means collision only
+cli: `--observation-profile native-gray-v1` → fullnative128 luma uint8 stack; `--n-step 1|3` → collision return horizon; default1 unchanged
 env: `CollisionImageEnv` → Gymnasium `Env`, `Discrete(9)` → `Box(0,1,(N,84,84))`
 stack: `FrameStack` → exactly N newest native frames, default N=4
 model: `CNNQNetwork` → dueling Q-values, no softmax
@@ -124,6 +125,9 @@ V63|Expensive optimizer diagnostics sampled at logging cadence; unsampled update
 V64|Packed replay reconstructs exact chronological RGB stacks across identical consecutive images, terminal/reset padding + ring wrap; ≤2 newframe nodes pertransition; reference tests capacities1/2/7, stacks1/4/8, repeatedcolors + shortepisodes.
 V65|Training samples packed palette frames; palette expansion + normalization on training device, no CPU RGB minibatch expansion; decoded inputs and DDQN updates equal denseRGB reference; timings include device decode.
 V66|Routine telemetry promotion budget ≤5% added wall time vs minimal logging on matched GPU training workloads; ≥3 alternating paired trials, same device/config/seed/update count; report training-loop and all-in times separately; expensive explanation inference offline only; microbenchmarks alone cannot pass gate.
+V67|Three-step return sums gamma^i reward; bootstrap gamma^k at actual suffix length; terminals zero bootstrap, truncations flush but bootstrap; no cross-episode samples; n=1 behavior unchanged; native reward semantics unchanged.
+V68|Grayscale derives full native framebuffer via fixed integer luma (299R+587G+114B+500)//1000; uint8[N,128,128], no crop/resize/mask; packed palette replay exactluma +≤2GB at100k; RGB/collision defaults unchanged.
+V69|T4 branches freeze700gamepool, lr1e-4, warmup20k, epsilon500k, sync10000, update4, replay100k; compare nstep3/gray/learner43+44 at200k with10k snapshot; 10k explicitly untrained; fresh frozeneval base512,128episodes,4096decisioncap; active A100 untouched.
 
 §T
 id|status|task|cites
@@ -147,6 +151,9 @@ T16|x|Add full native RGB profile +128 CNN/replay shape support; gate exactpixel
 T17|~|Wire profile through CLI/train/eval/checkpoint; gate bounded CPU update/checkpoint/native rollout before remote launch; RGB inspector expansion deferred by user|V18,V27,V59,V60
 T18|~|Run bounded nativeRGB10k/200k/500k target1000vs10000 experiment on A/H Colab, collect artifacts + paired baseline report; depends T16,T17 gates|V48-V50,V61,V62
 T19|~|Remove per-update diagnostic transfers; sample at log cadence + benchmark overhead separately before remote promotion|V46,V63,V66
+T20|x|Add opt-in three-step collision returns + handcomputed terminal/truncation tests|V10,V11,V63,V67
+T21|x|Add fullnative grayscale profile + exact packed luma parity tests|V59,V60,V61,V68
+T22|~|Deploy bounded T4 screens nstep3, grayscale + learner43/44 replicas; collect before release; queue under quota|V48,V49,V69
 
 §B
 id|date|cause|fix
@@ -183,3 +190,6 @@ B30|2026-09-12|Packed replay draft reused frameID for identicalimage and erased 
 B31|2026-09-12|CPU screen measured packedRGBsample32 108.74ms vsdense18.25ms despite memorysaving|V65; retainpacked minibatch throughCPU sampling + devicepalette expansion; rerunperformancegate
 B32|2026-09-12|Integrated telemetry test missing blank line between absolute and relative imports|Ruff import fix; mechanical failure, no new invariant
 B33|2026-09-12|RGB campaign draft exceeded Ruff line limit|Wrap literals + comprehensions; mechanical failure, no new invariant
+B34|2026-09-12|T4 screen draft protocol literal exceeded Ruff line limit|Shorten literal; mechanical failure, no new invariant
+B35|2026-09-12|Grayscale decoder draft guessed profile names + palette fallback and rebuilt GPU palette perupdate|Require exact RGB/gray IDs + fixed integer-luma LUT + devicecache; V60,V63,V68
+B36|2026-09-12|Gray ring regression import exceeded configured Ruff layout|Format imports; mechanical failure, no new invariant
