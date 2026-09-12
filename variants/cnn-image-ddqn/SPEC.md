@@ -225,3 +225,4 @@ B41|2026-09-12|New vector boundary used constant `getattr`, rejected by Ruff B00
 B42|2026-09-12|Vector evaluation test imports were not Ruff-sorted|Sort local imports; mechanical lint failure, no new invariant
 B43|2026-09-12|Vector epsilon validation exceeded Ruff line limit|Wrap predicate; mechanical lint failure, no new invariant
 B44|2026-09-12|Loading eager Adam state overwrote fused backend flag; AMP resume failed first update|V82
+B45|2026-09-12|Eager Adam moments retained contiguous layout against channels-last params; fused resume failed first update|V82

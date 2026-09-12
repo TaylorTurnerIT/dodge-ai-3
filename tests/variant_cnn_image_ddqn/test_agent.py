@@ -213,3 +213,22 @@ def test_v82_optimizer_restore_retains_selected_backend_flags() -> None:
     agent.load_optimizer_state_dict(state)
     assert all(group["fused"] is True for group in agent.optimizer.param_groups)
     assert all(group["foreach"] is None for group in agent.optimizer.param_groups)
+
+
+def test_v82_optimizer_restore_matches_parameter_layout() -> None:
+    agent = DoubleDQNAgent(2)
+    parameter = next(
+        value for value in agent.online_network.parameters() if value.ndim == 4
+    )
+    parameter.data = parameter.data.contiguous(memory_format=torch.channels_last)
+    state = agent.optimizer.state_dict()
+    state["state"][0] = {
+        "step": torch.tensor(1.0),
+        "exp_avg": torch.zeros(parameter.shape),
+        "exp_avg_sq": torch.zeros(parameter.shape),
+    }
+    agent.learner_backend = "cuda-optimized"
+    agent.load_optimizer_state_dict(state)
+    restored = agent.optimizer.state[parameter]
+    assert restored["exp_avg"].stride() == parameter.stride()
+    assert restored["exp_avg_sq"].stride() == parameter.stride()

@@ -197,9 +197,7 @@ class DoubleDQNAgent:
         if np.any(batch.actions < 0) or np.any(batch.actions >= self.num_actions):
             raise ValueError("batch actions contain an out-of-range action")
         if isinstance(batch, PackedPixelReplayBatch):
-            observation_profile = getattr(
-                batch, "observation_profile", RGB_PROFILE
-            )
+            observation_profile = getattr(batch, "observation_profile", RGB_PROFILE)
             observations = self._packed_observation_tensor(
                 batch.observations, observation_profile=observation_profile
             )
@@ -210,9 +208,7 @@ class DoubleDQNAgent:
             observations, _ = self._observation_tensor(batch.observations)
             next_observations, _ = self._observation_tensor(batch.next_observations)
         actions = self._to_device(torch.from_numpy(batch.actions), dtype=torch.long)
-        rewards = self._to_device(
-            torch.from_numpy(batch.rewards), dtype=torch.float32
-        )
+        rewards = self._to_device(torch.from_numpy(batch.rewards), dtype=torch.float32)
         dones = self._to_device(torch.from_numpy(batch.dones), dtype=torch.float32)
         discounts = getattr(batch, "discounts", None)
         if discounts is None:
@@ -250,9 +246,7 @@ class DoubleDQNAgent:
                     self.target_network, next_observations
                 )
                 next_q_values = next_target_q_values.gather(1, next_actions).squeeze(1)
-                targets = (
-                    rewards + bootstrap_discounts * (1.0 - dones) * next_q_values
-                )
+                targets = rewards + bootstrap_discounts * (1.0 - dones) * next_q_values
 
             loss = F.smooth_l1_loss(chosen_q_values, targets)
         self.optimizer.zero_grad(set_to_none=True)
@@ -274,11 +268,17 @@ class DoubleDQNAgent:
         if not diagnostics:
             # Unsampled metrics are explicitly missing, never measured zeros.
             return DDQNUpdate(
-                loss=float("nan"), mean_q=float("nan"), mean_target=float("nan"),
-                pre_clip_grad_norm=float("nan"), batch_size=batch.size,
-                optimizer_step=self.optimizer_steps, td_error_mean=float("nan"),
-                td_error_std=float("nan"), target_std=float("nan"),
-                q_std=float("nan"), diagnostics_sampled=False,
+                loss=float("nan"),
+                mean_q=float("nan"),
+                mean_target=float("nan"),
+                pre_clip_grad_norm=float("nan"),
+                batch_size=batch.size,
+                optimizer_step=self.optimizer_steps,
+                td_error_mean=float("nan"),
+                td_error_std=float("nan"),
+                target_std=float("nan"),
+                q_std=float("nan"),
+                diagnostics_sampled=False,
             )
 
         with torch.no_grad():
@@ -286,13 +286,22 @@ class DoubleDQNAgent:
             zero = loss.detach().new_zeros(())
             # One transfer for the entire sampled diagnostic vector, not one
             # synchronization for every statistic on every optimizer update.
-            values = torch.stack((
-                loss.detach(), chosen_q_values.detach().mean(),
-                targets.detach().mean(), pre_clip_grad_norm.detach(),
-                td_errors.mean(), td_errors.std() if batch.size > 1 else zero,
-                targets.detach().std() if batch.size > 1 else zero,
-                chosen_q_values.detach().std() if batch.size > 1 else zero,
-            )).cpu().tolist()
+            values = (
+                torch.stack(
+                    (
+                        loss.detach(),
+                        chosen_q_values.detach().mean(),
+                        targets.detach().mean(),
+                        pre_clip_grad_norm.detach(),
+                        td_errors.mean(),
+                        td_errors.std() if batch.size > 1 else zero,
+                        targets.detach().std() if batch.size > 1 else zero,
+                        chosen_q_values.detach().std() if batch.size > 1 else zero,
+                    )
+                )
+                .cpu()
+                .tolist()
+            )
 
         return DDQNUpdate(
             loss=values[0],
@@ -315,6 +324,18 @@ class DoubleDQNAgent:
             for group in self.optimizer.param_groups:
                 group["fused"] = True
                 group["foreach"] = None
+                for parameter in group["params"]:
+                    parameter_state = self.optimizer.state.get(parameter, {})
+                    for key, value in tuple(parameter_state.items()):
+                        if (
+                            isinstance(value, torch.Tensor)
+                            and value.shape == parameter.shape
+                        ):
+                            restored = torch.empty_like(
+                                parameter, memory_format=torch.preserve_format
+                            )
+                            restored.copy_(value)
+                            parameter_state[key] = restored
 
     @torch.no_grad()
     def sync_target(self) -> None:
@@ -484,24 +505,28 @@ class DoubleDQNAgent:
         if profile_is_rgb:
             palette = getattr(self, "_display_palette", None)
             if palette is None:
-                palette = torch.tensor(
-                    PICO8_PALETTE, dtype=torch.float32, device=self.device
-                ) / 255.0
+                palette = (
+                    torch.tensor(PICO8_PALETTE, dtype=torch.float32, device=self.device)
+                    / 255.0
+                )
                 self._display_palette = palette
             rgb = palette[indices]
             batch_size, stack_size = packed_value.shape[:2]
-            result = rgb.reshape(
-                batch_size, stack_size, height, width, 3
-            ).permute(0, 1, 4, 2, 3).reshape(
-                batch_size, stack_size * 3, height, width
+            result = (
+                rgb.reshape(batch_size, stack_size, height, width, 3)
+                .permute(0, 1, 4, 2, 3)
+                .reshape(batch_size, stack_size * 3, height, width)
             )
             return self._formatted_observations(result)
 
         luma = getattr(self, "_display_luma_palette", None)
         if luma is None:
-            luma = torch.tensor(
-                PICO8_LUMA_PALETTE, dtype=torch.float32, device=self.device
-            ) / 255.0
+            luma = (
+                torch.tensor(
+                    PICO8_LUMA_PALETTE, dtype=torch.float32, device=self.device
+                )
+                / 255.0
+            )
             self._display_luma_palette = luma
         batch_size, stack_size = packed_value.shape[:2]
         result = luma[indices].reshape(batch_size, stack_size, height, width)
