@@ -1,0 +1,152 @@
+{
+  "benchmark": "ddqn-bounded-training-throughput-v1",
+  "device": "cuda",
+  "hardware": "Tesla T4",
+  "torch": "2.11.0+cu128",
+  "observation_profile": "native-rgb-v1",
+  "transitions_per_trial": 1024,
+  "warmup_transitions": 128,
+  "update_every_transitions": 4,
+  "repeats": 3,
+  "summary": {
+    "lanes1-serial-baseline": {
+      "mean_transitions_per_second": 266.5506367054459,
+      "p05_transitions_per_second": 214.6089849056483,
+      "mean_all_in_seconds": 6.036174035000006
+    },
+    "lanes8-parallel-baseline": {
+      "mean_transitions_per_second": 379.7737413537268,
+      "p05_transitions_per_second": 373.73780690926304,
+      "mean_all_in_seconds": 3.343850527666632
+    },
+    "lanes1-serial-cuda-optimized": {
+      "mean_transitions_per_second": 251.71362929683752,
+      "p05_transitions_per_second": 67.85599126841433,
+      "mean_all_in_seconds": 12.665508069000074
+    },
+    "lanes8-parallel-cuda-optimized": {
+      "mean_transitions_per_second": 399.44577253317976,
+      "p05_transitions_per_second": 305.20152452182805,
+      "mean_all_in_seconds": 3.232947129000005
+    }
+  },
+  "trials": {
+    "lanes1-serial-baseline": [
+      {
+        "repeat": 0,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 4.9145087650000505,
+        "all_in_seconds": 10.326940421000018,
+        "transitions_per_second": 208.36263581269438,
+        "updates_per_second": 45.782805720562735
+      },
+      {
+        "repeat": 1,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 3.7810236859999122,
+        "all_in_seconds": 4.351895991999982,
+        "transitions_per_second": 270.8261267422337,
+        "updates_per_second": 59.50769386426034
+      },
+      {
+        "repeat": 2,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 3.195375217999981,
+        "all_in_seconds": 3.429685692000021,
+        "transitions_per_second": 320.4631475614098,
+        "updates_per_second": 70.41426582159883
+      }
+    ],
+    "lanes8-parallel-baseline": [
+      {
+        "repeat": 0,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 2.745293327000013,
+        "all_in_seconds": 3.4506934379999166,
+        "transitions_per_second": 373.00203585858753,
+        "updates_per_second": 81.95845514470918
+      },
+      {
+        "repeat": 1,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 2.6531285130000697,
+        "all_in_seconds": 3.1193822090000367,
+        "transitions_per_second": 385.95944183725,
+        "updates_per_second": 84.80554141931763
+      },
+      {
+        "repeat": 2,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 2.6921881450000456,
+        "all_in_seconds": 3.4614759359999425,
+        "transitions_per_second": 380.3597463653428,
+        "updates_per_second": 83.57513958222864
+      }
+    ],
+    "lanes1-serial-cuda-optimized": [
+      {
+        "repeat": 0,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 26.717259680999973,
+        "all_in_seconds": 31.493642767000097,
+        "transitions_per_second": 38.327284018885344,
+        "updates_per_second": 8.421522367430862
+      },
+      {
+        "repeat": 1,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 2.6722390690000566,
+        "all_in_seconds": 3.127616104000026,
+        "transitions_per_second": 383.199247357452,
+        "updates_per_second": 84.19905337444014
+      },
+      {
+        "repeat": 2,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 3.0694122720000223,
+        "all_in_seconds": 3.3752653360000977,
+        "transitions_per_second": 333.6143565141752,
+        "updates_per_second": 73.30393575750921
+      }
+    ],
+    "lanes8-parallel-cuda-optimized": [
+      {
+        "repeat": 0,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 3.514398106000044,
+        "all_in_seconds": 3.8269714150000027,
+        "transitions_per_second": 291.37279531643,
+        "updates_per_second": 64.02234272089525
+      },
+      {
+        "repeat": 1,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 2.1453812810000272,
+        "all_in_seconds": 2.766496638000035,
+        "transitions_per_second": 477.30443491269887,
+        "updates_per_second": 104.87646274937231
+      },
+      {
+        "repeat": 2,
+        "transitions": 1024,
+        "optimizer_updates": 225,
+        "training_seconds": 2.3832793180000635,
+        "all_in_seconds": 3.105373333999978,
+        "transitions_per_second": 429.6600873704106,
+        "updates_per_second": 94.40773404135
+      }
+    ]
+  },
+  "limits": "Training throughput uses total native transitions as denominator. All-in time also includes setup, checkpoint, one-step inner/holdout evaluation, and counterfactual evaluation. This bounded benchmark does not measure policy quality or generalization."
+}

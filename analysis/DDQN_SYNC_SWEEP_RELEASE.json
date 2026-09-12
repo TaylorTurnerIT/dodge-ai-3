@@ -1,0 +1,22 @@
+{
+  "reference_run": "t4-nstep3s43boundary-200k-v1",
+  "treatment": "target_sync_interval in optimizer updates",
+  "intervals": [100, 1000, 2500, 5000, 10000],
+  "steps_per_run": 200000,
+  "seed": 43,
+  "training_seed_count": 700,
+  "reward_profile": "boundary-v1",
+  "observation_profile": "collision-image-v1",
+  "n_step": 3,
+  "lanes": {
+    "dodge-sync-1000-v1": [1000, 100, 10000],
+    "dodge-sync-2500-v1": [2500, 5000]
+  },
+  "hardware": "Two Tesla T4s; Colab rejected additional concurrent assignments",
+  "source_commit": "2f25c86",
+  "source_archive_sha256": "3f1a9785fbe509e1de1b0cc8e68a380e836a01fed5714d0711f92e12cab906be",
+  "launcher_override": "scripts/ddqn-t4-screen.py adds sync sweep treatments; launcher hash recorded remotely",
+  "collection": "Each lane has ddqn-colab-collect.py; release assignment only after all expected archives collected",
+  "dashboard": "Read-only artifact mirror; queued entries explicitly planned, replaced with remote artifacts on start",
+  "caveat": "Single learner seed screen; no claim of general reward optimality or multi-seed improvement"
+}

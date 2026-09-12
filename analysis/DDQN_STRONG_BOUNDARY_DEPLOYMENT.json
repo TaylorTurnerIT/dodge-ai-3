@@ -1,0 +1,8 @@
+{
+  "session": "dodge-strong-boundary-v1",
+  "endpoint": "gpu-t4-s-kkb-euw4c0-1r0hl6ts4m3ll",
+  "runs": [
+    "t4-boundary5-200k-v1",
+    "t4-boundary10-200k-v1"
+  ]
+}

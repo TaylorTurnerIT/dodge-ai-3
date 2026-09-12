@@ -1,0 +1,315 @@
+{
+  "run_id": "t4-nstep3s43boundary-200k-v1",
+  "checkpoint_sha256": "a1fdfb4f2cac35e65522ca5c56675e880c6da7c3e153d962c0ceaa4734c763a6",
+  "cap_decisions": 512,
+  "episodes_per_mode": 16,
+  "modes": {
+    "0.0": {
+      "episodes": [
+        {
+          "seed": 10512,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 32
+        },
+        {
+          "seed": 10513,
+          "survival_frames": 186,
+          "terminated": true,
+          "max_action_streak_decisions": 34
+        },
+        {
+          "seed": 10514,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 32
+        },
+        {
+          "seed": 10515,
+          "survival_frames": 173,
+          "terminated": true,
+          "max_action_streak_decisions": 31
+        },
+        {
+          "seed": 10516,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 32
+        },
+        {
+          "seed": 10517,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 31
+        },
+        {
+          "seed": 10518,
+          "survival_frames": 204,
+          "terminated": true,
+          "max_action_streak_decisions": 34
+        },
+        {
+          "seed": 10519,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 32
+        },
+        {
+          "seed": 10520,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 32
+        },
+        {
+          "seed": 10521,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 32
+        },
+        {
+          "seed": 10522,
+          "survival_frames": 174,
+          "terminated": true,
+          "max_action_streak_decisions": 33
+        },
+        {
+          "seed": 10523,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 27
+        },
+        {
+          "seed": 10524,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 32
+        },
+        {
+          "seed": 10525,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 31
+        },
+        {
+          "seed": 10526,
+          "survival_frames": 169,
+          "terminated": true,
+          "max_action_streak_decisions": 27
+        },
+        {
+          "seed": 10527,
+          "survival_frames": 183,
+          "terminated": true,
+          "max_action_streak_decisions": 37
+        }
+      ],
+      "groups": {
+        "ordinary": {
+          "samples": 513,
+          "td_error_mean": 0.6749482726300047,
+          "abs_td_error_mean": 0.6749482726300047,
+          "smooth_l1_saturated_mean": 0.0,
+          "return_error_mean": -38.56447082870435,
+          "boundary_cost_mean": 0.027524366471734892,
+          "repeated_mean": 0.8440545808966862
+        },
+        "near_death": {
+          "samples": 144,
+          "td_error_mean": 0.7114579272557593,
+          "abs_td_error_mean": 0.7114579272557593,
+          "smooth_l1_saturated_mean": 0.0,
+          "return_error_mean": 29.11026274652622,
+          "boundary_cost_mean": 0.03992767807510164,
+          "repeated_mean": 0.9444444444444444
+        },
+        "terminal_window": {
+          "samples": 48,
+          "td_error_mean": 51.811808136603894,
+          "abs_td_error_mean": 51.811808136603894,
+          "smooth_l1_saturated_mean": 1.0,
+          "return_error_mean": 51.811808136603894,
+          "boundary_cost_mean": 0.02702634223012183,
+          "repeated_mean": 0.3958333333333333
+        }
+      },
+      "mean_frames": 173.6875,
+      "censored_episodes": 0,
+      "greedy_action_counts": [
+        0,
+        651,
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        50
+      ],
+      "actual_action_counts": [
+        0,
+        651,
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        50
+      ]
+    },
+    "0.64": {
+      "episodes": [
+        {
+          "seed": 10512,
+          "survival_frames": 323,
+          "terminated": true,
+          "max_action_streak_decisions": 2
+        },
+        {
+          "seed": 10513,
+          "survival_frames": 273,
+          "terminated": true,
+          "max_action_streak_decisions": 3
+        },
+        {
+          "seed": 10514,
+          "survival_frames": 249,
+          "terminated": true,
+          "max_action_streak_decisions": 13
+        },
+        {
+          "seed": 10515,
+          "survival_frames": 185,
+          "terminated": true,
+          "max_action_streak_decisions": 3
+        },
+        {
+          "seed": 10516,
+          "survival_frames": 148,
+          "terminated": true,
+          "max_action_streak_decisions": 3
+        },
+        {
+          "seed": 10517,
+          "survival_frames": 239,
+          "terminated": true,
+          "max_action_streak_decisions": 3
+        },
+        {
+          "seed": 10518,
+          "survival_frames": 155,
+          "terminated": true,
+          "max_action_streak_decisions": 5
+        },
+        {
+          "seed": 10519,
+          "survival_frames": 621,
+          "terminated": true,
+          "max_action_streak_decisions": 3
+        },
+        {
+          "seed": 10520,
+          "survival_frames": 158,
+          "terminated": true,
+          "max_action_streak_decisions": 2
+        },
+        {
+          "seed": 10521,
+          "survival_frames": 319,
+          "terminated": true,
+          "max_action_streak_decisions": 3
+        },
+        {
+          "seed": 10522,
+          "survival_frames": 228,
+          "terminated": true,
+          "max_action_streak_decisions": 3
+        },
+        {
+          "seed": 10523,
+          "survival_frames": 348,
+          "terminated": true,
+          "max_action_streak_decisions": 3
+        },
+        {
+          "seed": 10524,
+          "survival_frames": 194,
+          "terminated": true,
+          "max_action_streak_decisions": 4
+        },
+        {
+          "seed": 10525,
+          "survival_frames": 502,
+          "terminated": true,
+          "max_action_streak_decisions": 4
+        },
+        {
+          "seed": 10526,
+          "survival_frames": 232,
+          "terminated": true,
+          "max_action_streak_decisions": 3
+        },
+        {
+          "seed": 10527,
+          "survival_frames": 333,
+          "terminated": true,
+          "max_action_streak_decisions": 3
+        }
+      ],
+      "groups": {
+        "ordinary": {
+          "samples": 941,
+          "td_error_mean": 0.28463332451478873,
+          "abs_td_error_mean": 0.4715900369467863,
+          "smooth_l1_saturated_mean": 0.06801275239107332,
+          "return_error_mean": -89.21186076607546,
+          "boundary_cost_mean": 0.016560955232131833,
+          "repeated_mean": 0.1944739638682253
+        },
+        "near_death": {
+          "samples": 144,
+          "td_error_mean": 0.36759565185083465,
+          "abs_td_error_mean": 0.5733362361300913,
+          "smooth_l1_saturated_mean": 0.14583333333333334,
+          "return_error_mean": 27.620216752677866,
+          "boundary_cost_mean": 0.05318733373863829,
+          "repeated_mean": 0.1597222222222222
+        },
+        "terminal_window": {
+          "samples": 48,
+          "td_error_mean": 50.04776483749428,
+          "abs_td_error_mean": 50.04776483749428,
+          "smooth_l1_saturated_mean": 1.0,
+          "return_error_mean": 50.04776483749428,
+          "boundary_cost_mean": 0.06298328558603923,
+          "repeated_mean": 0.0625
+        }
+      },
+      "mean_frames": 281.6875,
+      "censored_episodes": 0,
+      "greedy_action_counts": [
+        83,
+        765,
+        8,
+        20,
+        0,
+        0,
+        5,
+        0,
+        252
+      ],
+      "actual_action_counts": [
+        111,
+        378,
+        79,
+        92,
+        68,
+        67,
+        93,
+        86,
+        159
+      ]
+    }
+  },
+  "limits": "Frozen-checkpoint inner-seed probes, not training replay samples. Near death means <=12 decisions remaining. Return errors exclude capped episodes. No causal claim."
+}

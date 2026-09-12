@@ -1,0 +1,30 @@
+{
+  "rgb700-ts1000-500k-s42-v1": {
+    "unique_sampled_updates": 496,
+    "median_pre_clip_norm": 607.0208740234375,
+    "max_pre_clip_norm": 1641.4002685546875,
+    "sampled_share_above_10": 0.9798387096774194,
+    "median_clip_multiplier": 0.016473914709769583
+  },
+  "rgb700-ts10000-500k-s42-v1": {
+    "unique_sampled_updates": 496,
+    "median_pre_clip_norm": 18.545291900634766,
+    "max_pre_clip_norm": 414.4827575683594,
+    "sampled_share_above_10": 0.6633064516129032,
+    "median_clip_multiplier": 0.5392207519656038
+  },
+  "t4-gray-200k-v1": {
+    "unique_sampled_updates": 181,
+    "median_pre_clip_norm": 5.571552753448486,
+    "max_pre_clip_norm": 145.5619354248047,
+    "sampled_share_above_10": 0.27624309392265195,
+    "median_clip_multiplier": 1.0
+  },
+  "t4-nstep3-200k-v1": {
+    "unique_sampled_updates": 181,
+    "median_pre_clip_norm": 30.757038116455078,
+    "max_pre_clip_norm": 282.6795349121094,
+    "sampled_share_above_10": 0.7513812154696132,
+    "median_clip_multiplier": 0.32512882537675675
+  }
+}

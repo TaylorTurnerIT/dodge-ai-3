@@ -390,7 +390,12 @@
     .toolbar .grow { min-width: 1rem; }
     .meta-line { gap: 4px 9px; font-size: 12px; line-height: 1.2; }
     .toolbar select, .toolbar button { min-height: 30px; padding-top: 4px; padding-bottom: 4px; }
-    #loading, #trace-content { flex: 1 1 auto; min-height: 0; }
+    #loading, #trace-content, #metrics-content { flex: 1 1 auto; min-height: 0; }
+    #metrics-content { overflow: auto; }
+    .metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .metric-plot { min-width: 0; padding: 10px; }
+    .metric-plot svg { display: block; width: 100%; height: clamp(95px, 21vh, 230px); }
+    .metric-plot p { font-size: 12px; color: var(--muted); }
     #trace-content { display: flex; flex-direction: column; overflow: hidden; }
 
     .mobile-view-tabs { display: none; }
@@ -428,7 +433,7 @@
     .replay-layout #events { max-height: 52px !important; font-size: 12px !important; }
     .replay-layout > article:first-child details:not([open]) > :not(summary) { display: none; }
     .replay-layout > article:nth-child(2) .q-bars { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 4px; }
-    .replay-layout > article:nth-child(2) .q-row { grid-template-columns: 25px minmax(0, 1fr) 48px; gap: 3px; padding: 3px 2px; }
+    .replay-layout > article:nth-child(2) .q-row { grid-template-columns: 60px minmax(0, 1fr) 48px; gap: 3px; padding: 3px 2px; }
     .replay-layout > article:nth-child(2) .q-row .q-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .replay-layout > article:nth-child(2) .value-note,
     .replay-layout > article:nth-child(2) .event-note { max-height: 2.6em; overflow: auto; }
@@ -575,6 +580,18 @@
     <div id="notice" class="notice" hidden></div>
 
     <section class="card toolbar" aria-label="Trace selection">
+      <div class="field">
+        <label for="run-select">Run</label>
+        <select id="run-select" aria-label="Training run" style="max-width:min(52vw,650px)"></select>
+        <select id="run-sort" aria-label="Sort runs"><option value="latest">Newest first</option><option value="best">Mean frames: best first</option></select>
+        <button id="run-best" type="button">Best</button>
+        <button id="run-latest" type="button">Latest</button>
+      </div>
+      <div id="run-summary" class="meta-line" aria-live="polite"></div>
+      <div class="field">
+        <button id="view-metrics" type="button">Training metrics</button>
+        <button id="view-replay" type="button">Replay &amp; explanations</button>
+      </div>
       <div id="episode-picker" class="field" hidden>
         <label for="episode-select">Episode</label>
         <select id="episode-select" aria-label="Replay episode"></select>
@@ -591,6 +608,17 @@
       </div>
     </section>
 
+    <section id="metrics-content" hidden aria-label="Training metrics">
+      <div id="metrics-status" class="card" style="padding:8px;margin-bottom:8px" aria-live="polite">Loading metrics…</div>
+      <div class="metric-grid">
+        <article id="metric-survival" class="card metric-plot"></article>
+        <article id="metric-loss" class="card metric-plot"></article>
+        <article id="metric-gradient" class="card metric-plot"></article>
+        <article id="metric-extra" class="card metric-plot"></article>
+      </div>
+      <label>Diagnostic <select id="metric-select"><option value="td_error_std">TD error standard deviation</option><option value="q_mean">Mean Q</option><option value="q_std">Q standard deviation</option><option value="dead_units">Dead-unit share</option><option value="epsilon">Exploration epsilon</option><option value="action_balance">Exploratory action balance</option><option value="throughput">Training throughput</option></select></label>
+      <p id="metrics-note" class="chart-note"></p>
+    </section>
     <section id="loading" class="card loading">Loading trace…</section>
     <div id="trace-content" hidden>
       <nav class="mobile-view-tabs" role="tablist" aria-label="Dashboard view">
@@ -940,6 +968,9 @@
       return clamp(Math.round(number), 0, ACTION_COUNT - 1);
     }
 
+    const ACTION_NAMES = ["Stay", "Left", "Right", "Up", "Down", "Up-left", "Up-right", "Down-left", "Down-right"];
+    function actionLabel(action) { return ACTION_NAMES[action] || `A${action}`; }
+
     function runnerUpAction(frame) {
       const chosen = actionNumber(frame && frame.action, 0);
       const ranked = safeArray(frame && frame.q).map((value, action) => ({ action, value: finiteNumber(value) }))
@@ -961,6 +992,8 @@
 
     function endpoint(path, params = {}) {
       const query = new URLSearchParams();
+      const run = new URLSearchParams(window.location.search).get("run");
+      if (run) query.set("run", run);
       Object.entries(params).forEach(([key, value]) => {
         if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
       });
@@ -1382,11 +1415,11 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = `q-row${action === chosen ? " selected" : ""}`;
-      button.setAttribute("aria-label", `Action ${action}, Q ${formatNumber(value)}`);
-      button.title = `Use action ${action} as the alternative for the explanation`;
+      button.setAttribute("aria-label", `${actionLabel(action)} (A${action}), Q ${formatNumber(value)}`);
+      button.title = `${actionLabel(action)} (A${action}): use as the alternative for the explanation`;
       const name = document.createElement("span");
       name.className = "q-name";
-      name.textContent = `A${action}${action === chosen ? " · chosen" : ""}`;
+      name.textContent = `${actionLabel(action)}${action === chosen ? " · chosen" : ""}`;
       const track = document.createElement("span");
       track.className = "q-track";
       const zero = document.createElement("span");
@@ -1428,7 +1461,7 @@
       for (let action = 0; action < ACTION_COUNT; action++) {
         const option = document.createElement("option");
         option.value = String(action);
-        option.textContent = `A${action}${action === chosen ? " · chosen" : ""}`;
+        option.textContent = `${actionLabel(action)} (A${action})${action === chosen ? " · chosen" : ""}`;
         option.disabled = action === chosen;
         select.appendChild(option);
       }
@@ -1448,7 +1481,7 @@
           requestExplanation();
         }));
       }
-      $("stat-action").textContent = frame && frame.action === null ? "—" : `A${chosen}`;
+      $("stat-action").textContent = frame && frame.action === null ? "—" : `${actionLabel(chosen)} (A${chosen})`;
       const value = frame ? frame.value : null;
       $("state-value").textContent = value === null ? "n/a" : formatNumber(value);
       $("selected-q").textContent = formatNumber(q[chosen]);
@@ -1457,7 +1490,7 @@
         : "V is the scalar value head returned for this pre-action input.";
       const advantages = frame && Array.isArray(frame.centered_advantage) ? frame.centered_advantage : [];
       $("advantage-line").textContent = advantages.length
-        ? `Centered advantage: ${advantages.map((item, index) => `A${index} ${formatSigned(item)}`).join(" · ")}`
+        ? `Centered advantage: ${advantages.map((item, index) => `${actionLabel(index)} ${formatSigned(item)}`).join(" · ")}`
         : "Centered advantages unavailable for this trace.";
     }
 
@@ -1898,7 +1931,7 @@
       $("map-scale-min").textContent = `−${formatNumber(state.mapScale, 3)}`;
       $("map-scale-max").textContent = `+${formatNumber(state.mapScale, 3)}`;
       const mapName = state.mapMode === "value" ? "Signed value" : "Signed decision";
-      $("map-caption").innerHTML = `<strong>${mapName}</strong> · ${matrix.rows}×${matrix.cols} · original − perturbed · chosen A${actionNumber(explain.chosen, actionNumber(currentFrame().action, 0))} vs alternative A${resolvedAlternative(explain)}`;
+      $("map-caption").innerHTML = `<strong>${mapName}</strong> · ${matrix.rows}×${matrix.cols} · original − perturbed · chosen ${actionLabel(actionNumber(explain.chosen, actionNumber(currentFrame().action, 0)))} vs alternative ${actionLabel(resolvedAlternative(explain))}`;
       const positions = safeArray(explain.grid_positions);
       $("grid-position-note").textContent = positions.length ? `${positions.length} grid position${positions.length === 1 ? "" : "s"} supplied by the explanation API; markers are guide points only.` : "No grid positions supplied.";
     }
@@ -1932,8 +1965,8 @@
 
     function renderAblation(explain) {
       const ablation = explain && explain.ablation && typeof explain.ablation === "object" ? explain.ablation : null;
-      $("ablation-chosen").textContent = explain && explain.chosen !== undefined ? `A${actionNumber(explain.chosen)}` : "—";
-      $("ablation-alternative").textContent = explain && explain.alternative !== undefined ? `A${actionNumber(explain.alternative)}` : "—";
+      $("ablation-chosen").textContent = explain && explain.chosen !== undefined ? actionLabel(actionNumber(explain.chosen)) : "—";
+      $("ablation-alternative").textContent = explain && explain.alternative !== undefined ? actionLabel(actionNumber(explain.alternative)) : "—";
       $("ablation-gap").textContent = ablation && finiteNumber(ablation.gap_delta) !== null ? formatSigned(ablation.gap_delta) : "—";
       $("bias-difference").textContent = finiteNumber(explain && explain.bias_difference) === null ? "—" : formatSigned(explain.bias_difference);
       const q = ablation ? safeArray(ablation.q).slice(0, ACTION_COUNT).map((value) => finiteNumber(value)) : [];
@@ -1949,7 +1982,7 @@
       q.forEach((value, action) => {
         const row = document.createElement("div");
         row.className = `ablation-row${action === chosen ? " chosen" : action === alternative ? " alternative" : ""}`;
-        const name = document.createElement("span"); name.textContent = `A${action}`;
+        const name = document.createElement("span"); name.textContent = actionLabel(action);
         const track = document.createElement("span"); track.className = "ablation-track";
         const fill = document.createElement("span"); fill.className = "ablation-fill";
         fill.style.width = value === null ? "0%" : `${clamp(((value - min) / range) * 100, 2, 100)}%`;
@@ -2155,7 +2188,7 @@
       const requested = queryEpisode();
       let episodes = [];
       try {
-        episodes = normaliseEpisodes(await fetchJSON("/api/episodes"));
+        episodes = normaliseEpisodes(await fetchJSON(endpoint("/api/episodes")));
       } catch (error) {
         // Single-trace servers are supported; don't make an optional picker
         // failure block the replay.
@@ -2333,7 +2366,120 @@
       event.preventDefault(); togglePlayback();
     });
 
-    loadEpisodesThenTrace().catch((error) => showError(error.message));
+    let runRows = [];
+    let runMetrics = null;
+    let dashboardView = "metrics";
+    function metricPlot(id, title, key, note) {
+      const host = $(id);
+      const heading = document.createElement("h3"); heading.textContent = title;
+      const caption = document.createElement("p"); caption.textContent = note;
+      host.replaceChildren(heading);
+      const rows = runMetrics ? runMetrics.rows : [];
+      const points = rows.filter(row => Number.isFinite(row[key]));
+      if (!points.length) {
+        caption.textContent = "Not recorded in this run.";
+        host.appendChild(caption); return;
+      }
+      const values = points.map(row => row[key]);
+      const low = Math.min(...values), high = Math.max(...values);
+      const start = rows[0].step, end = rows[rows.length - 1].step;
+      let path = "", gap = true;
+      for (const row of rows) {
+        if (!Number.isFinite(row[key])) { gap = true; continue; }
+        const x = 55 + 520 * (row.step - start) / (end - start || 1);
+        const y = 155 - 130 * (row[key] - low) / (high - low || 1);
+        path += `${gap ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)} `; gap = false;
+      }
+      const plot = document.createElement("div");
+      plot.innerHTML = `<svg viewBox="0 0 620 185" role="img" aria-label="${title}"><path d="M55,15 V155 H585" stroke="#59625f" fill="none"/><path d="${path}" stroke="#54d7ee" fill="none" stroke-width="1.5"/><g fill="#9ca4a0" font-size="12"><text x="2" y="25">${formatNumber(high, 2)}</text><text x="2" y="155">${formatNumber(low, 2)}</text><text x="55" y="177">${start}</text><text x="430" y="177">${end} steps</text></g></svg>`;
+      host.appendChild(plot); host.appendChild(caption);
+    }
+    function renderMetrics() {
+      if (!runMetrics) return;
+      const selected = runRows.find(row => row.id === runMetrics.run_id);
+      const mean = selected && selected.mean_frames;
+      $("metrics-status").textContent = `Holdout mean: ${mean == null ? "pending" : mean.toFixed(2) + " frames"} · Inner mean: ${runMetrics.inner_mean_frames == null ? "not recorded" : runMetrics.inner_mean_frames.toFixed(2) + " frames"} · Gate: ${runMetrics.gate || "pending"} ${runMetrics.gate_reasons.join(", ")} · ${selected ? selected.reward_profile : ""}. A gate pass is not proof of a good policy.`;
+      metricPlot("metric-survival", "Training episode survival (mean frames)", "training_mean_frames", "Completed episodes in each logging window; exploratory training, not holdout evaluation.");
+      metricPlot("metric-loss", "Training loss", "loss", "Recorded loss at logging steps; not an episode score.");
+      metricPlot("metric-gradient", "Gradient norm before clipping", "pre_clip_grad_norm", "Sparse diagnostic samples. Missing measurements are gaps, not zeros.");
+      const metric = $("metric-select").value || "td_error_std";
+      metricPlot("metric-extra", metric.replaceAll("_", " "), metric, "Recorded diagnostic samples; use the selector below to change this chart.");
+      $("metrics-note").textContent = `${runMetrics.rows.length} plotted / ${runMetrics.source_rows} recorded rows${runMetrics.tail_only ? " · Only the last 8 MiB are shown" : ""}. At most 1,000 evenly sampled rows; brief spikes may be omitted. Metrics refresh every 30 seconds without running model inference.`;
+    }
+    async function refreshMetrics() {
+      runMetrics = await fetchJSON(endpoint("/api/metrics"));
+      renderMetrics();
+    }
+    async function selectDashboardView(view) {
+      dashboardView = view;
+      setPlaying(false);
+      $("metrics-content").hidden = view !== "metrics";
+      $("trace-content").hidden = true;
+      $("loading").hidden = true;
+      $("episode-picker").hidden = view !== "replay";
+      $("view-metrics").classList.toggle("active", view === "metrics");
+      $("view-replay").classList.toggle("active", view === "replay");
+      if (view === "metrics") {
+        try { await refreshMetrics(); setStatus("Metrics", "ready"); }
+        catch (error) { $("metrics-status").textContent = `Metrics unavailable: ${error.message}`; }
+      } else {
+        const row = runRows.find(row => row.id === new URLSearchParams(location.search).get("run"));
+        if (row && row.replay_unavailable) {
+          $("loading").hidden = false;
+          $("loading").textContent = row.replay_unavailable + " Use Training metrics to view its results.";
+        } else if (state.trace) $("trace-content").hidden = false;
+        else await loadEpisodesThenTrace();
+        if (dashboardView !== "replay") { setPlaying(false); $("trace-content").hidden = true; $("loading").hidden = true; }
+      }
+    }
+    $("view-metrics").addEventListener("click", () => selectDashboardView("metrics"));
+    $("view-replay").addEventListener("click", () => selectDashboardView("replay"));
+    $("metric-select").addEventListener("change", renderMetrics);
+    function renderRuns() {
+      const selected = new URLSearchParams(location.search).get("run");
+      const rows = [...runRows];
+      if ($("run-sort").value === "best") rows.sort((a,b) => (b.mean_frames ?? -1) - (a.mean_frames ?? -1));
+      $("run-select").replaceChildren(...rows.map(row => {
+        const option = document.createElement("option");
+        option.value = row.id;
+        option.textContent = `${row.best ? "[Best] " : ""}${row.latest ? "[Latest] " : ""}${row.id} · ${row.mean_frames === null ? "awaiting evaluation" : row.mean_frames.toFixed(1) + " mean frames"} · ${row.state}`;
+        return option;
+      }));
+      if (selected) $("run-select").value = selected;
+      const row = rows.find(row => row.id === selected);
+      if (row) $("run-summary").textContent = `${row.step.toLocaleString()} / ${row.budget.toLocaleString()} steps · ${row.profile} · Holdout mean ${row.mean_frames === null ? "pending" : row.mean_frames.toFixed(2) + " frames"} · ${row.episodes ?? "—"} episodes · cap ${row.eval_cap ?? "—"} decisions · censored ${row.censored_share == null ? "unknown" : (100 * row.censored_share).toFixed(1) + "%"}. Best is a recorded mean, not a matched-protocol comparison. Smoke/preflight runs excluded.`;
+      return row;
+    }
+    $("run-sort").addEventListener("change", renderRuns);
+    $("run-select").addEventListener("change", event => {
+      const url = new URL(location.href);
+      url.searchParams.set("run", event.target.value);
+      url.searchParams.delete("episode");
+      location.assign(url);
+    });
+    for (const label of ["best", "latest"]) $("run-" + label).addEventListener("click", () => {
+      const row = runRows.find(row => row[label]);
+      if (!row) return;
+      const url = new URL(location.href);
+      url.searchParams.set("run", row.id);
+      url.searchParams.delete("episode");
+      location.assign(url);
+    });
+    async function startDashboard() {
+      runRows = await fetchJSON("/api/runs");
+      if (!new URLSearchParams(location.search).has("run") && runRows.length) {
+        const url = new URL(location.href);
+        url.searchParams.set("run", (runRows.find(row => row.best) || runRows[0]).id);
+        history.replaceState(null, "", url);
+      }
+      const row = renderRuns();
+      await selectDashboardView(row && row.replay_unavailable ? "metrics" : "replay");
+      window.setInterval(async () => {
+        try { runRows = await fetchJSON("/api/runs"); renderRuns(); if (dashboardView === "metrics") await refreshMetrics(); }
+        catch (_) { $("run-summary").textContent += " · Catalog refresh failed; showing last snapshot."; }
+      }, 30000);
+    }
+    startDashboard().catch((error) => showError(error.message));
   </script>
 </body>
 </html>

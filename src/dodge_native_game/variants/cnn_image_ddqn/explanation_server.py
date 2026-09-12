@@ -11,11 +11,12 @@ import time
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import numpy as np
 import torch
 
+from .explanation_catalog import catalog, metrics_for_run
 from .explanation_trace import ExplanationTrace, generate_explanation_trace
 from .replay_server import tailscale_ipv4
 from .run_replay import resolve_run_replay_config, select_comparison_episodes
@@ -181,9 +182,36 @@ class ExplanationService:
 class ExplanationHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], service: ExplanationService):
+    def __init__(
+        self,
+        address: tuple[str, int],
+        service: ExplanationService,
+        run_dir: Path | None = None,
+    ):
         self.service = service
+        self.run_dir = run_dir.resolve() if run_dir else None
+        self.run_lock = threading.Lock()
+        self.selected_id = self.run_dir.name if self.run_dir else None
+        self.selected_service = service
         super().__init__(address, ExplanationHandler)
+
+    def for_run(self, run_id: str | None) -> ExplanationService:
+        if run_id is None or self.run_dir is None:
+            return self.service
+        with self.run_lock:
+            if run_id == self.selected_id:
+                return self.selected_service
+        rows = catalog(self.run_dir.parent)
+        row = next((row for row in rows if row["id"] == run_id), None)
+        if row is None:
+            raise ValueError("Unknown or excluded run")
+        if row["replay_unavailable"]:
+            raise ValueError(row["replay_unavailable"])
+        with self.run_lock:
+            if run_id != self.selected_id:
+                self.selected_service = service_for_run(self.run_dir.parent / run_id)
+                self.selected_id = run_id
+            return self.selected_service
 
 
 class ExplanationHandler(BaseHTTPRequestHandler):
@@ -195,17 +223,40 @@ class ExplanationHandler(BaseHTTPRequestHandler):
         episode = query.get("episode", [next(iter(self.server.service.traces))])[0]
         parts = request.path.strip("/").split("/")
         try:
-            service = self.server.service
             if request.path == "/":
                 self.send_payload(
                     Path(__file__).with_name("explain.html").read_bytes(),
                     "text/html; charset=utf-8",
                 )
                 return
+            if request.path == "/api/runs":
+                rows = (
+                    catalog(self.server.run_dir.parent) if self.server.run_dir else []
+                )
+                self.send_payload(
+                    json.dumps(rows, allow_nan=False).encode(), "application/json"
+                )
+                return
+            run_id = query.get("run", [None])[0]
+            if request.path == "/api/metrics":
+                if not self.server.run_dir or not run_id:
+                    raise ValueError("Run required")
+                result = metrics_for_run(self.server.run_dir.parent, run_id)
+                self.send_payload(
+                    json.dumps(result, allow_nan=False).encode(), "application/json"
+                )
+                return
+            service = self.server.for_run(run_id)
             if request.path == "/api/episodes":
                 result = service.episodes()
             elif request.path == "/api/trace":
                 result = service.metadata(episode)
+                if run_id:
+                    suffix = "?" + urlencode({"run": run_id})
+                    for frame in result["frames"]:
+                        frame["game_url"] += suffix
+                    if result["final_game_url"]:
+                        result["final_game_url"] += suffix
             elif parts[:2] == ["api", "final-game"] and len(parts) == 3:
                 body = service.trace(parts[2]).final_game_png
                 if body is None:
@@ -244,7 +295,7 @@ class ExplanationHandler(BaseHTTPRequestHandler):
             )
         except BlockingIOError as error:
             self.send_error(429, str(error))
-        except (KeyError, IndexError, ValueError) as error:
+        except (KeyError, IndexError, ValueError, OSError) as error:
             self.send_error(400, str(error))
 
     def send_payload(self, body: bytes, content_type: str) -> None:
@@ -345,7 +396,7 @@ def main() -> None:
     if next(first_model.parameters()).device.type == "cpu":
         torch.backends.nnpack.set_flags(False)
     host = args.host or tailscale_ipv4() or "127.0.0.1"
-    server = ExplanationHTTPServer((host, args.port), service)
+    server = ExplanationHTTPServer((host, args.port), service, args.run_dir)
     print(f"Explanation replay: http://{host}:{server.server_port}/", flush=True)
     try:
         server.serve_forever()

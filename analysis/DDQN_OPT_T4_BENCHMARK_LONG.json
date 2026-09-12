@@ -1,0 +1,84 @@
+{
+  "benchmark": "ddqn-bounded-training-throughput-v1",
+  "device": "cuda",
+  "hardware": "Tesla T4",
+  "torch": "2.11.0+cu128",
+  "observation_profile": "native-rgb-v1",
+  "transitions_per_trial": 4096,
+  "warmup_transitions": 512,
+  "update_every_transitions": 4,
+  "repeats": 3,
+  "summary": {
+    "lanes8-parallel-baseline": {
+      "mean_transitions_per_second": 362.1834133496018,
+      "p05_transitions_per_second": 349.22478862501896,
+      "mean_all_in_seconds": 11.990896426333356
+    },
+    "lanes8-parallel-cuda-optimized": {
+      "mean_transitions_per_second": 385.36680069720745,
+      "p05_transitions_per_second": 272.7997108352165,
+      "mean_all_in_seconds": 12.211979290999997
+    }
+  },
+  "trials": {
+    "lanes8-parallel-baseline": [
+      {
+        "repeat": 0,
+        "transitions": 4096,
+        "optimizer_updates": 897,
+        "training_seconds": 11.795964132999984,
+        "all_in_seconds": 13.17414136800005,
+        "transitions_per_second": 347.23740711801344,
+        "updates_per_second": 76.04295756466261
+      },
+      {
+        "repeat": 1,
+        "transitions": 4096,
+        "optimizer_updates": 897,
+        "training_seconds": 11.157381611999995,
+        "all_in_seconds": 11.472392151999998,
+        "transitions_per_second": 367.1112221880685,
+        "updates_per_second": 80.3952066168695
+      },
+      {
+        "repeat": 2,
+        "transitions": 4096,
+        "optimizer_updates": 897,
+        "training_seconds": 11.004788485000063,
+        "all_in_seconds": 11.326155759000017,
+        "transitions_per_second": 372.2016107427236,
+        "updates_per_second": 81.50997188384352
+      }
+    ],
+    "lanes8-parallel-cuda-optimized": [
+      {
+        "repeat": 0,
+        "transitions": 4096,
+        "optimizer_updates": 897,
+        "training_seconds": 16.15640684799996,
+        "all_in_seconds": 17.846736257999964,
+        "transitions_per_second": 253.52171671184757,
+        "updates_per_second": 55.51977048108576
+      },
+      {
+        "repeat": 1,
+        "transitions": 4096,
+        "optimizer_updates": 897,
+        "training_seconds": 8.977002464999941,
+        "all_in_seconds": 9.365057431999958,
+        "transitions_per_second": 456.27702743423794,
+        "updates_per_second": 99.9219955098905
+      },
+      {
+        "repeat": 2,
+        "transitions": 4096,
+        "optimizer_updates": 897,
+        "training_seconds": 9.177649078999934,
+        "all_in_seconds": 9.424144183000067,
+        "transitions_per_second": 446.3016579455369,
+        "updates_per_second": 97.73744804129555
+      }
+    ]
+  },
+  "limits": "Training throughput uses total native transitions as denominator. All-in time also includes setup, checkpoint, one-step inner/holdout evaluation, and counterfactual evaluation. This bounded benchmark does not measure policy quality or generalization."
+}

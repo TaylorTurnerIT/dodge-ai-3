@@ -74,6 +74,15 @@ vm.runInContext(`
   assert.equal(finiteNumber(undefined),null);
   assert.equal(finiteNumber(''),null);
   assert.equal(finiteNumber(0),0);
+  assert.equal(actionLabel(1), 'Left');
+  assert.equal(actionLabel(3), 'Up');
+  assert.equal(actionLabel(6), 'Up-right');
+  runMetrics = {run_id:'rgb',rows:[{step:1000,loss:2},{step:2000,loss:1}],source_rows:2,gate_reasons:[]};
+  metricPlot('metric-loss','Training loss','loss','Recorded loss');
+  assert.equal(document.getElementById('metric-loss').children[0].textContent, 'Training loss');
+  assert.ok(document.getElementById('metric-loss').children[1].innerHTML.includes('<svg'));
+  metricPlot('metric-gradient','Gradient','pre_clip_grad_norm','Sparse');
+  assert.equal(document.getElementById('metric-gradient').children[1].textContent, 'Not recorded in this run.');
   const trace=normaliseTrace({step_frames:4,frames:[
     {index:0,action:0,q:[9,8,7,6,5,4,3,2,1],value:null,input_base64:packed,
      input_shape:[4,84,84],native_frame:0,reward:4,events:{death:false,collision:true}},

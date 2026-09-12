@@ -14,6 +14,25 @@ from pathlib import Path
 
 
 def treatment(name: str) -> dict:
+    if name in ("boundary5", "boundary10"):
+        result = treatment("nstep3s43boundary")
+        result["reward_profile"] = f"{name}-v1"
+        return result
+    sync_choices = {
+        f"boundarysync{value}": value for value in (100, 1000, 2500, 5000, 10000)
+    }
+    if name in sync_choices:
+        return dict(
+            **treatment("nstep3s43boundary"),
+            target_sync_interval=sync_choices[name],
+        )
+    if name == "nstep3s43boundary":
+        return dict(
+            seed=43,
+            observation_profile="collision-image-v1",
+            n_step=3,
+            reward_profile="boundary-v1",
+        )
     reward_names = {
         "rgbcontrol": "survival-v1",
         "rgbdeath": "death-v1",
@@ -57,6 +76,7 @@ def worker(name: str, history: Path, smoke: bool) -> None:
     if "T4" not in gpu:
         raise RuntimeError(f"T4 required, got {gpu}")
     config = treatment(name)
+    sync_interval = config.pop("target_sync_interval", 10000)
     horizon = config.pop("n_step")
     # Do not require new return support for unchanged baseline replicas.
     if horizon != 1:
@@ -74,7 +94,7 @@ def worker(name: str, history: Path, smoke: bool) -> None:
         learning_rate=1e-4,
         warmup_steps=8 if smoke else 20000,
         update_every=4,
-        target_sync_interval=2 if smoke else 10000,
+        target_sync_interval=2 if smoke else sync_interval,
         epsilon_decay_steps=500000,
         device="cuda",
         shaping=False,
@@ -169,6 +189,14 @@ def main() -> None:
             "rep44",
             "nstep3",
             "nstep3s43",
+            "nstep3s43boundary",
+            "boundary5",
+            "boundary10",
+            "boundarysync100",
+            "boundarysync1000",
+            "boundarysync2500",
+            "boundarysync5000",
+            "boundarysync10000",
             "nstep3s44",
             "gray",
             "rgbcontrol",

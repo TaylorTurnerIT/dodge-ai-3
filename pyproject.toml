@@ -66,8 +66,6 @@ select = [
 "src/dodge_native_game/variants/cnn_image_ddqn/telemetry.py" = ["E501", "I001", "B905"]
 "src/dodge_native_game/variants/cnn_image_ddqn/rewards.py" = ["E501", "I001"]
 "src/dodge_native_game/variants/cnn_image_ddqn/replay_server.py" = ["E501"]
-# Browser mirror builds HTML/SVG strings inline; wrapping them buys nothing.
-"scripts/web-dashboard.py" = ["E501"]
 
 [tool.uv.sources]
 dodge-native = { path = "native/crates/dodge-python" }
