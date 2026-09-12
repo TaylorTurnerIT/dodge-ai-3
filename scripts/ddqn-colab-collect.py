@@ -25,7 +25,7 @@ def main() -> None:
     parser.add_argument("--remote-history", default="content/seed-history")
     parser.add_argument("--collect-failure", action="store_true")
     args = parser.parse_args()
-    state.auth_provider = AuthProvider.ADC
+    state.auth_provider = AuthProvider.OAUTH2
     expected = set(
         args.run_id or [f"seedpool-{pool}-500k-s42-v1" for pool in (700, 5000)]
     )

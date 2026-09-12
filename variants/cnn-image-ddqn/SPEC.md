@@ -226,3 +226,6 @@ B42|2026-09-12|Vector evaluation test imports were not Ruff-sorted|Sort local im
 B43|2026-09-12|Vector epsilon validation exceeded Ruff line limit|Wrap predicate; mechanical lint failure, no new invariant
 B44|2026-09-12|Loading eager Adam state overwrote fused backend flag; AMP resume failed first update|V82
 B45|2026-09-12|Eager Adam moments retained contiguous layout against channels-last params; fused resume failed first update|V82
+B46|2026-09-12|Quality-ablation launcher imports were not Ruff-sorted|Format imports; mechanical lint failure, no new invariant
+B47|2026-09-12|Colab executed the post-queue watcher as a notebook cell where `__file__` is undefined|Spawn the uploaded watcher by its explicit remote path; deployment harness failure, no new invariant
+B48|2026-09-12|Artifact workers forced ADC while the replacement T4 session was created under the CLI OAuth session store, so the active endpoint was invisible|Use the CLI session's OAuth provider; external credential-context mismatch, no new invariant
