@@ -307,6 +307,15 @@ class DoubleDQNAgent:
             q_std=values[7],
         )
 
+    def load_optimizer_state_dict(self, state: dict) -> None:
+        """Restore Adam state while retaining the selected execution backend."""
+
+        self.optimizer.load_state_dict(state)
+        if self.learner_backend == "cuda-optimized":
+            for group in self.optimizer.param_groups:
+                group["fused"] = True
+                group["foreach"] = None
+
     @torch.no_grad()
     def sync_target(self) -> None:
         """Hard-copy online parameters into the target network."""

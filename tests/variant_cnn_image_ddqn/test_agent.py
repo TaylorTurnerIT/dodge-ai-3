@@ -201,3 +201,15 @@ def test_cpu_backend_disables_unavailable_nnpack_probe() -> None:
 def test_cuda_learner_backend_rejects_cpu_device() -> None:
     with pytest.raises(ValueError, match="CUDA learner"):
         DoubleDQNAgent(2, learner_backend="cuda-optimized")
+
+
+def test_v82_optimizer_restore_retains_selected_backend_flags() -> None:
+    agent = DoubleDQNAgent(2, network_factory=_BiasQNetwork)
+    state = agent.optimizer.state_dict()
+    for group in state["param_groups"]:
+        group["fused"] = None
+        group["foreach"] = True
+    agent.learner_backend = "cuda-optimized"
+    agent.load_optimizer_state_dict(state)
+    assert all(group["fused"] is True for group in agent.optimizer.param_groups)
+    assert all(group["foreach"] is None for group in agent.optimizer.param_groups)

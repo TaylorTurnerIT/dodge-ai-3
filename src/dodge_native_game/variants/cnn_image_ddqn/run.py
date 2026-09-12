@@ -632,7 +632,7 @@ def _load_checkpoint(
         agent.target_network.eval()
     optimizer = payload.get("optimizer")
     if optimizer is not None:
-        agent.optimizer.load_state_dict(optimizer)
+        agent.load_optimizer_state_dict(optimizer)
     grad_scaler = payload.get("grad_scaler")
     if isinstance(grad_scaler, dict) and agent._amp_enabled:
         agent._grad_scaler.load_state_dict(grad_scaler)

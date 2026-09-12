@@ -143,6 +143,7 @@ V78|Batched evaluation freezes inactive native lanes + preserves seed order, rew
 V79|Learner backend explicit in config/checkpoint context; CUDA-only modes rejectCPU; AMP unscales before gradclip; fusedAdam/channels-last/compile/nonblocking transfer never alter eager checkpoint keys; baseline behavior unchanged.
 V80|Training benchmark reports native transitions/s + optimizerupdates/s with explicit training/all-in denominators, matched config/seed, alternating order, ≥3 trials; CPU result ! GPU claim; performance ! learning quality.
 V81|Multi-lane nstep owns one accumulator/lane; terminal/truncation/final-segment flush emits each transition once, preserves gamma^k suffix, never crosses lane or episode.
+V82|Resume eager Adam checkpoint into CUDA backend → restore moments/counters while retaining selected backend optimizer flags; first resumed update succeeds before long-run release.
 
 §T
 id|status|task|cites
@@ -176,6 +177,7 @@ T26|x|Remove redundant action/eval inference + native-pixel replay conversion/co
 T27|x|Add active full-native batch boundary, multi-lane temporal collector + stream-safe packed replay, exact transition accounting, and batched frozen evaluation|V5,V6,V12,V15,V31,V43,V48,V59,V77,V78
 T28|x|Add explicit AMP/compiled fused CUDA learner backend + matched bounded training benchmark; retain eager baseline + artifact compatibility|V13,V18,V42,V63,V66,V79,V80
 T29|x|Extend multi-lane collector to independent three-step returns + flush every lane at bounded segment end|V67,V77,V81
+T30|x|Migrate eager optimizer checkpoint state into optimized CUDA resume + gate first resumed update|V42,V79,V82
 
 §B
 id|date|cause|fix
@@ -222,3 +224,4 @@ B40|2026-09-12|GPU preflight hit overlapping hazards; native Death events repeat
 B41|2026-09-12|New vector boundary used constant `getattr`, rejected by Ruff B009|Use direct typed attributes; mechanical lint failure, no new invariant
 B42|2026-09-12|Vector evaluation test imports were not Ruff-sorted|Sort local imports; mechanical lint failure, no new invariant
 B43|2026-09-12|Vector epsilon validation exceeded Ruff line limit|Wrap predicate; mechanical lint failure, no new invariant
+B44|2026-09-12|Loading eager Adam state overwrote fused backend flag; AMP resume failed first update|V82
