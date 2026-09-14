@@ -1,3 +1,5 @@
+Latest result: [practice overfit diagnostic](PRACTICE-CORPUS.md), D3/D4 complete with negative dynamics evidence. Persistence beat prediction on train and validation. Next: matched training/evaluation mode audit; controllers remain deferred.
+
 Practice corpus bridge: [contract](PRACTICE-CORPUS.md), SPEC §D; D1 implementation → D2 bounded import verification → separately scoped D3 training. [Reading the diagnostic panels](DIAGNOSTICS.md).
 
 Scripted practice: [scripted practice and goal generation](SCRIPTED-PRACTICE.md). Both player and enemies selected; G1/G2 complete; goal-seeking controller design remains deferred.

@@ -190,8 +190,8 @@ V41|Practice generation separate from corpus ingestion/model training. Immortal 
 D1|accepted|implementation|Import explicit train/validation practice recordings into existing bounded corpus; no generation or optimizer|G2|Parent review; exact NPZ bytes, hashes, split/terminal/provenance tests; full Python regression
 D2|accepted|collection verification|Freeze D1; generate one validation recording and import with existing train recording|D1|<=256 new native decisions, both splits load; source/array hashes agree; no model updates
 D3a|accepted|implementation|Explicit practice overfit envelope, frozen-corpus T4 launch, one-step controls|D2|Focused/full Python tests; source parity unchanged; no run until code frozen
-D3|active|training|Practice-only overfit diagnostic|D3a|Fresh reference LeWM,512 updates,batch8,seed42,float32,T4; frozen21-transition D2 corpus; no corpus growth
-D4|unopened|diagnostic fitting/evaluation|Frozen decoder and prediction controls|D3|256 decoder updates,batch8; all train/validation windows; checkpoint stable; no scientific P4/P6 acceptance
+D3|accepted|training|Practice-only overfit diagnostic|D3a|Fresh reference LeWM,512 updates,batch8,seed42,float32,T4; frozen21-transition D2 corpus; no corpus growth
+D4|accepted|diagnostic fitting/evaluation|Frozen decoder and prediction controls|D3|256 decoder updates,batch8; all train/validation windows; checkpoint stable; no scientific P4/P6 acceptance
 I.practice_dataset|CLI `python -m dodge_native_game.variants.pixel_repr_ddqn.practice_dataset --output PATH --train PATH [PATH...] --validation PATH [PATH...]`; explicit existing captures; new output only.
 V42|Practice import preserves episode bytes and original manifest hashes; validates source schema/config/cadence/action trace/count/end flags and NPZ payload. Reject path escapes, incomplete/tampered inputs, duplicate seeds or identical episode bytes across splits, mixed invulnerability and >256 transitions. Both splits need history3 windows; short episodes retained without fabricated windows.
 V43|Practice provenance and goals remain metadata, never learner inputs. Import performs no native steps or optimization. Publish validated corpus atomically; failure leaves no destination. Scripted enemy future instructions unobserved by learner; no claim that arbitrary unseen path turns are predictable.
@@ -256,7 +256,7 @@ T47|✓|D1: practice corpus importer and boundary/provenance checks|V1-V3,V39,V4
 T48|✓|D2: frozen importer and real practice corpus verification|V14,V42,V43
 
 T49|✓|D3a: practice overfit envelope, frozen corpus launch and dynamics checks|V14,V20,V44,V45
-T50|~|D3/D4: bounded T4 overfit and frozen evaluation|V14,V20,V44,V45
+T50|✓|D3/D4: bounded T4 overfit and frozen evaluation|V14,V20,V44,V45
 
 §B
 id|date|cause|fix
@@ -287,3 +287,5 @@ B19|2026-09-14|Importer/tests first Ruff check found import ordering and long li
 B20|2026-09-14|Practice envelope first Ruff check found long error message and worker import ordering|Wrap literal and organize imports; existing V18 sufficient
 
 B21|2026-09-14|Dynamics test expected extra latent dimension; evaluator lacked explicit RNG isolation|Correct shape; fork CPU/device RNG, reject nonfinite metrics; V45 sufficient
+
+D.result|D3/D4 execution complete; negative dynamics evidence: prediction/persistence MSE ratio16.1043 train,10.8561 validation. Wrong actions slightly better. No controller opening or training extension; matched train/eval normalization diagnostic next.

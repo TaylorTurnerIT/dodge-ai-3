@@ -41,3 +41,18 @@ User continuation authorizes D3a implementation → D3 training → D4 diagnosti
 Launch after D3a closes: `python3 variants/pixel-repr-ddqn/scripts/colab_mvp.py --run-id lewm-practice-overfit-20260914-v1 --practice-dataset history/dodge/gymnasium/pixel-repr-ddqn-practice/d2-validation-20260914/corpus`.
 
 D3a evidence: parent reviewed Luna evaluator, protocol guards and launcher;303 Python tests passed in63.94s; Ruff and whitespace checks pass. Source frozen before D3; reference numerical tests retained.
+
+## D3/D4 result — negative dynamics evidence
+
+Run `lewm-practice-overfit-20260914-v1`; source commit `8e57241`;303 local Python tests and84 remote variant tests passed; legacy32-step CUDA smoke completed. Tesla T4, Torch2.11.0+cu128, CUDA12.8;512 model updates in194.24s;256 separate frozen decoder updates; peak allocated1,877,840,384 bytes. Session released after artifact retrieval. Dashboard checked at1280×720/1366×768: four full square images, no scroll or JavaScript errors.
+
+| Split | Windows | Prediction MSE | Persistence MSE | Ratio | Wrong-action MSE |
+|---|---|---|---|---|---|
+| Train | 11 | 2.658956 | 0.165108 | 16.1043 | 2.594770 |
+| Validation | 6 | 3.798710 | 0.349914 | 10.8561 | 3.731472 |
+
+Ratios above1 favour persistence. Wrong actions slightly improve error; numeric action sensitivity is nonzero but useful action conditioning is not demonstrated. Final sampled training prediction loss0.004987 differs sharply from inference errors. This is not a matched comparison: training averages three predicted positions with minibatch BatchNorm and predictor dropout; evaluation scores final position with running statistics and dropout disabled. Source review confirms upstream also uses BatchNorm projectors and attached targets. A matched mode/position audit is needed before attributing failure to normalization or the architecture. No inference-time recalibration or checkpoint mutation performed.
+
+Qualitative validation snapshots: background recovered; faint object traces; predicted reconstruction noisy and missing distinct actor shapes.32×32 decoder and limited fitting prevent a representation-absence conclusion. Feature spread increased, but that did not establish useful dynamics. P4/P6 scientific acceptance and all controllers remain unopened; no automatic training extension.
+
+Artifacts: `history/dodge/gymnasium/pixel-repr-ddqn/lewm-practice-overfit-20260914-v1/` (`dynamics.json`, `decoder_metrics.jsonl`, checkpoints, visualizations, environment). Source/results archives: corresponding `pixel-repr-ddqn-jobs` directory. Dataset hash unchanged `e8476999274c7ae43d20ae03ecb4c8e37dcdb32202585ff585ae735f7b2abcee`; checkpoint SHA256 `9aa1c17b3b897272baf78617a399a2fc50ae28f8981563cf1a515a06306abf9a`; source archive SHA256 `0a9e08f70919c60f7747ee963e3e1c8ca29e0e341a2edb18af164b6e1c0e4d0a`. Checkpoint hash agrees across training report, decoder snapshots and dynamics evaluation. Six fixed validation snapshots at model step512, decoder step256.
