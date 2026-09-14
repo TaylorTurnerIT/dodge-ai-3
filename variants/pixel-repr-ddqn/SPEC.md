@@ -175,6 +175,11 @@ S0|complete|dashboard sizing|Keep four-panel layout, show full aspect ratio|Brow
 S1|complete|implementation|Native rules/snapshot extension, TOML presets/loader and collector plumbing|Native invariants + baseline parity + Python schema tests
 S2|complete|verification|Bounded configured collection and artifact audit|Scenario config/hash preserved; no world-model training required
 
+§G.script — requested extension, design pending
+G.script1|Author bounded practice trajectories and capture reached goals as native-rendered frames/clips. Script coordinates and progress remain outside learner inputs. Actor scope ? player/enemies/both; [contract and proposed gates](kit/SCRIPTED-PRACTICE.md).
+G.script2|Preserve terminal transition; no death-to-reset windows. Later controller termination handling separate from LeWM representation objective. Moving-goal objective requires explicit Dodge adaptation of paper §3.2.
+G.script3|G0 contract → G1 implementation → G2 bounded collection → G3 later controller design. No script implementation or additional training opened by this note.
+
 §T
 id|status|task|cites
 ---|---|---|---

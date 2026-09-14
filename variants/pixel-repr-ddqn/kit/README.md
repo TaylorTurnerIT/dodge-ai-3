@@ -1,3 +1,5 @@
+Next requested extension: [scripted practice and goal generation](SCRIPTED-PRACTICE.md). Actor scope awaiting clarification; design only.
+
 Current change: [scenario delivery](SCENARIOS.md), SPEC §S. Square-image dashboard fix first, then native configuration support, then bounded collection verification. Model training remains separate.
 
 # Current execution: LeWM MVP
