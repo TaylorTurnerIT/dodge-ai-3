@@ -1,3 +1,5 @@
+Practice corpus bridge: [contract](PRACTICE-CORPUS.md), SPEC §D; D1 implementation → D2 bounded import verification → separately scoped D3 training. [Reading the diagnostic panels](DIAGNOSTICS.md).
+
 Scripted practice: [scripted practice and goal generation](SCRIPTED-PRACTICE.md). Both player and enemies selected; G1/G2 complete; goal-seeking controller design remains deferred.
 
 Current change: [scenario delivery](SCENARIOS.md), SPEC §S. Square-image dashboard fix first, then native configuration support, then bounded collection verification. Model training remains separate.

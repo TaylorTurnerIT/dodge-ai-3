@@ -175,7 +175,7 @@ S0|complete|dashboard sizing|Keep four-panel layout, show full aspect ratio|Brow
 S1|complete|implementation|Native rules/snapshot extension, TOML presets/loader and collector plumbing|Native invariants + baseline parity + Python schema tests
 S2|complete|verification|Bounded configured collection and artifact audit|Scenario config/hash preserved; no world-model training required
 
-§G.script — requested extension, design pending
+§G.script — scripted practice delivery
 G.script1|Author bounded practice trajectories and capture reached goals as native-rendered frames/clips. Script coordinates and progress remain outside learner inputs. Actor scope: both player and enemies; [contract and proposed gates](kit/SCRIPTED-PRACTICE.md).
 G.script2|Preserve terminal transition; no death-to-reset windows. Later controller termination handling separate from LeWM representation objective. Moving-goal objective requires explicit Dodge adaptation of paper §3.2.
 G.script3|G0 contract → G1 implementation → G2 bounded collection → G3 later controller design. User selected both actors; G0 reviewed, G1/G2 complete; G3 controller design deferred. No model training.
@@ -185,6 +185,14 @@ V38|Scripted square enemies remain in native game/render/collision state; static
 V39|Practice stops on death, script completion or bounded timeout; death takes precedence over a coincident waypoint timeout. Keep death outcome, never reset across a trajectory. Goal valid only on live successful script completion; captured motion clip ordered and source-hashed.
 V40|Default native modes0-2 retain behavior/wire compatibility. Practice authoring <=256 decisions,4 frames/action,<=64 commands,<=32 enemies,<=64 path segments/actor. Validate native inputs independently of Python.
 V41|Practice generation separate from corpus ingestion/model training. Immortal collision outcomes and lethal collision outcomes have different dynamics; configuration provenance retained, no automatic mixed training.
+
+§D — practice corpus bridge
+D1|accepted|implementation|Import explicit train/validation practice recordings into existing bounded corpus; no generation or optimizer|G2|Parent review; exact NPZ bytes, hashes, split/terminal/provenance tests; full Python regression
+D2|accepted|collection verification|Freeze D1; generate one validation recording and import with existing train recording|D1|<=256 new native decisions, both splits load; source/array hashes agree; no model updates
+D3|deferred|training|Practice-only LeWM screen|D2 plus separately frozen training protocol|Colab T4 only; no automatic scientific P4/P6 acceptance
+I.practice_dataset|CLI `python -m dodge_native_game.variants.pixel_repr_ddqn.practice_dataset --output PATH --train PATH [PATH...] --validation PATH [PATH...]`; explicit existing captures; new output only.
+V42|Practice import preserves episode bytes and original manifest hashes; validates source schema/config/cadence/action trace/count/end flags and NPZ payload. Reject path escapes, incomplete/tampered inputs, duplicate seeds or identical episode bytes across splits, mixed invulnerability and >256 transitions. Both splits need history3 windows; short episodes retained without fabricated windows.
+V43|Practice provenance and goals remain metadata, never learner inputs. Import performs no native steps or optimization. Publish validated corpus atomically; failure leaves no destination. Scripted enemy future instructions unobserved by learner; no claim that arbitrary unseen path turns are predictable.
 
 §T
 id|status|task|cites
@@ -239,6 +247,9 @@ T44|✓|G1: native player/action and enemy/path practice driver|V37-V40
 T45|✓|G1: strict practice config, replay/goal artifact generator|V37-V41
 T46|✓|G2: bounded replay, goal and terminal verification|V37-V41
 
+T47|✓|D1: practice corpus importer and boundary/provenance checks|V1-V3,V39,V41-V43
+T48|✓|D2: frozen importer and real practice corpus verification|V14,V42,V43
+
 §B
 id|date|cause|fix
 ---|---|---|---
@@ -262,3 +273,5 @@ B15|2026-09-14|Local stopping-position driver could not settle fixture96,80 at f
 B16|2026-09-14|Parent review found coincident death and waypoint budget expiry could report both terminal and script failure|Death takes precedence; native regression uses fatal final-budget MoveTo, V39 sufficient
 B17|2026-09-14|Generator review found live script completion lacked truncation and direct action dataclass accepted booleans|Separate game termination from collection stop; reject boolean action indices, V39/V40 sufficient
 B18|2026-09-14|Initial practice test import formatting failed Ruff|Organize imports and format authored files; V18 sufficient
+
+B19|2026-09-14|Importer/tests first Ruff check found import ordering and long lines|Format authored files; existing V18 sufficient; subsequent Ruff clean
