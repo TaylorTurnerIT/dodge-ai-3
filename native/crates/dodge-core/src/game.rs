@@ -246,7 +246,7 @@ impl NativeGame {
     pub fn new(config: NativeConfig) -> Self {
         let mut rng = PicoRng::new(config.seed);
         let patterns = crate::patterns::init_patterns(&mut rng);
-        Self {
+        let mut game = Self {
             rng,
             config,
             lifecycle: LifecycleState::new(),
@@ -293,7 +293,9 @@ impl NativeGame {
             settings: SettingsState::new(config),
             highscores: config.highscores,
             frame_audio: Vec::new(),
-        }
+        };
+        game.apply_permanent_pattern();
+        game
     }
 
     pub fn reset(&mut self) -> Snapshot {
@@ -349,6 +351,7 @@ impl NativeGame {
         self.transition_render_y = -128;
         self.transition_from = Mode::Menu;
         self.frame_audio.clear();
+        self.apply_permanent_pattern();
     }
 
     /// Rebuild a native instance at the exact logical and render boundary held
@@ -363,6 +366,7 @@ impl NativeGame {
         rng.restore(state.rng)?;
         let config = NativeConfig {
             seed: state.seed,
+            scenario: state.scenario,
             difficulty: state.settings.difficulty,
             patterns_enabled: state.patterns_enabled,
             powerups_enabled: state.powerups_enabled,
@@ -760,6 +764,7 @@ impl NativeGame {
     pub(crate) fn full_state(&self) -> FullState {
         FullState {
             seed: self.config.seed,
+            scenario: self.config.scenario,
             lifecycle: self.lifecycle,
             input: self.input,
             rng: self.rng.checkpoint(),
@@ -1002,6 +1007,7 @@ impl NativeGame {
             pattern.counter = counter;
             pattern.probability = adjusted.add(PicoFixed::from_int(2));
         }
+        self.apply_permanent_pattern();
     }
 
     fn refresh_enemy_stats(&mut self) {
@@ -1115,6 +1121,9 @@ impl NativeGame {
     }
 
     fn update_fyou(&mut self, events: &mut Vec<FrameEvent>) {
+        if self.config.scenario.enemy_mode == 1 {
+            return;
+        }
         let in_center = self
             .player
             .x
@@ -1151,6 +1160,9 @@ impl NativeGame {
     }
 
     fn add_corner_enemies(&mut self, events: &mut Vec<FrameEvent>) {
+        if self.config.scenario.enemy_mode == 1 {
+            return;
+        }
         for spawn in self.spawns.clone() {
             self.enemies
                 .push(EnemyState::normal(spawn.x, spawn.y, self.enemy_max_size));
@@ -1159,7 +1171,7 @@ impl NativeGame {
     }
 
     fn collision_check(&mut self, events: &mut Vec<FrameEvent>) {
-        if self.lifecycle.dead || !self.should_collide {
+        if self.lifecycle.dead || !self.should_collide || self.config.scenario.invulnerable {
             return;
         }
         let mut index = 0;
@@ -1233,7 +1245,7 @@ impl NativeGame {
     }
 
     fn player_would_die_now(&self) -> bool {
-        if self.lifecycle.dead || !self.should_collide {
+        if self.lifecycle.dead || !self.should_collide || self.config.scenario.invulnerable {
             return false;
         }
         for enemy in &self.enemies {
@@ -1417,6 +1429,9 @@ impl NativeGame {
     }
 
     fn spawn_enemies(&mut self, events: &mut Vec<FrameEvent>) {
+        if self.config.scenario.enemy_mode == 1 {
+            return;
+        }
         self.enemy_timer = self.enemy_timer.add(PicoFixed::ONE);
         let spawn_multiplier = self
             .active_pattern
@@ -1452,6 +1467,9 @@ impl NativeGame {
     }
 
     fn random_personality(&mut self) -> i8 {
+        if self.config.scenario.enemy_mode == 2 {
+            return 0;
+        }
         let total = self
             .enemy_stats
             .iter()
@@ -1846,7 +1864,34 @@ impl NativeGame {
             pico_lerp(self.bounce_cap_moving, curve.moving_target, moving_step);
     }
 
+    fn apply_permanent_pattern(&mut self) {
+        let id = self.config.scenario.permanent_pattern;
+        if id == 0 {
+            return;
+        }
+        let Some(index) = self.patterns.iter().position(|pattern| pattern.id == id) else {
+            return;
+        };
+        let pattern = &mut self.patterns[index];
+        pattern.pattern_type = 0;
+        pattern.special = PicoFixed::ZERO;
+        for rect in &mut pattern.rects {
+            rect.shown = true;
+            rect.sh = PicoFixed::from_int(2);
+            rect.dx = PicoFixed::ZERO;
+            rect.dy = PicoFixed::ZERO;
+            rect.targets.clear();
+            rect.warnings.clear();
+            rect.finished = false;
+        }
+        self.active_pattern = Some(index);
+        self.pattern_active = true;
+    }
+
     fn update_pattern_schedule(&mut self) {
+        if self.config.scenario.permanent_pattern != 0 {
+            return;
+        }
         if !self.patterns_enabled {
             return;
         }
@@ -2560,6 +2605,130 @@ mod tests {
             assert!(game.advance_frame(0).is_ok());
         }
         assert_eq!(game.lifecycle().mode, Mode::Game);
+    }
+
+    #[test]
+    fn scenario_empty_blocks_timer_and_anti_idle_spawns() {
+        let mut config = NativeConfig::new(42);
+        config.patterns_enabled = false;
+        config.powerups_enabled = false;
+        config.scenario.enemy_mode = 1;
+        let mut game = NativeGame::new(config);
+        start_game(&mut game);
+        for _ in 0..1200 {
+            let result = game.advance_frame_ml(0, 0).unwrap();
+            assert!(!result.done);
+            assert!(game.enemies.is_empty());
+        }
+        let mut events = Vec::new();
+        game.add_corner_enemies(&mut events);
+        assert!(events.is_empty());
+        assert!(game.enemies.is_empty());
+    }
+
+    #[test]
+    fn scenario_normal_only_filters_high_score_personalities() {
+        let mut config = NativeConfig::new(42);
+        config.patterns_enabled = false;
+        config.powerups_enabled = false;
+        config.scenario.enemy_mode = 2;
+        config.scenario.invulnerable = true;
+        let mut game = NativeGame::new(config);
+        start_game(&mut game);
+        game.enemy_stats = [PicoFixed::from_int(20); 5];
+        let mut seen = false;
+        for _ in 0..600 {
+            game.advance_frame_ml(0, 0).unwrap();
+            seen |= !game.enemies.is_empty();
+            assert!(game.enemies.iter().all(|enemy| enemy.personality == 0));
+        }
+        assert!(seen);
+    }
+
+    #[test]
+    fn scenario_permanent_geometry_survives_schedule_reset_and_restart() {
+        let mut config = NativeConfig::new(42);
+        config.powerups_enabled = false;
+        config.scenario.enemy_mode = 1;
+        config.scenario.permanent_pattern = 1;
+        config.scenario.invulnerable = true;
+        let mut game = NativeGame::new(config);
+        start_game(&mut game);
+        let initial = game.patterns[game.active_pattern.unwrap()].rects.clone();
+        assert!(!initial.is_empty());
+        assert!(initial
+            .iter()
+            .all(|rect| rect.shown && rect.sh == PicoFixed::from_int(2)));
+        for _ in 0..1200 {
+            game.advance_frame_ml(0, 0).unwrap();
+        }
+        assert_eq!(game.patterns[game.active_pattern.unwrap()].rects, initial);
+        game.restart_gameplay();
+        assert_eq!(game.patterns[game.active_pattern.unwrap()].rects, initial);
+        game.reset_ml();
+        start_game(&mut game);
+        assert_eq!(game.patterns[game.active_pattern.unwrap()].rects, initial);
+    }
+
+    #[test]
+    fn scenario_invulnerability_suppresses_collision_death_events() {
+        let mut config = NativeConfig::new(42);
+        config.scenario.invulnerable = true;
+        let mut game = NativeGame::new(config);
+        start_game(&mut game);
+        game.enemies.push(EnemyState::normal(
+            PicoFixed::from_int(61),
+            PicoFixed::from_int(64),
+            PicoFixed::from_int(3),
+        ));
+        let mut events = Vec::new();
+        game.collision_check(&mut events);
+        assert!(events.is_empty());
+        assert!(!game.lifecycle.dead);
+        assert_eq!(game.enemies.len(), 1);
+        game.enemies.clear();
+        game.config.scenario.permanent_pattern = 1;
+        game.apply_permanent_pattern();
+        let rect = &game.patterns[game.active_pattern.unwrap()].rects[0];
+        game.player.x = rect.x.add(PicoFixed::from_int(5));
+        game.player.y = rect.y.add(PicoFixed::from_int(5));
+        game.collision_check(&mut events);
+        assert!(events.is_empty());
+        assert!(!game.lifecycle.dead);
+        game.config.scenario.invulnerable = false;
+        game.collision_check(&mut events);
+        assert!(game.lifecycle.dead);
+        assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn scenario_snapshot_restores_rules_and_continuation() {
+        let mut config = NativeConfig::new(42);
+        config.scenario.enemy_mode = 2;
+        config.scenario.permanent_pattern = 1;
+        config.scenario.invulnerable = true;
+        let mut game = NativeGame::new(config);
+        start_game(&mut game);
+        let bytes = game.snapshot().canonical_bytes();
+        assert_eq!(&bytes[4..8], &9_u32.to_le_bytes());
+        let mut restored = NativeGame::restore_bytes(&bytes).unwrap();
+        assert_eq!(restored.config.scenario, config.scenario);
+        assert_eq!(restored.snapshot().canonical_bytes(), bytes);
+        for _ in 0..20 {
+            game.advance_frame(1).unwrap();
+            restored.advance_frame(1).unwrap();
+            assert_eq!(
+                game.snapshot().canonical_bytes(),
+                restored.snapshot().canonical_bytes()
+            );
+        }
+        restored.reset_ml();
+        assert_eq!(restored.config.scenario, config.scenario);
+        assert!(restored.active_pattern.is_some());
+        let standard = NativeGame::new(NativeConfig::new(42))
+            .snapshot()
+            .canonical_bytes();
+        assert_eq!(&standard[4..8], &8_u32.to_le_bytes());
     }
 
     #[test]

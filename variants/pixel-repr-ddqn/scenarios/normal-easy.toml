@@ -1,0 +1,8 @@
+version = 1
+name = "normal-easy"
+difficulty = 1
+patterns_enabled = false
+powerups_enabled = false
+enemy_mode = "normal"
+permanent_pattern = 0
+invulnerable = true

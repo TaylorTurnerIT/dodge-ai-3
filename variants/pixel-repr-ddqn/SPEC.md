@@ -27,6 +27,8 @@ C9|LeWM foundation first. Deferred comparison families: planning; learned polici
 C10|SPEC owns behavior, interfaces, phase state, budgets, invariants and tasks. Kit owns execution order/templates and cites SPEC; no competing acceptance rules. Root historical board/PPO tasks do not select work for this variant.
 C11|Numbers are proposed experiment settings, not established optimal choices. P0 fixes protocol choices; P3 calibrates/locks numeric controls before P4 training. Later changes invalidate affected comparisons and require versioned protocol amendment.
 
+C12|User authorizes config-driven native testing scenarios in isolated worktree: enemies all/none/normal; patterns normal/off/permanent; easy/medium/hard; optional player invulnerability. Native/shared edits limited to config plumbing, rule enforcement and snapshot preservation; default behavior/wire8 unchanged. No new controller/training campaign.
+
 §R
 R1|LeWM v3|Joint pixel/action latent prediction + SIGReg; no EMA/stop-gradient/pretrained encoder/reconstruction objective|https://arxiv.org/html/2603.19312v3
 R2|Training reference|Targets remain attached; SIGReg on time×batch×dimension; one-step teacher-forced loss|https://github.com/lucas-maes/le-wm/blob/main/train.py
@@ -162,6 +164,17 @@ V31|Autoregressive rollout with H observed frames and A actions returns A+1 late
 
 V32|Colab dependency installation precedes fresh-process model imports; worker reruns model/native checks on actual T4. Completion requires worker sentinel plus retrieved artifacts, not Colab CLI exit status alone.
 
+I.scenario|Strict version1 TOML → resolved ScenarioConfig → native constructor rules; collector --scenario PATH; complete resolved config+SHA256 retained in dataset manifest and run provenance. Presets empty/permanent-patterns/normal-easy/standard. Pixel/action learner input unchanged.
+V33|Four image panes remain; full square bitmap contained inside frame body at1280×720 and1366×768; no intrinsic-size clipping.
+V34|Default scenario retains existing native trajectories and canonical wire8 bytes. Nondefault rules serialized in explicit wire9 extension, included in state hash, preserved through reset/restart/restore.
+V35|Enemy-none blocks scheduled and anti-idle spawns. Normal-only blocks special personalities. Permanent pattern initial rectangles fully shown, stationary and persistent. Invulnerable suppresses player collision/death events; ordinary mode remains lethal.
+V36|Scenario TOML rejects unknown keys/versions/types/modes and invalid pattern IDs. Resolved config/hash propagated into corpus and run; scenario metadata never encoder input. Independent seeds still disjoint.
+
+§S — scenario delivery
+S0|complete|dashboard sizing|Keep four-panel layout, show full aspect ratio|Browser geometry + actual screenshot
+S1|complete|implementation|Native rules/snapshot extension, TOML presets/loader and collector plumbing|Native invariants + baseline parity + Python schema tests
+S2|complete|verification|Bounded configured collection and artifact audit|Scenario config/hash preserved; no world-model training required
+
 §T
 id|status|task|cites
 ---|---|---|---
@@ -206,6 +219,11 @@ T37|✓|M3: bounded world-model train/checkpoint/metrics|V14,V15,V26
 T38|✓|M4: frozen diagnostic fitting and source-linked model outputs|V4,V8,V29
 T39|✓|M5: serve/review no-scroll dashboard over Tailscale|V28,V29
 
+T40|✓|S0: square-image containment, retain four-panel layout|V33
+T41|✓|S1: native scenario controls and snapshot compatibility|V34,V35
+T42|✓|S1: strict TOML presets and collector/run provenance|V36
+T43|✓|S2: configured collection and regression verification|V34-V36
+
 §B
 id|date|cause|fix
 ---|---|---|---
@@ -221,3 +239,7 @@ B7|2026-09-14|Colab notebook retained older NumPy after pip upgrade; cold-proces
 B8|2026-09-14|Real-data UI rounded tiny nonzero spread to0 and CSS display overrode hidden empty-state overlays|Scientific notation; explicit hidden rule; real-artifact browser assertions and both viewport checks pass; V28 sufficient
 B9|2026-09-14|Browser retry started before restarted listener bound port|Health check before browser navigation; orchestration race, no new model invariant
 B10|2026-09-14|Whitespace check flags trailing spaces in exact downloaded paper HTML|Preserve source bytes/hash; authored-file whitespace check excludes reference HTML; no new invariant
+B11|2026-09-14|Grid intrinsic image sizing enlarged square content beyond frame body and clipped it into horizontal shape|V33; bounded rows and absolutely contained images, browser square-content bounds
+B12|2026-09-14|Rust constructor test omitted new scenario defaults; workspace compile caught missing arguments|Supply explicit defaults in direct Rust call; mechanical migration, V34 regression suite sufficient
+B13|2026-09-14|Scenario launcher additions exceeded Ruff line length|Format launcher; mechanical formatting, V18 sufficient
+B14|2026-09-14|Parent review found permissive direct dataclass types and scenario claims on injected environments|Strict construction and reject conflicting injection; V36 sufficient, schema tests cover types

@@ -258,7 +258,17 @@ class NativeBatchEnvironment:
         ml: bool = False,
         ml_grid_spacing: int = 32,
         collision_image: bool = False,
+        enemy_mode: str = "all",
+        permanent_pattern: int = 0,
+        invulnerable: bool = False,
     ) -> None:
+        scenario_kwargs = {}
+        if enemy_mode != "all" or permanent_pattern or invulnerable:
+            scenario_kwargs = {
+                "enemy_mode": enemy_mode,
+                "permanent_pattern": permanent_pattern,
+                "invulnerable": invulnerable,
+            }
         self._native = dodge_native.NativeBatchEnv(
             step_frames,
             execution,
@@ -273,6 +283,7 @@ class NativeBatchEnvironment:
             ml,
             ml_grid_spacing,
             collision_image,
+            **scenario_kwargs,
         )
         self.step_frames = int(step_frames)
         self.execution = execution

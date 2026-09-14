@@ -52,6 +52,7 @@ impl SnapshotProvenance {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FullState {
     pub seed: u32,
+    pub scenario: crate::ScenarioRules,
     pub lifecycle: LifecycleState,
     pub input: InputState,
     pub rng: RngCheckpoint,
@@ -452,16 +453,23 @@ impl Snapshot {
     pub fn state_hash(&self) -> u64 {
         let mut writer = Writer::new();
         write_full_state(&mut writer, &self.logical_state);
+        if self.logical_state.scenario != crate::ScenarioRules::standard() {
+            write_scenario(&mut writer, self.logical_state.scenario);
+        }
         stable_hash(writer.as_bytes())
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut writer = Writer::new();
         writer.bytes(&SNAPSHOT_MAGIC);
-        writer.u32(SNAPSHOT_WIRE_VERSION);
+        let custom = self.logical_state.scenario != crate::ScenarioRules::standard();
+        writer.u32(if custom { 9 } else { SNAPSHOT_WIRE_VERSION });
         writer.u32(self.provenance.core_schema_version);
         writer.bytes(&self.provenance.cartridge_sha256);
         write_full_state(&mut writer, &self.logical_state);
+        if custom {
+            write_scenario(&mut writer, self.logical_state.scenario);
+        }
         write_render_state(&mut writer, &self.render_state);
         writer.bytes(self.framebuffer.as_bytes());
         writer.into_bytes()
@@ -473,7 +481,7 @@ impl Snapshot {
             return Err(CoreError::InvalidSnapshotMagic);
         }
         let version = reader.u32()?;
-        if version != SNAPSHOT_WIRE_VERSION {
+        if version != SNAPSHOT_WIRE_VERSION && version != 9 {
             return Err(CoreError::InvalidSnapshotVersion(version));
         }
         let core_schema_version = reader.u32()?;
@@ -485,7 +493,21 @@ impl Snapshot {
         if cartridge_sha256 != CARTRIDGE_SOURCE_SHA256 {
             return Err(CoreError::InvalidSnapshotValue);
         }
-        let logical_state = read_full_state(&mut reader)?;
+        let mut logical_state = read_full_state(&mut reader)?;
+        if version == 9 {
+            logical_state.scenario = crate::ScenarioRules {
+                enemy_mode: reader.u8()?,
+                permanent_pattern: reader.u8()?,
+                invulnerable: reader.bool()?,
+            };
+            if !logical_state.scenario.valid()
+                || logical_state.scenario == crate::ScenarioRules::standard()
+                || (logical_state.scenario.permanent_pattern != 0
+                    && !logical_state.patterns_enabled)
+            {
+                return Err(CoreError::InvalidSnapshotValue);
+            }
+        }
         let render_state = read_render_state(&mut reader)?;
         if !render_state.validate() {
             return Err(CoreError::InvalidSnapshotValue);
@@ -1482,6 +1504,7 @@ fn read_full_state(reader: &mut Reader<'_>) -> Result<FullState, CoreError> {
     }
     Ok(FullState {
         seed,
+        scenario: crate::ScenarioRules::standard(),
         lifecycle,
         input,
         rng,
@@ -2150,4 +2173,10 @@ mod tests {
             assert!(Snapshot::from_canonical_bytes(truncated).is_err());
         }
     }
+}
+
+fn write_scenario(writer: &mut Writer, rules: crate::ScenarioRules) {
+    writer.u8(rules.enemy_mode);
+    writer.u8(rules.permanent_pattern);
+    writer.bool(rules.invulnerable);
 }

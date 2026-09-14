@@ -24,6 +24,7 @@ from .collect import (
     STEP_FRAMES,
 )
 from .native_adapter import NATIVE_SEED_MAX
+from .scenario import ScenarioConfig, ScenarioConfigError, resolved_config_sha256
 
 
 class DatasetValidationError(ValueError):
@@ -131,6 +132,44 @@ def _check_optional_metadata(
                 raise DatasetValidationError(f"{path}: truncation metadata disagrees")
 
 
+def _validate_scenario_provenance(raw: object) -> None:
+    """Validate the resolved scenario/hash pair when a corpus carries one."""
+
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        raise DatasetValidationError("manifest scenario declaration must be an object")
+    config_raw = raw.get("config")
+    digest = raw.get("sha256")
+    if not isinstance(config_raw, dict) or not isinstance(digest, str):
+        raise DatasetValidationError(
+            "manifest scenario must include config and sha256"
+        )
+    if len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        raise DatasetValidationError("manifest scenario sha256 is invalid")
+    try:
+        config = ScenarioConfig.from_mapping(config_raw)
+    except ScenarioConfigError as error:
+        raise DatasetValidationError(
+            "manifest scenario config is invalid"
+        ) from error
+    if config_raw != config.to_dict():
+        raise DatasetValidationError(
+            "manifest scenario config is not fully resolved"
+        )
+    if resolved_config_sha256(config) != digest:
+        raise DatasetValidationError("manifest scenario config/hash mismatch")
+    source_hash = raw.get("source_sha256")
+    if source_hash is not None and (
+        not isinstance(source_hash, str)
+        or len(source_hash) != 64
+        or any(character not in "0123456789abcdef" for character in source_hash)
+    ):
+        raise DatasetValidationError("manifest scenario source_sha256 is invalid")
+
+
 def _validate_manifest(
     root: Path,
 ) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]]]:
@@ -183,6 +222,7 @@ def _validate_manifest(
         != MAX_NATIVE_DECISIONS
     ):
         raise DatasetValidationError("dataset native decision cap is invalid")
+    _validate_scenario_provenance(manifest.get("scenario"))
 
     datasets = manifest.get("datasets")
     if not isinstance(datasets, dict):

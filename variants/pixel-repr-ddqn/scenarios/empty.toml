@@ -1,0 +1,8 @@
+version = 1
+name = "empty"
+difficulty = 1
+patterns_enabled = false
+powerups_enabled = false
+enemy_mode = "none"
+permanent_pattern = 0
+invulnerable = true

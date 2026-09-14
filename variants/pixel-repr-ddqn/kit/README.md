@@ -1,3 +1,5 @@
+Current change: [scenario delivery](SCENARIOS.md), SPEC §S. Square-image dashboard fix first, then native configuration support, then bounded collection verification. Model training remains separate.
+
 # Current execution: LeWM MVP
 
 User authorized MVP implementation with Luna max agents and parent validation. Follow canonical SPEC §M sequence M0 references → M1 code → M2 native collection → M3 bounded world-model training → M4 frozen diagnostic fitting → M5 dashboard review. Scientific P0-P10 remains separate; MVP completion does not certify model quality or open controllers. [MVP card](phases/mvp.md).

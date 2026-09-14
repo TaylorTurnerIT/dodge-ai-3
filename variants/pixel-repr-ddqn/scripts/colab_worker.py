@@ -30,6 +30,7 @@ def main():
         validation_seeds=[10011],
         max_steps_per_episode=64,
         seed=42,
+        scenario=root / "scenario.toml" if (root / "scenario.toml").is_file() else None,
     )
     run = train(
         dataset_root=dataset,

@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 from .native_adapter import ACTION_COUNT, NATIVE_SEED_MAX, PixelNativeAdapter
+from .scenario import ScenarioConfig, resolve_scenario
 
 DATASET_SCHEMA_VERSION = 1
 DATASET_ID_VERSION = "pixel-repr-ddqn-episodes-v1"
@@ -179,6 +180,7 @@ def _manifest(
     validation_seeds: list[int],
     max_steps: int,
     collection_seed: int,
+    scenario: dict[str, Any],
 ) -> dict[str, Any]:
     split_summary = {
         split: {
@@ -216,6 +218,7 @@ def _manifest(
                 for record in split_records
             ),
         },
+        "scenario": scenario,
         "seeds": {"train": train_seeds, "validation": validation_seeds},
         "splits": split_summary,
         "datasets": records,
@@ -228,6 +231,7 @@ def collect_dataset(
     validation_seeds: list[int],
     max_steps_per_episode: int,
     seed: int = 0,
+    scenario: Path | str | ScenarioConfig | None = None,
 ) -> dict[str, Any]:
     """Collect and atomically publish a train/validation RGB corpus.
 
@@ -253,6 +257,7 @@ def collect_dataset(
             f"{MAX_NATIVE_DECISIONS} native decisions; requested {requested_decisions}"
         )
     collection_seed = _validate_integer(seed, "seed")
+    scenario_config, scenario_metadata = resolve_scenario(scenario)
 
     if output_root.exists() or output_root.is_symlink():
         raise FileExistsError(f"dataset output already exists: {output_root}")
@@ -275,7 +280,11 @@ def collect_dataset(
     records: dict[str, list[dict[str, Any]]] = {"train": [], "validation": []}
     try:
         assert staging is not None
-        adapter = PixelNativeAdapter()
+        adapter = (
+            PixelNativeAdapter()
+            if scenario is None
+            else PixelNativeAdapter(scenario=scenario_config)
+        )
         try:
             for split, seeds in (("train", train), ("validation", validation)):
                 split_dir = staging / "episodes" / split
@@ -314,6 +323,7 @@ def collect_dataset(
             validation_seeds=validation,
             max_steps=max_steps,
             collection_seed=collection_seed,
+            scenario=scenario_metadata,
         )
         _atomic_bytes(
             staging / "manifest.json",
@@ -348,6 +358,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--validation-seeds", type=_seed_list, default=[])
     parser.add_argument("--max-steps-per-episode", "--max-steps", type=int, default=32)
     parser.add_argument("--seed", type=int, default=0, help="collector action RNG seed")
+    parser.add_argument(
+        "--scenario", type=Path, help="strict version1 native scenario TOML"
+    )
     args = parser.parse_args(argv)
     manifest = collect_dataset(
         args.output,
@@ -355,6 +368,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.validation_seeds,
         args.max_steps_per_episode,
         args.seed,
+        args.scenario,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0

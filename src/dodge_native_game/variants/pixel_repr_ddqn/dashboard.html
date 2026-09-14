@@ -99,11 +99,11 @@
     }
     .icon-button:hover { border-color: var(--cyan); color: var(--cyan); }
     .sample-select { max-width: 150px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-soft); color: var(--muted); padding: 4px 6px; }
-    .frames { min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 9px; }
+    .frames { min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 9px; }
     .frame-card { min-width: 0; min-height: 0; display: grid; grid-template-rows: 31px minmax(0, 1fr); border: 1px solid var(--line); border-radius: 6px; background: var(--panel-soft); overflow: hidden; }
     .frame-label { padding: 8px 8px 0; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .frame-body { min-height: 0; display: grid; place-items: center; padding: 7px; overflow: hidden; }
-    .frame-body img { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; border-radius: 3px; }
+    .frame-body { position: relative; min-height: 0; display: grid; place-items: center; padding: 7px; overflow: hidden; }
+    .frame-body img { position: absolute; inset: 7px; width: calc(100% - 14px); height: calc(100% - 14px); object-fit: contain; image-rendering: pixelated; border-radius: 3px; }
     .frame-empty { max-width: 145px; color: var(--dim); text-align: center; font-size: 11px; }
     .snapshot-meta { overflow: hidden; padding: 8px 11px; color: var(--dim); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; border-top: 1px solid var(--line); }
     .overview-side { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 10px; }

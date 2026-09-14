@@ -253,6 +253,7 @@ impl BatchObservation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BatchError {
     InvalidStepFrames(u32),
+    InvalidScenario,
     InvalidMlGridSpacing(u32),
     InvalidHazardGridSize(u32),
     InvalidHazardHorizon(u32),
@@ -271,6 +272,7 @@ pub enum BatchError {
 impl Display for BatchError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidScenario => formatter.write_str("invalid native scenario rules"),
             Self::InvalidStepFrames(frames) => {
                 write!(
                     formatter,
@@ -345,6 +347,11 @@ pub struct BatchEnvironment {
 
 impl BatchEnvironment {
     pub fn new(config: BatchConfig) -> Result<Self, BatchError> {
+        if !config.native.scenario.valid()
+            || (config.native.scenario.permanent_pattern != 0 && !config.native.patterns_enabled)
+        {
+            return Err(BatchError::InvalidScenario);
+        }
         Ok(Self {
             config: config.validate()?,
             games: Vec::new(),

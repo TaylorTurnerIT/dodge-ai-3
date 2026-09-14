@@ -98,6 +98,7 @@ def train(
     if not len(dataset):
         raise ValueError("dataset contains no valid training windows")
     data_hash = file_hash(dataset_root / "manifest.json")
+    scenario_provenance = getattr(dataset, "manifest", {}).get("scenario")
     model = LeWorldModel(config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-3)
     sampling_rng = torch.Generator().manual_seed(seed + 1)
@@ -131,6 +132,7 @@ def train(
             "model_label": label,
             "config": asdict(config),
             "data_hash": data_hash,
+            "scenario": scenario_provenance,
             "dataset_root": str(dataset_root.resolve()),
             "seed": seed,
             "batch_size": batch_size,
@@ -226,6 +228,7 @@ def train(
                         "data_hash": data_hash,
                         "profile": profile,
                         "model_label": label,
+                        "scenario": scenario_provenance,
                     },
                 )
             print(json.dumps(metric), flush=True)

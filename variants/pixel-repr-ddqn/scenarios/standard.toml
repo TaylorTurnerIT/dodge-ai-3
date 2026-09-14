@@ -1,0 +1,8 @@
+version = 1
+name = "standard"
+difficulty = 2
+patterns_enabled = true
+powerups_enabled = true
+enemy_mode = "all"
+permanent_pattern = 0
+invulnerable = false

@@ -10,12 +10,14 @@ or apply an action and receive pixels plus ordinary Gym termination values.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
 
 from ..cnn_image_ddqn.env import CNNImageDDQNEnv
 from ..cnn_image_ddqn.pixels import RGB_PROFILE
+from .scenario import ScenarioConfig, load_scenario
 
 ACTION_COUNT = 9
 NATIVE_SEED_MAX = 32_767
@@ -59,10 +61,39 @@ def _owned_rgb(value: object) -> np.ndarray:
     return np.array(pixels, dtype=np.uint8, copy=True, order="C")
 
 
-def _default_environment() -> CNNImageDDQNEnv:
-    """Construct the existing native RGB environment at stack size one."""
+def _default_environment(
+    scenario: ScenarioConfig | None = None,
+) -> CNNImageDDQNEnv:
+    """Construct the native RGB environment at stack size one.
 
-    return CNNImageDDQNEnv(stack_size=1, observation_profile=RGB_PROFILE)
+    The ordinary path remains the existing CNN environment constructor.  A
+    configured scenario owns a separately constructed native batch object,
+    which is injected through the audited legacy Gym wrapper so this variant
+    does not alter the legacy environment's defaults.
+    """
+
+    if scenario is None:
+        return CNNImageDDQNEnv(stack_size=1, observation_profile=RGB_PROFILE)
+
+    from ...batch import NativeBatchEnvironment
+
+    native = NativeBatchEnvironment(
+        step_frames=4,
+        full_state=False,
+        pixels=True,
+        board=False,
+        collision_image=False,
+        **scenario.native_kwargs(),
+    )
+    return CNNImageDDQNEnv(
+        stack_size=1,
+        step_frames=4,
+        difficulty=scenario.difficulty,
+        patterns=scenario.patterns_enabled,
+        powerups=scenario.powerups_enabled,
+        observation_profile=RGB_PROFILE,
+        native_environment=native,
+    )
 
 
 class PixelNativeAdapter:
@@ -80,16 +111,36 @@ class PixelNativeAdapter:
         environment: _GymPixelEnvironment | None = None,
         *,
         environment_factory: Callable[[], _GymPixelEnvironment] | None = None,
+        scenario: ScenarioConfig | Path | str | None = None,
     ) -> None:
         if environment is not None and environment_factory is not None:
             raise ValueError("provide environment or environment_factory, not both")
+        if isinstance(scenario, ScenarioConfig):
+            scenario_config = scenario
+        elif scenario is None:
+            scenario_config = None
+        else:
+            scenario_config = load_scenario(scenario)
+        if scenario_config is not None and (
+            environment is not None or environment_factory is not None
+        ):
+            raise ValueError(
+                "scenario cannot be combined with an injected environment"
+            )
         if environment is not None:
             self._environment = environment
         elif environment_factory is not None:
             self._environment = environment_factory()
         else:
-            self._environment = _default_environment()
+            self._environment = _default_environment(scenario_config)
+        self._scenario = scenario_config
         self._closed = False
+
+    @property
+    def scenario(self) -> ScenarioConfig | None:
+        """Resolved scenario used to construct the native environment, if any."""
+
+        return self._scenario
 
     @property
     def action_count(self) -> int:

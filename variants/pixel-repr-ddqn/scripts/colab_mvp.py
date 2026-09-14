@@ -12,6 +12,7 @@ import json
 import subprocess
 import tarfile
 import time
+import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,7 +30,16 @@ def main() -> None:
     parser.add_argument(
         "--run-id", default="lewm-t4-" + datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     )
+    parser.add_argument(
+        "--scenario",
+        type=Path,
+        help="Scenario TOML to freeze into the T4 source archive",
+    )
     args = parser.parse_args()
+    if args.scenario is not None:
+        # Parse before creating a job or allocating a GPU. Native/schema validation
+        # runs in the frozen worker before collection.
+        tomllib.loads(args.scenario.read_text())
     if not args.run_id.replace("-", "").isalnum():
         raise ValueError("run id must be alphanumeric with hyphens")
     session = "dodge-" + args.run_id
@@ -54,6 +64,8 @@ def main() -> None:
                 arcname=relative,
                 filter=lambda info: None if "__pycache__" in info.name else info,
             )
+        if args.scenario is not None:
+            output.add(args.scenario, arcname="scenario.toml")
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (job / "job.json").write_text(
         json.dumps(
@@ -61,6 +73,9 @@ def main() -> None:
                 "session": session,
                 "source_sha256": digest,
                 "gpu_required": "T4",
+                "scenario_source": str(args.scenario)
+                if args.scenario is not None
+                else None,
                 "run_id": args.run_id,
             },
             indent=2,

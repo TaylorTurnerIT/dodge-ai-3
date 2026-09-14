@@ -27,7 +27,7 @@ pub struct NativeBatchEnv {
 #[pymethods]
 impl NativeBatchEnv {
     #[new]
-    #[pyo3(signature = (step_frames=4, execution="serial", full_state=false, pixels=false, board=true, difficulty=2, patterns_enabled=true, powerups_enabled=true, include_offscreen_board=false, preserve_offscreen_coordinates=false, ml=false, ml_grid_spacing=32, collision_image=false))]
+    #[pyo3(signature = (step_frames=4, execution="serial", full_state=false, pixels=false, board=true, difficulty=2, patterns_enabled=true, powerups_enabled=true, include_offscreen_board=false, preserve_offscreen_coordinates=false, ml=false, ml_grid_spacing=32, collision_image=false, enemy_mode="all", permanent_pattern=0, invulnerable=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         step_frames: u32,
@@ -43,12 +43,32 @@ impl NativeBatchEnv {
         ml: bool,
         ml_grid_spacing: u32,
         collision_image: bool,
+        enemy_mode: &str,
+        permanent_pattern: u8,
+        invulnerable: bool,
     ) -> PyResult<Self> {
         let execution = parse_execution(execution)?;
         let mut config = BatchConfig::new(step_frames);
         config.native.difficulty = difficulty;
         config.native.patterns_enabled = patterns_enabled;
         config.native.powerups_enabled = powerups_enabled;
+        config.native.scenario.enemy_mode = match enemy_mode {
+            "all" => 0,
+            "none" => 1,
+            "normal" => 2,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "enemy_mode must be all, none, or normal",
+                ))
+            }
+        };
+        if permanent_pattern > 39 || (permanent_pattern != 0 && !patterns_enabled) {
+            return Err(PyValueError::new_err(
+                "permanent_pattern requires patterns_enabled and an ID in 1..39",
+            ));
+        }
+        config.native.scenario.permanent_pattern = permanent_pattern;
+        config.native.scenario.invulnerable = invulnerable;
         config.observations = ObservationFlags {
             full_state,
             pixels,
@@ -1143,7 +1163,8 @@ mod tests {
     #[test]
     fn collision_image_trailing_constructor_flag_is_stable() {
         let environment = NativeBatchEnv::new(
-            4, "serial", false, false, false, 2, true, true, false, false, false, 32, true,
+            4, "serial", false, false, false, 2, true, true, false, false, false, 32, true, "all",
+            0, false,
         )
         .unwrap_or_else(|_| unreachable!("valid native constructor configuration"));
         assert!(environment.flags.collision_image);

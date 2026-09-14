@@ -1,0 +1,8 @@
+version = 1
+name = "permanent-patterns"
+difficulty = 1
+patterns_enabled = true
+powerups_enabled = false
+enemy_mode = "none"
+permanent_pattern = 1
+invulnerable = true
