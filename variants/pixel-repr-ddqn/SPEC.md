@@ -176,9 +176,15 @@ S1|complete|implementation|Native rules/snapshot extension, TOML presets/loader 
 S2|complete|verification|Bounded configured collection and artifact audit|Scenario config/hash preserved; no world-model training required
 
 §G.script — requested extension, design pending
-G.script1|Author bounded practice trajectories and capture reached goals as native-rendered frames/clips. Script coordinates and progress remain outside learner inputs. Actor scope ? player/enemies/both; [contract and proposed gates](kit/SCRIPTED-PRACTICE.md).
+G.script1|Author bounded practice trajectories and capture reached goals as native-rendered frames/clips. Script coordinates and progress remain outside learner inputs. Actor scope: both player and enemies; [contract and proposed gates](kit/SCRIPTED-PRACTICE.md).
 G.script2|Preserve terminal transition; no death-to-reset windows. Later controller termination handling separate from LeWM representation objective. Moving-goal objective requires explicit Dodge adaptation of paper §3.2.
-G.script3|G0 contract → G1 implementation → G2 bounded collection → G3 later controller design. No script implementation or additional training opened by this note.
+G.script3|G0 contract → G1 implementation → G2 bounded collection → G3 later controller design. User selected both actors; G0 reviewed, G1/G2 complete; G3 controller design deferred. No model training.
+
+V37|Practice player moves execute ordinary nine-action/four-frame native physics; initial placement precedes first observation; scripts record actual actions. MoveTo timeout never successful goal.
+V38|Scripted square enemies remain in native game/render/collision state; static or bounded linear paths. Driver config/coordinates never learner inputs. Externally driven native mode3 suppresses ordinary spawns/AI; full practice replay requires script+seed, not a standalone game snapshot.
+V39|Practice stops on death, script completion or bounded timeout; death takes precedence over a coincident waypoint timeout. Keep death outcome, never reset across a trajectory. Goal valid only on live successful script completion; captured motion clip ordered and source-hashed.
+V40|Default native modes0-2 retain behavior/wire compatibility. Practice authoring <=256 decisions,4 frames/action,<=64 commands,<=32 enemies,<=64 path segments/actor. Validate native inputs independently of Python.
+V41|Practice generation separate from corpus ingestion/model training. Immortal collision outcomes and lethal collision outcomes have different dynamics; configuration provenance retained, no automatic mixed training.
 
 §T
 id|status|task|cites
@@ -229,6 +235,10 @@ T41|✓|S1: native scenario controls and snapshot compatibility|V34,V35
 T42|✓|S1: strict TOML presets and collector/run provenance|V36
 T43|✓|S2: configured collection and regression verification|V34-V36
 
+T44|✓|G1: native player/action and enemy/path practice driver|V37-V40
+T45|✓|G1: strict practice config, replay/goal artifact generator|V37-V41
+T46|✓|G2: bounded replay, goal and terminal verification|V37-V41
+
 §B
 id|date|cause|fix
 ---|---|---|---
@@ -248,3 +258,7 @@ B11|2026-09-14|Grid intrinsic image sizing enlarged square content beyond frame 
 B12|2026-09-14|Rust constructor test omitted new scenario defaults; workspace compile caught missing arguments|Supply explicit defaults in direct Rust call; mechanical migration, V34 regression suite sufficient
 B13|2026-09-14|Scenario launcher additions exceeded Ruff line length|Format launcher; mechanical formatting, V18 sufficient
 B14|2026-09-14|Parent review found permissive direct dataclass types and scenario claims on injected environments|Strict construction and reject conflicting injection; V36 sufficient, schema tests cover types
+B15|2026-09-14|Local stopping-position driver could not settle fixture96,80 at four-frame cadence; native trace stopped near92,78|Use reachable fixture92,78; preserve2px position and0.2 speed tolerance and explicit timeouts, V37 sufficient
+B16|2026-09-14|Parent review found coincident death and waypoint budget expiry could report both terminal and script failure|Death takes precedence; native regression uses fatal final-budget MoveTo, V39 sufficient
+B17|2026-09-14|Generator review found live script completion lacked truncation and direct action dataclass accepted booleans|Separate game termination from collection stop; reject boolean action indices, V39/V40 sufficient
+B18|2026-09-14|Initial practice test import formatting failed Ruff|Organize imports and format authored files; V18 sufficient

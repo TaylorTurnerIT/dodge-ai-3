@@ -1,3 +1,9 @@
+#[path = "practice.rs"]
+mod practice;
+pub use practice::{
+    PracticeCommand, PracticeEnemy, PracticeSegment, PracticeSimulation, PracticeStep,
+};
+
 use crate::{
     pico_mid, Action, Button, CoreError, EnemyState, FullState, IndexedFramebuffer, InputState,
     LifecycleState, Mode, NativeConfig, ParticleState, PatternState, PicoFixed, PicoRng,
@@ -1121,7 +1127,7 @@ impl NativeGame {
     }
 
     fn update_fyou(&mut self, events: &mut Vec<FrameEvent>) {
-        if self.config.scenario.enemy_mode == 1 {
+        if matches!(self.config.scenario.enemy_mode, 1 | 3) {
             return;
         }
         let in_center = self
@@ -1160,7 +1166,7 @@ impl NativeGame {
     }
 
     fn add_corner_enemies(&mut self, events: &mut Vec<FrameEvent>) {
-        if self.config.scenario.enemy_mode == 1 {
+        if matches!(self.config.scenario.enemy_mode, 1 | 3) {
             return;
         }
         for spawn in self.spawns.clone() {
@@ -1429,7 +1435,7 @@ impl NativeGame {
     }
 
     fn spawn_enemies(&mut self, events: &mut Vec<FrameEvent>) {
-        if self.config.scenario.enemy_mode == 1 {
+        if matches!(self.config.scenario.enemy_mode, 1 | 3) {
             return;
         }
         self.enemy_timer = self.enemy_timer.add(PicoFixed::ONE);
@@ -1508,6 +1514,9 @@ impl NativeGame {
     }
 
     fn update_enemies(&mut self) {
+        if self.config.scenario.enemy_mode == 3 {
+            return;
+        }
         let player = self.player;
         let mut index = 0;
         while index < self.enemies.len() {

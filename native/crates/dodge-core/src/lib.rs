@@ -17,7 +17,10 @@ pub use action::{Action, BUTTON_X_MASK};
 pub use config::{NativeConfig, ScenarioRules};
 pub use error::CoreError;
 pub use fixed::{pico_ceil, pico_floor, pico_mid, pico_mod, PicoFixed};
-pub use game::{AudioEvent, FrameEvent, FrameResult, MlFrameResult, NativeGame, PixelFrameResult};
+pub use game::{
+    AudioEvent, FrameEvent, FrameResult, MlFrameResult, NativeGame, PixelFrameResult,
+    PracticeCommand, PracticeEnemy, PracticeSegment, PracticeSimulation, PracticeStep,
+};
 pub use input::{Button, InputState, BUTTON_MASK_LIMIT};
 pub use lifecycle::{LifecycleState, Mode};
 pub use patterns::{PatternRect, PatternState, PatternTarget, SpawnPoint, WarningLine};

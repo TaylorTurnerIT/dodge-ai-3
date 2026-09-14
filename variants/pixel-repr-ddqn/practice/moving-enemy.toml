@@ -1,0 +1,31 @@
+version = 1
+name = "moving-enemy"
+step_frames = 4
+max_decisions = 64
+difficulty = 1
+permanent_pattern = 0
+invulnerable = true
+player_start = [32.0, 48.0]
+
+[[player_script]]
+move_to = [92.0, 78.0]
+max_decisions = 48
+
+[[player_script]]
+action = "neutral"
+decisions = 4
+
+[[enemies]]
+start = [64.0, 32.0]
+size = 4
+loop = true
+segments = [
+  { to = [96.0, 32.0], frames = 32 },
+  { to = [64.0, 32.0], frames = 32 },
+]
+
+[[enemies]]
+start = [24.0, 24.0]
+size = 4
+loop = false
+segments = []

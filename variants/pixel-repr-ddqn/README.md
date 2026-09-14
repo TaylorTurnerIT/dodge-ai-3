@@ -38,3 +38,19 @@ python3 variants/pixel-repr-ddqn/scripts/colab_mvp.py \
 ```
 
 The launcher freezes the configuration in its source archive. Collection records the resolved configuration and its hash; the model still receives only pixels and actions. Each scenario needs a separate corpus/run so results stay attributable. See [scenario gates and checks](kit/SCENARIOS.md).
+
+Scripted practice adds player action sequences and coordinate waypoints, plus static or moving enemy squares. Its implementation and capture checks follow [a separate phase contract](kit/SCRIPTED-PRACTICE.md). Practice coordinates configure the native driver; they are not model observations. Practice artifacts remain separate from training corpora until an ingestion/training phase is specified.
+
+Generate the supplied practice example (native collection only):
+
+```bash
+scripts/uv-run --extra native --extra training --extra lewm python \
+  -m dodge_native_game.variants.pixel_repr_ddqn.practice \
+  --config variants/pixel-repr-ddqn/practice/moving-enemy.toml \
+  --output history/dodge/gymnasium/pixel-repr-ddqn-practice/moving-enemy-demo \
+  --seed 42
+```
+
+The [example script](practice/moving-enemy.toml) moves the player to a waypoint, holds neutral, and drives one square along a closed path while another stays still. Player commands accept `move_to = [x, y]` with a decision budget, or a named action such as `right` with a duration in decisions. Each decision lasts four native frames; enemy path durations use native frames (the cartridge updates at 60 Hz). Positions are centers in the 128×128 playfield. The waypoint helper uses a 2-pixel arrival tolerance and a low-speed check; it may time out on a route it cannot settle at and does not plan around obstacles.
+
+Inspect `initial.png`, `final.png`, and `replay.gif`. Successful scripts also produce `goal.gif`; the NPZ files retain exact pixels and executed actions. End with movement for a moving goal, or add neutral holds for a settled player. Scripted enemies currently use normal square geometry and authored paths in place of pursuit AI. A failed or lethal episode retains its replay but has no valid goal. PNG/GIF files are visual previews; exact timing and transitions belong to the recorded trajectory and manifest.

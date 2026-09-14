@@ -8,7 +8,10 @@ use dodge_batch::{
     HAZARD_DEFAULT_HORIZON, HAZARD_DEFAULT_SPAWN_HALO_RADIUS, HAZARD_OBSERVATION_VERSION,
     HAZARD_SCALARS, ML_OBSERVATION_SIZE, PIXEL_HEIGHT, PIXEL_WIDTH,
 };
-use dodge_core::{Action, FrameEvent, Mode};
+use dodge_core::{
+    Action, FrameEvent, Mode, NativeConfig, PracticeCommand, PracticeEnemy, PracticeSegment,
+    PracticeSimulation,
+};
 use ndarray::{Array1, Array2, Array3, Array4};
 use numpy::{IntoPyArray, PyReadonlyArray1};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -16,6 +19,96 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
 const BATCH_SCHEMA_VERSION: u32 = 1;
+
+// Explicit tuples keep the simulation configuration independent of Python
+// object lifetimes. The core validates geometry and resource limits again.
+type EnemyPracticeInput = (f32, f32, f32, bool, Vec<(f32, f32, u32)>);
+
+#[pyclass(name = "NativePracticeEnv")]
+pub struct NativePracticeEnv {
+    inner: PracticeSimulation,
+}
+
+#[pymethods]
+impl NativePracticeEnv {
+    #[new]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        step_frames: u32,
+        difficulty: u8,
+        permanent_pattern: u8,
+        invulnerable: bool,
+        player_start: (f32, f32),
+        commands: Vec<(u8, f32, f32, u32)>,
+        enemies: Vec<EnemyPracticeInput>,
+    ) -> PyResult<Self> {
+        let mut config = NativeConfig::new(42);
+        config.difficulty = difficulty;
+        config.scenario.permanent_pattern = permanent_pattern;
+        config.scenario.invulnerable = invulnerable;
+        let commands = commands
+            .into_iter()
+            .map(|(kind, x, y, count)| match kind {
+                0 if x.is_finite() && (0.0..=8.0).contains(&x) && x.fract() == 0.0 && y == 0.0 => {
+                    Ok(PracticeCommand::Action {
+                        action: Action::ALL[x as usize],
+                        decisions: count,
+                    })
+                }
+                1 => Ok(PracticeCommand::MoveTo {
+                    x,
+                    y,
+                    max_decisions: count,
+                }),
+                _ => Err(PyValueError::new_err("invalid practice command")),
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let enemies = enemies
+            .into_iter()
+            .map(|(x, y, size, looping, segments)| PracticeEnemy {
+                x,
+                y,
+                size,
+                looping,
+                segments: segments
+                    .into_iter()
+                    .map(|(x, y, frames)| PracticeSegment { x, y, frames })
+                    .collect(),
+            })
+            .collect();
+        let inner = PracticeSimulation::new(config, player_start, commands, enemies, step_frames)
+            .map_err(PyValueError::new_err)?;
+        Ok(Self { inner })
+    }
+
+    fn reset<'py>(
+        &mut self,
+        py: Python<'py>,
+        seed: u32,
+    ) -> PyResult<Bound<'py, numpy::PyArray2<u8>>> {
+        let pixels = self.inner.reset(seed).map_err(PyValueError::new_err)?;
+        let array = Array2::from_shape_vec((128, 128), pixels.pixels().to_vec())
+            .map_err(|_| PyRuntimeError::new_err("invalid practice framebuffer"))?;
+        Ok(array.into_pyarray(py))
+    }
+
+    fn step<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let result = self.inner.step().map_err(PyRuntimeError::new_err)?;
+        let output = PyDict::new(py);
+        let pixels = Array2::from_shape_vec((128, 128), result.pixels.pixels().to_vec())
+            .map_err(|_| PyRuntimeError::new_err("invalid practice framebuffer"))?;
+        output.set_item("pixels", pixels.into_pyarray(py))?;
+        let action = Action::ALL
+            .iter()
+            .position(|action| *action == result.action)
+            .expect("practice action is in the nine-action table");
+        output.set_item("action", action)?;
+        output.set_item("terminated", result.terminated)?;
+        output.set_item("finished", result.finished)?;
+        output.set_item("failed", result.failed)?;
+        Ok(output)
+    }
+}
 
 /// A persistent native batch environment exposed to Python.
 #[pyclass(name = "NativeBatchEnv")]
@@ -598,6 +691,7 @@ fn dodge_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
         HAZARD_DEFAULT_SPAWN_HALO_RADIUS,
     )?;
     module.add_class::<NativeBatchEnv>()?;
+    module.add_class::<NativePracticeEnv>()?;
     Ok(())
 }
 
@@ -1129,7 +1223,10 @@ fn pickup_count(events: &[FrameEvent]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{action_from_index, event_flags_code, mode_code, NativeBatchEnv};
-    use dodge_core::{Action, FrameEvent, Mode};
+    use dodge_core::{
+        Action, FrameEvent, Mode, NativeConfig, PracticeCommand, PracticeEnemy, PracticeSegment,
+        PracticeSimulation,
+    };
 
     #[test]
     fn v70_pickup_count_preserves_multiplicity_and_legacy_bits() {

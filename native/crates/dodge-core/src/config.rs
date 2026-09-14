@@ -3,7 +3,7 @@ use crate::PicoFixed;
 /// Optional testing rules. Zero/default values preserve cartridge behavior.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ScenarioRules {
-    /// 0 = all enemies, 1 = none, 2 = normal only.
+    /// 0 = all, 1 = none, 2 = normal only, 3 = externally scripted.
     pub enemy_mode: u8,
     /// Zero uses the ordinary schedule; 1..=39 freezes catalog geometry.
     pub permanent_pattern: u8,
@@ -20,7 +20,7 @@ impl ScenarioRules {
         }
     }
     pub const fn valid(self) -> bool {
-        self.enemy_mode <= 2 && self.permanent_pattern <= 39
+        self.enemy_mode <= 3 && self.permanent_pattern <= 39
     }
 }
 
