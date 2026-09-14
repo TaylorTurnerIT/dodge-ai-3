@@ -40,7 +40,17 @@ def main() -> None:
         type=Path,
         help="Frozen imported corpus for practice-overfit-v1",
     )
+    parser.add_argument(
+        "--practice-experiment",
+        choices=["practice-overfit-v1", "practice-diverse-v1"],
+        default="practice-overfit-v1",
+    )
+    parser.add_argument("--calibrate-encoder", action="store_true")
     args = parser.parse_args()
+    if (
+        args.calibrate_encoder or args.practice_experiment != "practice-overfit-v1"
+    ) and args.practice_dataset is None:
+        raise ValueError("practice experiment/calibration requires a frozen dataset")
     if args.practice_dataset is not None and args.scenario is not None:
         raise ValueError("practice dataset and scenario collection are exclusive")
     practice = None
@@ -51,7 +61,8 @@ def main() -> None:
         if not manifest.get("practice_import") or not (corpus / "READY").is_file():
             raise ValueError("expected a published practice corpus")
         practice = {
-            "experiment": "practice-overfit-v1",
+            "experiment": args.practice_experiment,
+            "calibrate_encoder": args.calibrate_encoder,
             "model_updates": 512,
             "decoder_updates": 256,
             "batch_size": 8,
@@ -186,6 +197,12 @@ def main() -> None:
     shutil.copytree(
         job / "results/history" / args.run_id, destination, dirs_exist_ok=True
     )
+    if practice and practice["calibrate_encoder"]:
+        calibrated_name = args.run_id + "-calibrated"
+        calibrated_destination = destination.with_name(calibrated_name)
+        shutil.copytree(
+            job / "results/history" / calibrated_name, calibrated_destination
+        )
     cli("stop", "--session", session)
     print(f"Artifacts: {destination}", flush=True)
 

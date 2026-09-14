@@ -205,6 +205,15 @@ N2|accepted|diagnostic evaluation|Execute frozen checkpoint audit on T4|N1|Zero 
 V46|Audit uses identical cached deterministic encoder CLS inputs; encoder BN/predictor BN/dropout switched independently, per-position errors reported. Three dropout seeds2026-2028; original/wrong actions share masks. Train modes diagnostic only, never deployment evidence; target spaces can change with encoder BN, compare ratios within condition.
 V47|Calibration changes buffers only on disposable copies; exact training-window population moments, no validation fitting. Predictor-only intervention preserves encoder/target space. Original buffers/modes/RNG restored on exceptions; no optimizer, no checkpoint write, no promotion of calibrated copies. Future substitution changes only final-frame CLS; evaluation context invariance must hold.
 
+§K — calibrated diverse-practice screen
+K1|accepted|implementation|Inference-only encoder calibration export; bounded diverse suite; paired raw/calibrated runner|N2|Train-only/weight-preservation/resume rejection/causality tests; suite determinism and coverage; full Python/Ruff
+K2|active|collection|Freeze16 explicit practice captures|K1|12train seeds500-511,4validation1500-1503;16decisions each;256total; source/config/episode hashes, rendered review
+K3|unopened|training|Fresh diverse-practice-v1 screen|K2|Reference T4,float32,512updates,batch8,seed42; unchanged objective/optimizer; no extension
+K4|unopened|calibration and diagnostic fitting/evaluation|Paired original/calibrated checkpoints and decoders|K3|Encoder population moments from train only;256 decoder updates per condition; persistence/wrong-action metrics; no controller promotion
+V48|Calibration export preserves original checkpoint and learned weights; only encoder BN running_mean/running_var change. Derived checkpoint inference_only, no optimizer/RNG state; trainer rejects resume. Parent/data/derived hashes recorded; original and calibrated runs separate; original decoder never reused for changed latents.
+V49|Diverse suite stays native/pixel/action-only:12train+4validation captures,16decisions each,all9training actions, varied starts/static/moving enemies; all invulnerable, difficulty1, no patterns. Explicit episode splits/hashes, total256 cap. New dataset comparison with prior21-transition corpus not a matched generalization claim.
+V50|practice-diverse-v1 opt-in fresh reference CUDA512updates,batch8,seed42, no resume; default MVP unchanged. Calibration/evaluation after training; no validation calibration or selecting raw/calibrated checkpoints by validation. Report both and limits; no automatic long run.
+
 §T
 id|status|task|cites
 ---|---|---|---
@@ -267,6 +276,10 @@ T50|✓|D3/D4: bounded T4 overfit and frozen evaluation|V14,V20,V44,V45
 T51|✓|N1: implement frozen normalization and causality audit|V14,V46,V47
 T52|✓|N2: run and interpret T4 audit; preserve failed-run evidence|V14,V46,V47
 
+T53|x|K1: calibration export, diverse suite and paired evaluation integration|V14,V48-V50
+T54|.|K2: collect/hash/review bounded diverse practice corpus|V49
+T55|.|K3/K4: T4 screen and original/calibrated diagnostics|V14,V48-V50
+
 §B
 id|date|cause|fix
 ---|---|---|---
@@ -306,3 +319,5 @@ B23|2026-09-14|Launcher review found package import eagerly requires native modu
 B24|2026-09-14|Colab191MiB archive upload failed twice with TLS EOF before any diagnostic execution;8MiB chunk succeeded|Chunk host transfer, hash reassembled frozen archive; diagnostic code/checkpoint unchanged, same run identity valid
 
 N.result|Encoder running-stat intervention restores train fit: ratio16.1043→0.01628; validation10.8561→1.14132 still fails persistence. Predictor-only intervention worsens; dropout/position not dominant. Train-mode future coupling confirmed; fixed-stat eval invariant. Original checkpoint unchanged; normalization export protocol next, no controller promotion.
+
+B25|2026-09-14|Calibration first lint found long docstring, loop closure and unused test import|Bind pixel batch in capture closure, format and remove unused import; V18 sufficient

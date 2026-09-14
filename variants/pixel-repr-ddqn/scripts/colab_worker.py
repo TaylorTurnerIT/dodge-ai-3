@@ -82,6 +82,28 @@ def main():
             checkpoint_sha256=file_hash(run / "checkpoint.pt"), protocol=protocol
         )
         atomic_json(run / "dynamics.json", checks)
+    if protocol and protocol.get("calibrate_encoder"):
+        from dodge_native_game.variants.pixel_repr_ddqn.calibration import (
+            export_calibrated_run,
+        )
+
+        calibrated = export_calibrated_run(
+            run, dataset, root / "history", RUN_ID + "-calibrated"
+        )
+        calibrated_model, _ = load_model(calibrated / "checkpoint.pt")
+        calibrated_model = calibrated_model.to("cuda")
+        calibrated_checks = {
+            split: evaluate_dynamics(
+                calibrated_model, PixelSequenceDataset(dataset, split=split), "cuda"
+            )
+            for split in ("train", "validation")
+        }
+        calibrated_checks.update(
+            checkpoint_sha256=file_hash(calibrated / "checkpoint.pt"), protocol=protocol
+        )
+        atomic_json(calibrated / "dynamics.json", calibrated_checks)
+        del calibrated_model
+        fit_probe(calibrated, dataset, steps=256, batch_size=8, device="cuda")
     (run / "remote_environment.json").write_text(
         json.dumps(
             {

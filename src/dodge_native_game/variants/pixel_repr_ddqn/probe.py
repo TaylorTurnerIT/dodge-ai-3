@@ -42,7 +42,10 @@ def fit_probe(
     checkpoint = run / "checkpoint.pt"
     checkpoint_hash = file_hash(checkpoint)
     model, payload = load_model(checkpoint)
-    practice = payload.get("experiment") == "practice-overfit-v1"
+    practice = payload.get("experiment") in {
+        "practice-overfit-v1",
+        "practice-diverse-v1",
+    }
     if steps > 32 and not practice:
         raise ValueError("decoder smoke requires 1..32 updates")
     if practice and (steps, batch_size, device) != (256, 8, "cuda"):

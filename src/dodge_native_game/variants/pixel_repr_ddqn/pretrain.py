@@ -78,9 +78,9 @@ def train(
     device: str = "cuda",
     experiment: str = "mvp",
 ) -> Path:
-    if experiment not in {"mvp", "practice-overfit-v1"}:
+    if experiment not in {"mvp", "practice-overfit-v1", "practice-diverse-v1"}:
         raise ValueError("unknown experiment")
-    if experiment == "practice-overfit-v1":
+    if experiment in {"practice-overfit-v1", "practice-diverse-v1"}:
         if (steps, batch_size, seed, profile, device, resume) != (
             512,
             8,
@@ -90,7 +90,7 @@ def train(
             None,
         ):
             raise ValueError(
-                "practice-overfit-v1 requires fresh reference CUDA, "
+                f"{experiment} requires fresh reference CUDA, "
                 "512 updates, batch8, seed42"
             )
     elif not 1 <= steps <= 32:
@@ -113,9 +113,10 @@ def train(
     )
     if not len(dataset):
         raise ValueError("dataset contains no valid training windows")
-    if experiment == "practice-overfit-v1" and not dataset.manifest.get(
-        "practice_import"
-    ):
+    if experiment in {
+        "practice-overfit-v1",
+        "practice-diverse-v1",
+    } and not dataset.manifest.get("practice_import"):
         raise ValueError("practice-overfit-v1 requires an imported practice corpus")
     data_hash = file_hash(dataset_root / "manifest.json")
     scenario_provenance = getattr(dataset, "manifest", {}).get("scenario")
@@ -126,6 +127,8 @@ def train(
     parent_hash = None
     if resume is not None:
         previous = torch.load(resume, map_location="cpu", weights_only=True)
+        if previous.get("inference_only"):
+            raise ValueError("inference-only checkpoints cannot resume training")
         if previous.get("experiment", "mvp") != experiment:
             raise ValueError("checkpoint experiment mismatch")
         if previous["config"] != asdict(config) or previous["data_hash"] != data_hash:
@@ -145,13 +148,15 @@ def train(
         if profile == "tiny"
         else "Reference architecture smoke — not validated for gameplay"
     )
-    if experiment == "practice-overfit-v1":
+    if experiment in {"practice-overfit-v1", "practice-diverse-v1"}:
         label = "Practice overfit diagnostic — no generalization or gameplay claim"
-    phase = (
-        "practice overfit"
-        if experiment == "practice-overfit-v1"
-        else "world-model smoke"
-    )
+    if experiment == "practice-diverse-v1":
+        label = "Diverse practice diagnostic — no generalization or gameplay claim"
+    phase = {
+        "mvp": "world-model smoke",
+        "practice-overfit-v1": "practice overfit",
+        "practice-diverse-v1": "diverse practice",
+    }[experiment]
     run = create_run(
         history_root,
         run_id,
@@ -313,7 +318,9 @@ def main() -> None:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cuda")
     parser.add_argument(
-        "--experiment", choices=["mvp", "practice-overfit-v1"], default="mvp"
+        "--experiment",
+        choices=["mvp", "practice-overfit-v1", "practice-diverse-v1"],
+        default="mvp",
     )
     args = parser.parse_args()
     path = train(
