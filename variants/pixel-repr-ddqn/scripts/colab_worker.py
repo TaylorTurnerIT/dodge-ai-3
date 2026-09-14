@@ -24,24 +24,64 @@ def main():
     from dodge_native_game.variants.pixel_repr_ddqn.probe import fit_probe
 
     dataset = root / "dataset"
-    collect_dataset(
-        dataset,
-        train_seeds=[11, 12, 13],
-        validation_seeds=[10011],
-        max_steps_per_episode=64,
-        seed=42,
-        scenario=root / "scenario.toml" if (root / "scenario.toml").is_file() else None,
-    )
+    protocol_path = root / "practice_protocol.json"
+    protocol = json.loads(protocol_path.read_text()) if protocol_path.exists() else None
+    if protocol is None:
+        collect_dataset(
+            dataset,
+            train_seeds=[11, 12, 13],
+            validation_seeds=[10011],
+            max_steps_per_episode=64,
+            seed=42,
+            scenario=root / "scenario.toml"
+            if (root / "scenario.toml").is_file()
+            else None,
+        )
+    else:
+        from dodge_native_game.variants.pixel_repr_ddqn.dataset import (
+            PixelSequenceDataset,
+        )
+        from dodge_native_game.variants.pixel_repr_ddqn.run_artifacts import file_hash
+
+        assert file_hash(dataset / "manifest.json") == protocol["data_hash"]
+        for split in ("train", "validation"):
+            assert len(PixelSequenceDataset(dataset, split=split)) > 0
     run = train(
         dataset_root=dataset,
         history_root=root / "history",
         run_id=RUN_ID,
         profile="reference",
-        steps=32,
-        batch_size=4,
+        steps=protocol["model_updates"] if protocol else 32,
+        batch_size=protocol["batch_size"] if protocol else 4,
+        experiment=protocol["experiment"] if protocol else "mvp",
         device="cuda",
     )
-    fit_probe(run, dataset, steps=32, batch_size=4, device="cuda")
+    fit_probe(
+        run,
+        dataset,
+        steps=protocol["decoder_updates"] if protocol else 32,
+        batch_size=protocol["batch_size"] if protocol else 4,
+        device="cuda",
+    )
+    if protocol:
+        from dodge_native_game.variants.pixel_repr_ddqn.dynamics import (
+            evaluate_dynamics,
+        )
+        from dodge_native_game.variants.pixel_repr_ddqn.pretrain import load_model
+        from dodge_native_game.variants.pixel_repr_ddqn.run_artifacts import atomic_json
+
+        model, _ = load_model(run / "checkpoint.pt")
+        model = model.to("cuda")
+        checks = {
+            split: evaluate_dynamics(
+                model, PixelSequenceDataset(dataset, split=split), "cuda"
+            )
+            for split in ("train", "validation")
+        }
+        checks.update(
+            checkpoint_sha256=file_hash(run / "checkpoint.pt"), protocol=protocol
+        )
+        atomic_json(run / "dynamics.json", checks)
     (run / "remote_environment.json").write_text(
         json.dumps(
             {

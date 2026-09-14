@@ -35,7 +35,29 @@ def main() -> None:
         type=Path,
         help="Scenario TOML to freeze into the T4 source archive",
     )
+    parser.add_argument(
+        "--practice-dataset",
+        type=Path,
+        help="Frozen imported corpus for practice-overfit-v1",
+    )
     args = parser.parse_args()
+    if args.practice_dataset is not None and args.scenario is not None:
+        raise ValueError("practice dataset and scenario collection are exclusive")
+    practice = None
+    if args.practice_dataset is not None:
+        corpus = args.practice_dataset.resolve()
+        raw = (corpus / "manifest.json").read_bytes()
+        manifest = json.loads(raw)
+        if not manifest.get("practice_import") or not (corpus / "READY").is_file():
+            raise ValueError("expected a published practice corpus")
+        practice = {
+            "experiment": "practice-overfit-v1",
+            "model_updates": 512,
+            "decoder_updates": 256,
+            "batch_size": 8,
+            "seed": 42,
+            "data_hash": hashlib.sha256(raw).hexdigest(),
+        }
     if args.scenario is not None:
         # Parse before creating a job or allocating a GPU. Native/schema validation
         # runs in the frozen worker before collection.
@@ -45,6 +67,8 @@ def main() -> None:
     session = "dodge-" + args.run_id
     job = ROOT / "history/dodge/gymnasium/pixel-repr-ddqn-jobs" / args.run_id
     job.mkdir(parents=True, exist_ok=False)
+    if practice is not None:
+        (job / "practice_protocol.json").write_text(json.dumps(practice, indent=2))
     archive = job / "source.tar.gz"
     with tarfile.open(archive, "w:gz") as output:
         for relative in [
@@ -64,8 +88,13 @@ def main() -> None:
                 arcname=relative,
                 filter=lambda info: None if "__pycache__" in info.name else info,
             )
+        if practice is not None:
+            output.add(corpus, arcname="dataset")
+            output.add(job / "practice_protocol.json", arcname="practice_protocol.json")
         if args.scenario is not None:
             output.add(args.scenario, arcname="scenario.toml")
+    if archive.stat().st_size > 2 * 1024**3:
+        raise ValueError("source archive exceeds 2GiB protocol cap")
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (job / "job.json").write_text(
         json.dumps(
@@ -77,6 +106,7 @@ def main() -> None:
                 if args.scenario is not None
                 else None,
                 "run_id": args.run_id,
+                "practice_protocol": practice,
             },
             indent=2,
         )

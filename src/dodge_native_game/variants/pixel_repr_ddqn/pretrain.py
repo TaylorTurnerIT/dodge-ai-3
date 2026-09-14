@@ -76,8 +76,24 @@ def train(
     threads: int = 2,
     resume: Path | None = None,
     device: str = "cuda",
+    experiment: str = "mvp",
 ) -> Path:
-    if not 1 <= steps <= 32:
+    if experiment not in {"mvp", "practice-overfit-v1"}:
+        raise ValueError("unknown experiment")
+    if experiment == "practice-overfit-v1":
+        if (steps, batch_size, seed, profile, device, resume) != (
+            512,
+            8,
+            42,
+            "reference",
+            "cuda",
+            None,
+        ):
+            raise ValueError(
+                "practice-overfit-v1 requires fresh reference CUDA, "
+                "512 updates, batch8, seed42"
+            )
+    elif not 1 <= steps <= 32:
         raise ValueError("MVP training is bounded to 1..32 updates per run")
     if batch_size < 2 or batch_size > 128:
         raise ValueError("batch_size must be in 2..128 for BatchNorm/SIGReg")
@@ -97,6 +113,10 @@ def train(
     )
     if not len(dataset):
         raise ValueError("dataset contains no valid training windows")
+    if experiment == "practice-overfit-v1" and not dataset.manifest.get(
+        "practice_import"
+    ):
+        raise ValueError("practice-overfit-v1 requires an imported practice corpus")
     data_hash = file_hash(dataset_root / "manifest.json")
     scenario_provenance = getattr(dataset, "manifest", {}).get("scenario")
     model = LeWorldModel(config).to(device)
@@ -106,6 +126,8 @@ def train(
     parent_hash = None
     if resume is not None:
         previous = torch.load(resume, map_location="cpu", weights_only=True)
+        if previous.get("experiment", "mvp") != experiment:
+            raise ValueError("checkpoint experiment mismatch")
         if previous["config"] != asdict(config) or previous["data_hash"] != data_hash:
             raise ValueError("checkpoint configuration/dataset mismatch")
         if previous.get("batch_size") != batch_size or previous.get("seed") != seed:
@@ -123,11 +145,19 @@ def train(
         if profile == "tiny"
         else "Reference architecture smoke — not validated for gameplay"
     )
+    if experiment == "practice-overfit-v1":
+        label = "Practice overfit diagnostic — no generalization or gameplay claim"
+    phase = (
+        "practice overfit"
+        if experiment == "practice-overfit-v1"
+        else "world-model smoke"
+    )
     run = create_run(
         history_root,
         run_id,
         {
             "variant": "pixel-repr-ddqn",
+            "experiment": experiment,
             "profile": profile,
             "model_label": label,
             "config": asdict(config),
@@ -147,7 +177,7 @@ def train(
                 "lr": 5e-5,
                 "weight_decay": 1e-3,
                 "clip": 1.0,
-                "schedule": "constant for bounded MVP smoke",
+                "schedule": "constant for declared experiment",
             },
             "upstream_commit": "8edfeb336732b5f3ce7b8b210d0ba370a09e2cac",
             "quality": "engineering-only",
@@ -193,7 +223,7 @@ def train(
                 "feature_rank": rank,
                 "updates_per_second": offset / max(elapsed, 1e-9),
                 "elapsed_seconds": elapsed,
-                "phase": "world-model smoke",
+                "phase": phase,
             }
             if not all(
                 math.isfinite(value)
@@ -205,7 +235,7 @@ def train(
             write_status(
                 run,
                 state="running",
-                phase="world-model smoke",
+                phase=phase,
                 step=offset,
                 total_steps=steps,
                 message=label,
@@ -227,6 +257,7 @@ def train(
                         "seed": seed,
                         "data_hash": data_hash,
                         "profile": profile,
+                        "experiment": experiment,
                         "model_label": label,
                         "scenario": scenario_provenance,
                     },
@@ -242,7 +273,7 @@ def train(
                 "checkpoint_sha256": file_hash(run / "checkpoint.pt"),
                 "elapsed_seconds": time.monotonic() - began,
                 "limitations": [
-                    "bounded smoke; no semantic or survival claim",
+                    "bounded diagnostic; no semantic or survival claim",
                     f"actual batch {batch_size}; paper batch128",
                     "float32 smoke; upstream uses mixed bfloat16",
                 ],
@@ -251,7 +282,7 @@ def train(
         write_status(
             run,
             state="completed",
-            phase="world-model smoke",
+            phase=phase,
             step=steps,
             total_steps=steps,
             message="Checkpoint ready for frozen diagnostic fitting",
@@ -261,7 +292,7 @@ def train(
         write_status(
             run,
             state="failed",
-            phase="world-model smoke",
+            phase=phase,
             step=offset,
             total_steps=steps,
             message=str(error),
@@ -281,6 +312,9 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cuda")
+    parser.add_argument(
+        "--experiment", choices=["mvp", "practice-overfit-v1"], default="mvp"
+    )
     args = parser.parse_args()
     path = train(
         dataset_root=args.dataset,
@@ -293,6 +327,7 @@ def main() -> None:
         threads=args.threads,
         resume=args.resume,
         device=args.device,
+        experiment=args.experiment,
     )
     print(f"Run artifacts: {path}")
 

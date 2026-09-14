@@ -35,13 +35,18 @@ def fit_probe(
     batch_size: int = 4,
     device: str = "cuda",
 ) -> None:
-    if not 1 <= steps <= 32:
-        raise ValueError("decoder smoke requires 1..32 updates")
+    if not 1 <= steps <= 256:
+        raise ValueError("decoder fitting requires 1..256 updates")
     if device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA required: fit diagnostics on Colab T4")
     checkpoint = run / "checkpoint.pt"
     checkpoint_hash = file_hash(checkpoint)
     model, payload = load_model(checkpoint)
+    practice = payload.get("experiment") == "practice-overfit-v1"
+    if steps > 32 and not practice:
+        raise ValueError("decoder smoke requires 1..32 updates")
+    if practice and (steps, batch_size, device) != (256, 8, "cuda"):
+        raise ValueError("practice decoder requires 256 updates, batch8, CUDA")
     if file_hash(dataset_root / "manifest.json") != payload["data_hash"]:
         raise ValueError("diagnostic dataset differs from model training dataset")
     model = model.to(device).eval().requires_grad_(False)
@@ -163,7 +168,7 @@ def fit_probe(
     write_status(
         run,
         state="completed",
-        phase="MVP ready",
+        phase="Practice diagnostics ready" if practice else "MVP ready",
         step=steps,
         total_steps=steps,
         message="Held-out diagnostics ready; no gameplay quality claim",

@@ -100,3 +100,51 @@ def test_probe_preserves_checkpoint_and_uses_validation(monkeypatch, tmp_path):
     assert visualization["metadata"]["checkpoint_sha256"] == before
     assert len(visualization["frames"]) == 4
     assert visualization["diagnostic_only"] is True
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"steps": 513},
+        {"steps": 32},
+        {"device": "cpu"},
+        {"profile": "tiny"},
+        {"batch_size": 4},
+        {"seed": 43},
+        {"resume": Path("checkpoint.pt")},
+    ],
+)
+def test_practice_envelope_cannot_silently_change(override, tmp_path):
+    args = dict(
+        dataset_root=tmp_path / "missing",
+        history_root=tmp_path,
+        experiment="practice-overfit-v1",
+        steps=512,
+        batch_size=8,
+        seed=42,
+        profile="reference",
+        device="cuda",
+    )
+    args.update(override)
+    with pytest.raises(ValueError, match="practice-overfit-v1 requires"):
+        train(**args)
+    assert not (tmp_path / "lewm-mvp").exists()
+
+
+def test_default_mvp_budget_stays_bounded(tmp_path):
+    with pytest.raises(ValueError, match="1..32"):
+        train(dataset_root=tmp_path, steps=512)
+
+
+def test_decoder_extension_requires_practice_checkpoint(monkeypatch, tmp_path):
+    from dodge_native_game.variants.pixel_repr_ddqn import probe
+
+    (tmp_path / "checkpoint.pt").write_bytes(b"fixture")
+    monkeypatch.setattr(probe, "load_model", lambda _: (None, {"experiment": "mvp"}))
+    with pytest.raises(ValueError, match="1..32"):
+        probe.fit_probe(tmp_path, tmp_path, steps=256, device="cpu")
+    monkeypatch.setattr(
+        probe, "load_model", lambda _: (None, {"experiment": "practice-overfit-v1"})
+    )
+    with pytest.raises(ValueError, match="256 updates, batch8, CUDA"):
+        probe.fit_probe(tmp_path, tmp_path, steps=256, batch_size=8, device="cpu")
