@@ -39,3 +39,8 @@ python3 -c "import json; rows=[json.loads(l) for l in open('history/dodge/gymnas
 Rust owns game state, reward, termination, and observations. Python adds no game semantics; reward tuning edits `file://src/dodge_native_game/variants/cnn_image_ddqn/rewards.py` weights only. Keep changes inside the variant namespace and the artifact contract in `file://src/dodge_native_game/variants/cnn_image_ddqn/run_artifacts.py`.
 
 Verify with `scripts/uv-run pytest`, `scripts/uv-run ruff check .`, and one bounded run: `scripts/uv-run dodge-cnn-image-run --history-root history/dodge/gymnasium --run-id smoke-check --steps 32 --stack-size 1 --device cpu`. On this host prefix Python commands with `LD_LIBRARY_PATH=/nix/store/0vqb1mcas5j8dv6bhbrshinlgsg6bvgi-gcc-15.3.0-lib/lib:$LD_LIBRARY_PATH` when NumPy reports missing `libstdc++.so.6`.
+
+
+## Independent pixel representation variant
+
+For `pixel-repr-ddqn`, read [variant instructions](variants/pixel-repr-ddqn/AGENTS.md), [SPEC](variants/pixel-repr-ddqn/SPEC.md) and [phase kit](variants/pixel-repr-ddqn/kit/README.md). User authorized this separate namespace; CNN-image-DDQN-only instructions above continue to control that legacy variant. Do not select its stale task rows or write its artifact root for the new experiment.

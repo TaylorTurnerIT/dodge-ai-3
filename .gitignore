@@ -9,3 +9,6 @@ history/
 artifacts/
 *.egg-info/
 
+
+# Local pinned upstream reference clone (recreated from references/manifest.json)
+references/le-wm/

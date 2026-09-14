@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LeWM / representation smoke</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1016;
+      --panel: #111923;
+      --panel-hi: #172331;
+      --panel-soft: #0e151e;
+      --line: #263544;
+      --line-hi: #395064;
+      --text: #e6edf4;
+      --muted: #8fa1b2;
+      --dim: #637588;
+      --cyan: #5cd6e8;
+      --blue: #79a9ff;
+      --green: #78d89a;
+      --amber: #f4c86a;
+      --red: #ff8a8a;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background: radial-gradient(circle at 25% -20%, #172b3c 0, var(--bg) 48%);
+      color: var(--text);
+      font: 13px/1.35 Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+    }
+    button, select { font: inherit; }
+    button { color: inherit; }
+    .app { height: 100dvh; display: grid; grid-template-rows: 54px minmax(0, 1fr); }
+    .topbar {
+      min-width: 0; display: flex; align-items: center; gap: 14px;
+      padding: 0 18px; border-bottom: 1px solid var(--line);
+      background: rgba(9, 14, 20, .88);
+    }
+    .brand { min-width: 0; display: flex; align-items: baseline; gap: 9px; }
+    .brand h1 { margin: 0; font-size: 17px; letter-spacing: .02em; font-weight: 680; }
+    .brand h1 span { color: var(--cyan); }
+    .brand small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .top-meta { margin-left: auto; min-width: 0; display: flex; align-items: center; gap: 12px; }
+    .top-run { max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+    .connection {
+      border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px;
+      color: var(--muted); font-size: 11px; white-space: nowrap;
+    }
+    .connection.live { color: var(--green); border-color: #2c6249; }
+    .shell {
+      min-height: 0; min-width: 0; display: grid;
+      grid-template-columns: 220px minmax(0, 1fr); gap: 10px; padding: 10px;
+    }
+    .sidebar, .workspace { min-width: 0; min-height: 0; }
+    .sidebar { display: flex; flex-direction: column; gap: 8px; }
+    .panel, .card {
+      min-width: 0; min-height: 0; border: 1px solid var(--line);
+      border-radius: var(--radius); background: rgba(17, 25, 35, .94);
+    }
+    .sidebar-head, .card-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      min-height: 38px; padding: 0 11px; border-bottom: 1px solid var(--line);
+    }
+    .eyebrow { color: var(--muted); font-size: 10px; letter-spacing: .11em; font-weight: 700; }
+    .count { color: var(--dim); font-size: 11px; }
+    .run-list { min-height: 0; flex: 1; overflow: hidden; padding: 6px; }
+    .run-item {
+      width: 100%; display: block; text-align: left; border: 1px solid transparent;
+      border-radius: 6px; background: transparent; padding: 8px; margin-bottom: 4px;
+      cursor: pointer; overflow: hidden;
+    }
+    .run-item:hover { background: var(--panel-hi); border-color: var(--line-hi); }
+    .run-item.active { background: #173142; border-color: #2b7b8d; }
+    .run-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+    .run-sub { display: flex; justify-content: space-between; gap: 7px; color: var(--muted); margin-top: 3px; font-size: 11px; }
+    .run-state { color: var(--green); }
+    .run-state.warn { color: var(--amber); }
+    .run-empty { color: var(--muted); padding: 18px 10px; text-align: center; }
+    .side-note { color: var(--dim); font-size: 11px; padding: 8px 10px 2px; }
+    .workspace { display: grid; grid-template-rows: 38px minmax(0, 1fr); gap: 8px; }
+    .toolbar { min-width: 0; display: flex; align-items: center; gap: 8px; }
+    .tabs { display: flex; gap: 5px; }
+    .tab {
+      border: 1px solid var(--line); border-radius: 6px; padding: 6px 11px;
+      background: var(--panel-soft); cursor: pointer; color: var(--muted);
+    }
+    .tab.active { background: #173142; border-color: #2b7b8d; color: var(--cyan); }
+    .updated { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 11px; }
+    .view { min-height: 0; min-width: 0; height: 100%; }
+    .overview-grid { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.48fr) minmax(250px, .72fr); gap: 10px; }
+    .frames-card { display: grid; grid-template-rows: 38px minmax(0, 1fr) 34px; }
+    .snapshot-controls { display: flex; align-items: center; gap: 4px; }
+    .icon-button {
+      width: 25px; height: 25px; border: 1px solid var(--line); border-radius: 5px;
+      background: var(--panel-soft); cursor: pointer; color: var(--muted);
+    }
+    .icon-button:hover { border-color: var(--cyan); color: var(--cyan); }
+    .sample-select { max-width: 150px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-soft); color: var(--muted); padding: 4px 6px; }
+    .frames { min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 9px; }
+    .frame-card { min-width: 0; min-height: 0; display: grid; grid-template-rows: 31px minmax(0, 1fr); border: 1px solid var(--line); border-radius: 6px; background: var(--panel-soft); overflow: hidden; }
+    .frame-label { padding: 8px 8px 0; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .frame-body { min-height: 0; display: grid; place-items: center; padding: 7px; overflow: hidden; }
+    .frame-body img { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; border-radius: 3px; }
+    .frame-empty { max-width: 145px; color: var(--dim); text-align: center; font-size: 11px; }
+    .snapshot-meta { overflow: hidden; padding: 8px 11px; color: var(--dim); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; border-top: 1px solid var(--line); }
+    .overview-side { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
+    .summary-card { padding-bottom: 9px; }
+    .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 9px; }
+    .stat { min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: var(--panel-soft); }
+    .stat label { display: block; color: var(--dim); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+    .stat strong { display: block; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 650 16px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .profile-card { padding: 11px; overflow: hidden; }
+    .profile-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .profile-title h2 { margin: 0; font-size: 13px; }
+    .profile-badge { border: 1px solid #805e2a; color: var(--amber); border-radius: 999px; padding: 4px 7px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+    .profile-lines { margin-top: 12px; display: grid; gap: 7px; }
+    .profile-line { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+    .profile-line span { color: var(--muted); }
+    .profile-line code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .notice { margin-top: 14px; border-left: 2px solid var(--amber); padding: 7px 8px; color: var(--amber); background: rgba(105, 75, 25, .18); font-size: 11px; }
+    .empty { height: 100%; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 24px; }
+    .empty strong { display: block; color: var(--text); margin-bottom: 5px; }
+    .diag-grid { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(230px, .9fr); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .chart-card { min-height: 0; display: grid; grid-template-rows: 37px minmax(0, 1fr); overflow: hidden; }
+    .chart-wrap { min-height: 0; position: relative; padding: 6px 9px 8px; }
+    .chart-wrap canvas { display: block; width: 100%; height: 100%; }
+    .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); font-size: 11px; pointer-events: none; }
+    .matrix-card { min-height: 0; display: grid; grid-template-rows: 37px minmax(0, 1fr); overflow: hidden; }
+    .matrix-wrap { min-height: 0; position: relative; padding: 8px; display: grid; place-items: center; }
+    .matrix-wrap canvas { display: block; width: min(100%, 270px); height: min(100%, 150px); image-rendering: pixelated; }
+    .legend-text { color: var(--dim); font-size: 10px; }
+    .mobile-tabs { display: none; }
+    @media (max-width: 980px) {
+      .shell { grid-template-columns: 185px minmax(0, 1fr); }
+      .overview-grid { grid-template-columns: minmax(0, 1fr) 240px; }
+      .brand small { display: none; }
+      .sample-select { max-width: 120px; }
+    }
+    @media (max-width: 720px) {
+      .app { grid-template-rows: 48px minmax(0, 1fr); }
+      .topbar { padding: 0 10px; }
+      .top-run { max-width: 27vw; }
+      .shell { display: flex; flex-direction: column; gap: 6px; padding: 6px; }
+      .sidebar { flex: 0 0 76px; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 29px 1fr; gap: 0 7px; }
+      .sidebar .panel { display: contents; }
+      .sidebar-head { grid-column: 1; min-height: 29px; border: 0; padding: 0 4px; }
+      .run-list { grid-column: 1; grid-row: 2; display: flex; gap: 5px; padding: 1px 0; }
+      .run-item { flex: 0 0 185px; margin: 0; padding: 6px; }
+      .side-note { grid-column: 2; grid-row: 1 / span 2; width: 75px; padding: 7px 3px; text-align: center; border-left: 1px solid var(--line); }
+      .workspace { flex: 1; grid-template-rows: 36px minmax(0, 1fr); }
+      .toolbar { overflow: hidden; }
+      .updated { display: none; }
+      .overview-grid { display: block; }
+      .frames-card { height: 100%; }
+      .overview-side { display: none; }
+      .diag-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+      .card-head { padding: 0 8px; }
+      .eyebrow { font-size: 9px; }
+      .sample-select { max-width: 92px; }
+    }
+    @media (max-width: 430px) {
+      .brand h1 { font-size: 15px; }
+      .connection { padding: 4px 6px; }
+      .frames { gap: 4px; padding: 5px; }
+      .frame-card { grid-template-rows: 39px minmax(0, 1fr); }
+      .frame-label { padding: 6px 5px 0; white-space: normal; line-height: 1.15; }
+      .frame-body { padding: 4px; }
+      .diag-grid { grid-template-rows: repeat(2, minmax(0, 1fr)); }
+      .legend-text { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><h1>LeWM <span>/ representation smoke</span></h1><small>pixels + actions · read only</small></div>
+      <div class="top-meta"><span class="top-run" id="top-run">No run selected</span><span id="connection" class="connection">connecting…</span></div>
+    </header>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="panel">
+          <div class="sidebar-head"><span class="eyebrow">RUNS</span><span class="count" id="run-count">0</span></div>
+          <div id="run-list" class="run-list"><div class="run-empty">Looking for artifacts…</div></div>
+        </div>
+        <div class="side-note">Artifacts are read from the selected history root. The dashboard never controls a trainer.</div>
+      </aside>
+      <section class="workspace">
+        <div class="toolbar">
+          <nav class="tabs" aria-label="Dashboard view">
+            <button class="tab active" data-view="overview">Overview</button>
+            <button class="tab" data-view="diagnostics">Diagnostics</button>
+          </nav>
+          <span class="updated" id="updated">Waiting for status.json</span>
+        </div>
+        <section id="overview" class="view">
+          <div class="overview-grid">
+            <section class="card frames-card">
+              <div class="card-head">
+                <span class="eyebrow">FRAME COMPARISON</span>
+                <div class="snapshot-controls">
+                  <button class="icon-button" id="sample-prev" title="Previous validation snapshot" aria-label="Previous validation snapshot">‹</button>
+                  <select class="sample-select" id="sample-select" aria-label="Validation snapshot"><option>latest</option></select>
+                  <button class="icon-button" id="sample-next" title="Next validation snapshot" aria-label="Next validation snapshot">›</button>
+                </div>
+              </div>
+              <div class="frames">
+                <article class="frame-card"><div class="frame-label" id="label-observed-current">Input · actual current frame</div><div class="frame-body" id="body-observed-current"><span class="frame-empty">Waiting for a validation snapshot.</span></div></article>
+                <article class="frame-card"><div class="frame-label" id="label-input">Input · actual next frame</div><div class="frame-body" id="body-input"><span class="frame-empty">Waiting for a validation snapshot.</span></div></article>
+                <article class="frame-card"><div class="frame-label" id="label-current">Diagnostic decoder · current frame</div><div class="frame-body" id="body-current"><span class="frame-empty">Decoder output is unavailable before fitting.</span></div></article>
+                <article class="frame-card"><div class="frame-label" id="label-predicted">Diagnostic decoder · predicted next frame</div><div class="frame-body" id="body-predicted"><span class="frame-empty">Decoder output is unavailable before fitting.</span></div></article>
+              </div>
+              <div class="snapshot-meta" id="snapshot-meta">Waiting for model diagnostics.</div>
+            </section>
+            <div class="overview-side">
+              <section class="card summary-card">
+                <div class="card-head"><span class="eyebrow">TRAINING PULSE</span><span class="legend-text" id="pulse-phase">latest metric row</span></div>
+                <div class="stats">
+                  <div class="stat"><label>Step</label><strong id="stat-step">—</strong></div>
+                  <div class="stat"><label>Loss</label><strong id="stat-loss">—</strong></div>
+                  <div class="stat"><label>Feature std</label><strong id="stat-feature">—</strong></div>
+                  <div class="stat"><label>Rank</label><strong id="stat-rank">—</strong></div>
+                  <div class="stat"><label>Updates / s</label><strong id="stat-speed">—</strong></div>
+                  <div class="stat"><label>Grad norm · pre-clip</label><strong id="stat-grad">—</strong></div>
+                </div>
+              </section>
+              <section class="card profile-card">
+                <div class="profile-title"><h2>Run profile</h2><span class="profile-badge" id="profile-badge">ENGINEERING CHECK</span></div>
+                <div class="profile-lines">
+                  <div class="profile-line"><span>Profile</span><code id="profile-name">—</code></div>
+                  <div class="profile-line"><span>Architecture</span><code id="profile-architecture">—</code></div>
+                  <div class="profile-line"><span>Progress</span><code id="profile-progress">—</code></div>
+                  <div class="profile-line"><span>Data hash</span><code id="profile-hash">—</code></div>
+                </div>
+                <div class="notice" id="profile-notice">Tiny smoke runs check wiring and gradients. They are not evidence that the world model learned.</div>
+              </section>
+            </div>
+          </div>
+        </section>
+        <section id="diagnostics" class="view" hidden>
+          <div class="diag-grid">
+            <section class="card chart-card"><div class="card-head"><span class="eyebrow">LOSS BREAKDOWN</span><span class="legend-text">prediction · SIGReg · total</span></div><div class="chart-wrap"><canvas id="loss-chart"></canvas><div class="chart-empty" id="loss-empty">Waiting for training metrics.</div></div></section>
+            <section class="card chart-card"><div class="card-head"><span class="eyebrow">REPRESENTATION</span><select id="health-metric" class="sample-select" aria-label="Representation metric"><option value="feature_std">Feature std</option><option value="feature_rank">Rank</option><option value="grad_norm">Grad norm</option></select></div><div class="chart-wrap"><canvas id="progress-chart"></canvas><div class="chart-empty" id="progress-empty">Waiting for training metrics.</div></div></section>
+            <section class="card matrix-card"><div class="card-head"><span class="eyebrow">ATTENTION / FEATURE PROBE</span><span class="legend-text" id="attention-label">diagnostic only</span></div><div class="matrix-wrap"><canvas id="attention-canvas"></canvas><div class="chart-empty" id="attention-empty">No attention matrix supplied.</div></div></section>
+            <section class="card matrix-card"><div class="card-head"><span class="eyebrow">LATENT / FEATURE PROBES</span><span class="legend-text" id="latent-label">actual · predicted · features</span></div><div class="matrix-wrap"><canvas id="latent-canvas"></canvas><div class="chart-empty" id="latent-empty">No latent vectors supplied.</div></div></section>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+  <script>
+    (() => {
+      "use strict";
+      const $ = (id) => document.getElementById(id);
+      const state = { runs: [], runId: null, detail: null, snapshots: [], sample: 0, view: "overview", loading: false };
+      const safeText = (value, fallback = "—") => value === undefined || value === null || value === "" ? fallback : String(value);
+      const finite = (value) => typeof value === "number" && Number.isFinite(value);
+      const number = (value, digits = 3) => {
+        if (value === null || value === undefined || value === "" || !finite(Number(value))) return "—";
+        const n = Number(value);
+        return n !== 0 && Math.abs(n) < 10 ** -digits ? n.toExponential(2) : n.toFixed(digits);
+      };
+      const latestMetric = () => {
+        const rows = state.detail && Array.isArray(state.detail.metrics) ? state.detail.metrics : [];
+        return rows.length ? rows[rows.length - 1] : {};
+      };
+
+      function setConnection(live, text) {
+        $("connection").textContent = text;
+        $("connection").classList.toggle("live", live);
+      }
+
+      function renderRuns() {
+        const list = $("run-list");
+        $("run-count").textContent = String(state.runs.length);
+        list.replaceChildren();
+        if (!state.runs.length) {
+          list.innerHTML = '<div class="run-empty">No run artifacts found.<br>Waiting for the pipeline…</div>';
+          return;
+        }
+        state.runs.forEach((run) => {
+          const button = document.createElement("button");
+          button.className = "run-item" + (run.run_id === state.runId ? " active" : "");
+          button.dataset.runId = run.run_id;
+          const stateName = safeText(run.state, "unknown");
+          const warn = /smoke|untrained|warn|error/i.test(stateName + " " + safeText(run.profile, ""));
+          button.innerHTML = `<span class="run-name"></span><span class="run-sub"><span class="run-state${warn ? " warn" : ""}"></span><span class="run-step"></span></span>`;
+          button.querySelector(".run-name").textContent = run.run_id;
+          button.querySelector(".run-state").textContent = stateName;
+          button.querySelector(".run-step").textContent = run.step === undefined || run.step === null ? "—" : `step ${run.step}`;
+          button.addEventListener("click", () => selectRun(run.run_id));
+          list.appendChild(button);
+        });
+      }
+
+      async function fetchJson(url) {
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      }
+
+      async function loadRuns() {
+        if (state.loading) return;
+        state.loading = true;
+        try {
+          const payload = await fetchJson("/api/runs");
+          state.runs = Array.isArray(payload.runs) ? payload.runs : [];
+          if (state.runId && !state.runs.some((item) => item.run_id === state.runId)) state.runId = null;
+          if (!state.runId && state.runs.length) state.runId = state.runs[0].run_id;
+          renderRuns();
+          setConnection(true, "artifact stream live");
+          if (state.runId) await loadRun(state.runId);
+          else clearDetail();
+        } catch (error) {
+          setConnection(false, "waiting for artifacts");
+          if (!state.runs.length) renderRuns();
+        } finally {
+          state.loading = false;
+        }
+      }
+
+      async function selectRun(runId) {
+        state.runId = runId;
+        renderRuns();
+        await loadRun(runId);
+      }
+
+      async function loadRun(runId) {
+        try {
+          state.detail = await fetchJson(`/api/run?run_id=${encodeURIComponent(runId)}`);
+          $("top-run").textContent = runId;
+          renderDetail();
+        } catch (error) {
+          clearDetail();
+          $("top-run").textContent = `${runId} unavailable`;
+        }
+      }
+
+      function clearDetail() {
+        state.detail = null;
+        state.snapshots = [];
+        state.sample = 0;
+        $("top-run").textContent = "No run selected";
+        renderDetail();
+      }
+
+      function renderDetail() {
+        const detail = state.detail || {};
+        const manifest = detail.manifest || {};
+        const status = detail.status || {};
+        const metric = latestMetric();
+        $("updated").textContent = safeText(status.updated_at, "Waiting for status.json");
+        $("stat-step").textContent = safeText(metric.step, status.step);
+        $("stat-loss").textContent = number(metric.loss);
+        $("stat-feature").textContent = number(metric.feature_std);
+        $("pulse-phase").textContent = safeText(status.phase || metric.phase);
+        $("stat-rank").textContent = number(metric.feature_rank, 1);
+        $("stat-speed").textContent = number(metric.updates_per_second, 1);
+        $("stat-grad").textContent = number(metric.grad_norm);
+        $("profile-name").textContent = safeText(manifest.profile, "unreported");
+        $("profile-architecture").textContent = safeText(manifest.architecture || manifest.model_label, "unreported");
+        const step = status.step === undefined ? metric.step : status.step;
+        const total = status.total_steps;
+        $("profile-progress").textContent = finite(Number(step)) && finite(Number(total)) ? `${step} / ${total}` : safeText(step);
+        $("profile-hash").textContent = safeText(manifest.data_hash, "unreported");
+        const profileText = `${safeText(manifest.profile, "")} ${safeText(manifest.model_label, "")} ${safeText(status.message, "")}`;
+        const smoke = /smoke|untrained|engineering/i.test(profileText) || (finite(Number(total)) && Number(total) <= 256);
+        $("profile-badge").textContent = smoke ? "ENGINEERING CHECK" : "DIAGNOSTIC RUN";
+        $("profile-notice").textContent = smoke ? "Tiny smoke runs check wiring and gradients. They are not evidence that the world model learned." : "Representation diagnostics remain probes; learning claims require the declared validation protocol.";
+        state.snapshots = Array.isArray(detail.visualizations) ? detail.visualizations.filter((item) => item && typeof item === "object") : [];
+        if (!state.snapshots.length && detail.visualization && typeof detail.visualization === "object") state.snapshots = [detail.visualization];
+        state.sample = Math.min(state.sample, Math.max(0, state.snapshots.length - 1));
+        renderSampleControls();
+        renderSnapshot(state.snapshots[state.sample]);
+        drawMetricCharts(Array.isArray(detail.metrics) ? detail.metrics : []);
+      }
+
+      function renderSampleControls() {
+        const select = $("sample-select");
+        select.replaceChildren();
+        if (!state.snapshots.length) {
+          const option = document.createElement("option"); option.textContent = "no snapshot"; select.appendChild(option);
+        } else {
+          state.snapshots.forEach((snapshot, index) => {
+            const option = document.createElement("option"); option.value = String(index); option.textContent = safeText(snapshot.metadata && snapshot.metadata.label, `snapshot ${index + 1}`); select.appendChild(option);
+          });
+          select.value = String(state.sample);
+        }
+        $("sample-prev").disabled = state.snapshots.length < 2;
+        $("sample-next").disabled = state.snapshots.length < 2;
+      }
+
+      function dataImage(value) {
+        return typeof value === "string" && /^data:image\/(?:png|jpeg|jpg|webp|gif);base64,/i.test(value) ? value : null;
+      }
+
+      function frameFor(snapshot, wanted, fallbackIndex) {
+        const frames = snapshot && Array.isArray(snapshot.frames) ? snapshot.frames.filter((frame) => frame && typeof frame === "object") : [];
+        const found = frames.find((frame) => wanted.some((term) => safeText(frame.label, "").toLowerCase().includes(term)));
+        return found || frames[fallbackIndex] || null;
+      }
+
+      function renderFrame(bodyId, labelId, snapshot, wanted, fallbackIndex, emptyText) {
+        const body = $(bodyId); body.replaceChildren();
+        const frame = frameFor(snapshot, wanted, fallbackIndex);
+        const image = frame && dataImage(frame.image);
+        const prefix = labelId === "label-observed-current" ? "Input · actual current" : labelId === "label-input" ? "Input · actual next" : labelId === "label-current" ? "Diagnostic decoder · current" : "Diagnostic decoder · predicted next";
+        $(labelId).textContent = frame && frame.label ? `${prefix} · ${frame.label}` : `${prefix} frame`;
+        if (image) {
+          const element = document.createElement("img"); element.src = image; element.alt = safeText(frame.label, "native diagnostic frame"); body.appendChild(element);
+        } else {
+          const text = document.createElement("span"); text.className = "frame-empty"; text.textContent = frame ? "Snapshot has no native image data URL." : emptyText; body.appendChild(text);
+        }
+      }
+
+      function renderSnapshot(snapshot) {
+        renderFrame("body-observed-current", "label-observed-current", snapshot, ["observed current", "actual current", "current input"], 0, "Waiting for an actual-current frame.");
+        renderFrame("body-input", "label-input", snapshot, ["observed next", "actual next", "input", "target", "next actual"], 1, "Waiting for an actual-next frame.");
+        renderFrame("body-current", "label-current", snapshot, ["decoded current", "diagnostic decoder", "reconstruction"], 2, "Diagnostic decoder unavailable before fitting.");
+        renderFrame("body-predicted", "label-predicted", snapshot, ["decoded prediction", "predicted next", "prediction", "next predicted"], 3, "Diagnostic decoder unavailable before fitting.");
+        const metadata = snapshot && snapshot.metadata ? snapshot.metadata : {};
+        if (snapshot) {
+          const step = snapshot.step === undefined ? metadata.step : snapshot.step;
+          $("snapshot-meta").textContent = `${safeText(metadata.label, `validation snapshot ${state.sample + 1}`)} · step ${safeText(step)} · diagnostic decoder outputs are probes`;
+        } else {
+          $("snapshot-meta").textContent = "Waiting for model diagnostics.";
+        }
+        drawMatrix("attention-canvas", "attention-empty", snapshot && snapshot.attention, "attention-label");
+        drawLatent("latent-canvas", "latent-empty", snapshot && snapshot.latent, snapshot && snapshot.features, "latent-label");
+      }
+
+      function canvasSize(canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const width = Math.max(1, Math.floor(rect.width * devicePixelRatio));
+        const height = Math.max(1, Math.floor(rect.height * devicePixelRatio));
+        canvas.width = width; canvas.height = height;
+        const context = canvas.getContext("2d"); context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+        return { context, width: rect.width, height: rect.height };
+      }
+
+      function drawMatrix(canvasId, emptyId, matrixData, labelId) {
+        const canvas = $(canvasId), empty = $(emptyId);
+        const values = matrixData && Array.isArray(matrixData.values) ? matrixData.values : null;
+        const rows = values && values.filter((row) => Array.isArray(row) && row.length) || [];
+        empty.hidden = rows.length > 0;
+        if (!rows.length) { canvas.width = 1; canvas.height = 1; return; }
+        $(labelId).textContent = safeText(matrixData.label, "diagnostic only");
+        const size = canvasSize(canvas), context = size.context;
+        const width = size.width, height = size.height, rowCount = rows.length, colCount = Math.max(...rows.map((row) => row.length));
+        const flat = rows.flatMap((row) => row.map(Number).filter(Number.isFinite));
+        const low = Math.min(...flat), high = Math.max(...flat), span = Math.max(high - low, 1e-9);
+        context.clearRect(0, 0, width, height);
+        const cellW = width / colCount, cellH = height / rowCount;
+        rows.forEach((row, y) => row.forEach((value, x) => {
+          const ratio = (Number(value) - low) / span;
+          context.fillStyle = `rgb(${Math.round(30 + 150 * ratio)},${Math.round(64 + 155 * (1 - ratio))},${Math.round(110 + 100 * ratio)})`;
+          context.fillRect(x * cellW, y * cellH, Math.ceil(cellW), Math.ceil(cellH));
+        }));
+      }
+
+      function drawLatent(canvasId, emptyId, latent, features, labelId) {
+        const canvas = $(canvasId), empty = $(emptyId);
+        let actual = latent && Array.isArray(latent.actual) ? latent.actual.map(Number).filter(Number.isFinite) : [];
+        const predicted = latent && Array.isArray(latent.predicted) ? latent.predicted.map(Number).filter(Number.isFinite) : [];
+        const featureValues = features && Array.isArray(features.values) && Array.isArray(features.values[0]) ? features.values[0].map(Number).filter(Number.isFinite) : [];
+        if (!actual.length && !predicted.length && featureValues.length) {
+          actual = featureValues;
+          $(labelId).textContent = safeText(features.label, "latent features; diagnostic only");
+        }
+        const length = Math.max(actual.length, predicted.length, featureValues.length);
+        empty.hidden = length > 0;
+        if (!length) { canvas.width = 1; canvas.height = 1; return; }
+        $(labelId).textContent = safeText(latent.label, "actual vs predicted");
+        const size = canvasSize(canvas), context = size.context, width = size.width, height = size.height;
+        const all = actual.concat(predicted, featureValues), low = Math.min(...all), high = Math.max(...all), span = Math.max(high - low, 1e-9);
+        context.clearRect(0, 0, width, height);
+        context.strokeStyle = "#263544"; context.lineWidth = 1; context.beginPath(); context.moveTo(0, height / 2); context.lineTo(width, height / 2); context.stroke();
+        const line = (values, color) => { if (values.length < 1) return; context.strokeStyle = color; context.lineWidth = 1.5; context.beginPath(); values.forEach((value, index) => { const x = values.length === 1 ? width / 2 : index * width / (values.length - 1); const y = height - ((value - low) / span) * (height - 6) - 3; index ? context.lineTo(x, y) : context.moveTo(x, y); }); context.stroke(); };
+        line(actual, "#5cd6e8"); line(predicted, "#f4c86a"); line(featureValues, "#9a8cff");
+      }
+
+      function drawMetricCharts(rows) {
+        drawLineChart("loss-chart", "loss-empty", rows, [["pred_loss", "#5cd6e8"], ["sigreg_loss", "#f4c86a"], ["loss", "#e6edf4"]]);
+        drawLineChart("progress-chart", "progress-empty", rows, [[$("health-metric").value, "#78d89a"]]);
+      }
+
+      function drawLineChart(canvasId, emptyId, rows, series) {
+        const canvas = $(canvasId), empty = $(emptyId);
+        const usable = rows.filter((row) => row && (finite(Number(row.step)) || finite(Number(row.elapsed_seconds))));
+        empty.hidden = usable.length > 1;
+        if (usable.length < 2) { canvas.width = 1; canvas.height = 1; return; }
+        const size = canvasSize(canvas), context = size.context, width = size.width, height = size.height;
+        const values = series.flatMap(([key]) => usable.map((row) => Number(row[key])).filter(Number.isFinite));
+        if (!values.length) { empty.hidden = false; return; }
+        const low = Math.min(0, ...values), high = Math.max(...values), span = Math.max(high - low, 1e-9);
+        context.clearRect(0, 0, width, height); context.strokeStyle = "#263544"; context.lineWidth = 1;
+        for (let i = 1; i < 4; i++) { const y = i * height / 4; context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke(); }
+        series.forEach(([key, color]) => { const points = usable.map((row, index) => [index, Number(row[key])]).filter((point) => Number.isFinite(point[1])); if (!points.length) return; context.strokeStyle = color; context.lineWidth = key === "loss" ? 2 : 1.35; context.beginPath(); points.forEach(([index, value], pointIndex) => { const x = index * width / (usable.length - 1); const y = height - ((value - low) / span) * (height - 6) - 3; pointIndex ? context.lineTo(x, y) : context.moveTo(x, y); }); context.stroke(); });
+      }
+
+      function switchView(view) {
+        state.view = view;
+        document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
+        $("overview").hidden = view !== "overview";
+        $("diagnostics").hidden = view !== "diagnostics";
+        if (state.detail) renderSnapshot(state.snapshots[state.sample]);
+      }
+
+      document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => switchView(tab.dataset.view)));
+      $("sample-prev").addEventListener("click", () => { if (state.snapshots.length) { state.sample = (state.sample - 1 + state.snapshots.length) % state.snapshots.length; renderSampleControls(); renderSnapshot(state.snapshots[state.sample]); } });
+      $("sample-next").addEventListener("click", () => { if (state.snapshots.length) { state.sample = (state.sample + 1) % state.snapshots.length; renderSampleControls(); renderSnapshot(state.snapshots[state.sample]); } });
+      $("sample-select").addEventListener("change", (event) => { state.sample = Number(event.target.value) || 0; renderSnapshot(state.snapshots[state.sample]); });
+      window.addEventListener("resize", () => { if (state.detail) { drawMetricCharts(state.detail.metrics || []); renderSnapshot(state.snapshots[state.sample]); } });
+      $("health-metric").addEventListener("change", () => { if (state.detail) drawMetricCharts(state.detail.metrics || []); });
+      loadRuns();
+      window.setInterval(loadRuns, 2000);
+    })();
+  </script>
+</body>
+</html>

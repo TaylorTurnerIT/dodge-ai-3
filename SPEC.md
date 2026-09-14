@@ -2,6 +2,8 @@
 
 Standalone spec for this project. Native Rust remains sole game implementation.
 
+Independent pixel representation variant: [SPEC](variants/pixel-repr-ddqn/SPEC.md) and [phase kit](variants/pixel-repr-ddqn/kit/README.md). Its own namespace and phases control new work; original board/PPO slice unchanged.
+
 §G
 G1|Expose native Dodge game/data boundary through Gymnasium Env + vector Env.
 G2|Train model against native board observation first; keep learner/policy replaceable.

@@ -1,0 +1,20 @@
+{
+  "upstream_url": "https://github.com/lucas-maes/le-wm",
+  "upstream_commit": "8edfeb336732b5f3ce7b8b210d0ba370a09e2cac",
+  "paper_url": "https://arxiv.org/html/2603.19312v3",
+  "paper_license": "CC BY 4.0",
+  "code_license": "MIT",
+  "files": {
+    "module.py": "0b258a9e8dc24c29fcb1e8c50a09ec78b8ea85aeb79e21dd8adf712396646620",
+    "jepa.py": "41bad7fd21e0f14aea4c9c3d39a9c87037e787746d953ab62cdc0677e938ce96",
+    "train.py": "5d5666a785148635f8bcb50b49f98dd4527c5aba8a02d90206eb5d46406079d2",
+    "utils.py": "b3e5cfce6d0eecd9510f06a7adc178edde86074e1474b899ff739ed8a5355b08",
+    "config/train/model/lewm.yaml": "7be97eaa2c83f809b9ea7a6da5a7d3f3c70502c27537383f54db32335e21e42b",
+    "config/train/lewm.yaml": "a90ec80bc30a6b33228047222d6b897d4df14b57b4879727b9d8284a00a9d7a3",
+    "LICENSE": "4882021920cbd61e050e4dc2e02440e9bd36ea4cbc5803e738a2ee3d63502e07"
+  },
+  "paper_files": {
+    "paper/lewm-v3.md": "eded6752825f1f90f7e41ee93036616ec3ee4f37187d786278a487f84ab1bb9a",
+    "paper/lewm-v3.html": "49feca90079f39674b3fe7f23de7cb6e76562c4d4ff5efd0a96743ca668e70b3"
+  }
+}
