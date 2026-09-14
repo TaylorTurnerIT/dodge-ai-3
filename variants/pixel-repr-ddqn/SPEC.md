@@ -199,6 +199,12 @@ V43|Practice provenance and goals remain metadata, never learner inputs. Import 
 V44|Extended budget opt-in `practice-overfit-v1` only: fresh reference CUDA,512 model updates,batch8,seed42, no resume; practice corpus required. Default MVP caps unchanged. Decoder extension requires matching checkpoint experiment;256 updates,batch8,CUDA. Frozen source+dataset manifest+protocol hashes; no silent collection when supplied corpus.
 V45|One-step dynamics use observed context only; compare predicted next to same-model encoded next, current-latent persistence, wrong-action `(a+1)%9` control. Report action sensitivity; zero persistence denominator → null ratio. No automatic quality pass; wrong-action control not a causal counterfactual rollout. Read-only evaluation leaves model/RNG unchanged.
 
+§N — frozen normalization audit
+N1|accepted|implementation|Factorial BN/dropout/position audit and train-only disposable buffer interventions|D4|Mode/RNG/buffer restoration, no validation calibration, source review, full Python/Ruff
+N2|active|diagnostic evaluation|Execute frozen checkpoint audit on T4|N1|Zero optimizer/native/decoder updates; source/data/checkpoint hashes; matched sampler indices; original model/checkpoint unchanged
+V46|Audit uses identical cached deterministic encoder CLS inputs; encoder BN/predictor BN/dropout switched independently, per-position errors reported. Three dropout seeds2026-2028; original/wrong actions share masks. Train modes diagnostic only, never deployment evidence; target spaces can change with encoder BN, compare ratios within condition.
+V47|Calibration changes buffers only on disposable copies; exact training-window population moments, no validation fitting. Predictor-only intervention preserves encoder/target space. Original buffers/modes/RNG restored on exceptions; no optimizer, no checkpoint write, no promotion of calibrated copies. Future substitution changes only final-frame CLS; evaluation context invariance must hold.
+
 §T
 id|status|task|cites
 ---|---|---|---
@@ -258,6 +264,9 @@ T48|✓|D2: frozen importer and real practice corpus verification|V14,V42,V43
 T49|✓|D3a: practice overfit envelope, frozen corpus launch and dynamics checks|V14,V20,V44,V45
 T50|✓|D3/D4: bounded T4 overfit and frozen evaluation|V14,V20,V44,V45
 
+T51|✓|N1: implement frozen normalization and causality audit|V14,V46,V47
+T52|~|N2: run and interpret T4 audit; preserve failed-run evidence|V14,V46,V47
+
 §B
 id|date|cause|fix
 ---|---|---|---
@@ -289,3 +298,7 @@ B20|2026-09-14|Practice envelope first Ruff check found long error message and w
 B21|2026-09-14|Dynamics test expected extra latent dimension; evaluator lacked explicit RNG isolation|Correct shape; fork CPU/device RNG, reject nonfinite metrics; V45 sufficient
 
 D.result|D3/D4 execution complete; negative dynamics evidence: prediction/persistence MSE ratio16.1043 train,10.8561 validation. Wrong actions slightly better. No controller opening or training extension; matched train/eval normalization diagnostic next.
+
+B22|2026-09-14|Audit lint found unbound loop closures and formatting issues|Bind candidate/latent defaults explicitly; format literals/contexts; existing V18/V47 sufficient
+
+B23|2026-09-14|Launcher review found package import eagerly requires native module even for offline diagnostics|Include/build native dependency before remote tests; no native game steps; existing V18 sufficient
