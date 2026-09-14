@@ -201,7 +201,7 @@ V45|One-step dynamics use observed context only; compare predicted next to same-
 
 §N — frozen normalization audit
 N1|accepted|implementation|Factorial BN/dropout/position audit and train-only disposable buffer interventions|D4|Mode/RNG/buffer restoration, no validation calibration, source review, full Python/Ruff
-N2|active|diagnostic evaluation|Execute frozen checkpoint audit on T4|N1|Zero optimizer/native/decoder updates; source/data/checkpoint hashes; matched sampler indices; original model/checkpoint unchanged
+N2|accepted|diagnostic evaluation|Execute frozen checkpoint audit on T4|N1|Zero optimizer/native/decoder updates; source/data/checkpoint hashes; matched sampler indices; original model/checkpoint unchanged
 V46|Audit uses identical cached deterministic encoder CLS inputs; encoder BN/predictor BN/dropout switched independently, per-position errors reported. Three dropout seeds2026-2028; original/wrong actions share masks. Train modes diagnostic only, never deployment evidence; target spaces can change with encoder BN, compare ratios within condition.
 V47|Calibration changes buffers only on disposable copies; exact training-window population moments, no validation fitting. Predictor-only intervention preserves encoder/target space. Original buffers/modes/RNG restored on exceptions; no optimizer, no checkpoint write, no promotion of calibrated copies. Future substitution changes only final-frame CLS; evaluation context invariance must hold.
 
@@ -265,7 +265,7 @@ T49|✓|D3a: practice overfit envelope, frozen corpus launch and dynamics checks
 T50|✓|D3/D4: bounded T4 overfit and frozen evaluation|V14,V20,V44,V45
 
 T51|✓|N1: implement frozen normalization and causality audit|V14,V46,V47
-T52|~|N2: run and interpret T4 audit; preserve failed-run evidence|V14,V46,V47
+T52|✓|N2: run and interpret T4 audit; preserve failed-run evidence|V14,V46,V47
 
 §B
 id|date|cause|fix
@@ -302,3 +302,7 @@ D.result|D3/D4 execution complete; negative dynamics evidence: prediction/persis
 B22|2026-09-14|Audit lint found unbound loop closures and formatting issues|Bind candidate/latent defaults explicitly; format literals/contexts; existing V18/V47 sufficient
 
 B23|2026-09-14|Launcher review found package import eagerly requires native module even for offline diagnostics|Include/build native dependency before remote tests; no native game steps; existing V18 sufficient
+
+B24|2026-09-14|Colab191MiB archive upload failed twice with TLS EOF before any diagnostic execution;8MiB chunk succeeded|Chunk host transfer, hash reassembled frozen archive; diagnostic code/checkpoint unchanged, same run identity valid
+
+N.result|Encoder running-stat intervention restores train fit: ratio16.1043→0.01628; validation10.8561→1.14132 still fails persistence. Predictor-only intervention worsens; dropout/position not dominant. Train-mode future coupling confirmed; fixed-stat eval invariant. Original checkpoint unchanged; normalization export protocol next, no controller promotion.

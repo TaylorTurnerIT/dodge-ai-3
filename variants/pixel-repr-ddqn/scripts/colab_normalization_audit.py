@@ -12,6 +12,38 @@ from pathlib import Path
 from colab_mvp import ROOT, cli
 
 
+def upload_archive(archive: Path, session: str, job: Path, *, start_index=0):
+    """Bound request size; verify reassembled bytes before executing source."""
+    parts = job / "transfer-parts"
+    parts.mkdir(exist_ok=True)
+    count = 0
+    with archive.open("rb") as stream:
+        while data := stream.read(8 * 1024**2):
+            part = parts / f"part-{count:03d}"
+            part.write_bytes(data)
+            if count >= start_index:
+                cli(
+                    "upload",
+                    str(part),
+                    f"/content/lewm-audit.part-{count:03d}",
+                    "--session",
+                    session,
+                )
+            count += 1
+    assembly = job / "assemble.py"
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    assembly.write_text(
+        "from pathlib import Path\nimport hashlib\n"
+        "destination=Path('/content/lewm-audit.tar.gz')\n"
+        "with destination.open('wb') as out:\n"
+        f" for i in range({count}):\n"
+        "  out.write(Path(f'/content/lewm-audit.part-{i:03d}').read_bytes())\n"
+        f"assert hashlib.sha256(destination.read_bytes()).hexdigest()=={digest!r}\n"
+        "print('AUDIT_ARCHIVE_VERIFIED')\n"
+    )
+    cli("exec", "--session", session, "--file", str(assembly), "--timeout", "120")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
@@ -86,7 +118,7 @@ for command in commands:
     )
     session = "dodge-" + args.run_id
     cli("new", "--session", session, "--gpu", "T4", timeout=180)
-    cli("upload", str(archive), "/content/lewm-audit.tar.gz", "--session", session)
+    upload_archive(archive, session, job)
     with (job / "remote.log").open("w") as log:
         process = subprocess.run(
             [
