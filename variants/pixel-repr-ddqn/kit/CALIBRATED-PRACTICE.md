@@ -13,3 +13,7 @@ Evaluation: original and encoder-calibrated copies of the same trained weights. 
 Resource bound: one T4,3000s remote worker timeout,2GiB source cap;512 model updates and512 decoder updates total across the two diagnostic fits. Stop on nonfinite/OOM/source defect; preserve artifacts and reopen code under new identity. Full local Python/Ruff regression; T4 variant regression and32-step legacy smoke. Dashboard keeps original and calibrated runs separate.
 
 K1 accepted:310 local tests passed in68.46s; Ruff and diff whitespace checks passed. Calibration tests verify original hash and non-stat tensor preservation, train-only use, inference-only resume rejection and fixed-stat future independence. Suite tests cover deterministic bounds, actions, TOML roundtrip and explicit split import.
+
+K2 accepted: collected from frozen implementation703e84d. Corpus `history/dodge/gymnasium/pixel-repr-ddqn-practice/diverse-20260914-v1/corpus`; manifest SHA256 `7769398938b2be30934779fc5851e767653df7b31b2e7fad7a2a0adcd80e6a1f`.192train/64validation decisions,168/56windows. Training action counts0..8:22,22,22,18,18,24,24,22,20; validation:8,6,8,8,8,8,6,6,6. All16 emitted configs byte-match the frozen serializer. Inspected initial train500 and final validation1502 images: native player/enemy shapes and player trail present. Late agent serializer refactor discarded; frozen capture source retained.
+
+K3 frozen run:`lewm-diverse-calibrated-20260914-v1`; original and `-calibrated` inference copy. Use the corpus hash above and exact512/8/42 protocol.

@@ -207,8 +207,8 @@ V47|Calibration changes buffers only on disposable copies; exact training-window
 
 §K — calibrated diverse-practice screen
 K1|accepted|implementation|Inference-only encoder calibration export; bounded diverse suite; paired raw/calibrated runner|N2|Train-only/weight-preservation/resume rejection/causality tests; suite determinism and coverage; full Python/Ruff
-K2|active|collection|Freeze16 explicit practice captures|K1|12train seeds500-511,4validation1500-1503;16decisions each;256total; source/config/episode hashes, rendered review
-K3|unopened|training|Fresh diverse-practice-v1 screen|K2|Reference T4,float32,512updates,batch8,seed42; unchanged objective/optimizer; no extension
+K2|accepted|collection|Freeze16 explicit practice captures|K1|12train seeds500-511,4validation1500-1503;16decisions each;256total; source/config/episode hashes, rendered review
+K3|active|training|Fresh diverse-practice-v1 screen|K2|Reference T4,float32,512updates,batch8,seed42; unchanged objective/optimizer; no extension
 K4|unopened|calibration and diagnostic fitting/evaluation|Paired original/calibrated checkpoints and decoders|K3|Encoder population moments from train only;256 decoder updates per condition; persistence/wrong-action metrics; no controller promotion
 V48|Calibration export preserves original checkpoint and learned weights; only encoder BN running_mean/running_var change. Derived checkpoint inference_only, no optimizer/RNG state; trainer rejects resume. Parent/data/derived hashes recorded; original and calibrated runs separate; original decoder never reused for changed latents.
 V49|Diverse suite stays native/pixel/action-only:12train+4validation captures,16decisions each,all9training actions, varied starts/static/moving enemies; all invulnerable, difficulty1, no patterns. Explicit episode splits/hashes, total256 cap. New dataset comparison with prior21-transition corpus not a matched generalization claim.
@@ -277,8 +277,8 @@ T51|✓|N1: implement frozen normalization and causality audit|V14,V46,V47
 T52|✓|N2: run and interpret T4 audit; preserve failed-run evidence|V14,V46,V47
 
 T53|x|K1: calibration export, diverse suite and paired evaluation integration|V14,V48-V50
-T54|.|K2: collect/hash/review bounded diverse practice corpus|V49
-T55|.|K3/K4: T4 screen and original/calibrated diagnostics|V14,V48-V50
+T54|x|K2: collect/hash/review bounded diverse practice corpus|V49
+T55|~|K3/K4: T4 screen and original/calibrated diagnostics|V14,V48-V50
 
 §B
 id|date|cause|fix
