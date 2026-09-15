@@ -222,3 +222,37 @@ def test_real_local_patch_decoder_completes_one_native_update() -> None:
             for condition in spatial_fit.CONDITIONS
         )
     )
+
+
+def test_spatial_fit_accepts_explicit_matched_condition_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    targets, original_features, palette = _sources()
+    conditions = ("mean", "max", "attention", "grid4")
+    monkeypatch.setattr(spatial_fit, "LocalPatchDecoder", _TinyLocalPatchDecoder)
+    decoders = spatial_fit.make_spatial_decoders(
+        device="cpu", seed=904, conditions=conditions
+    )
+    features = {
+        condition: _Rows(original_features["cls"].values.copy())
+        for condition in conditions
+    }
+    metrics: list[dict[str, object]] = []
+    result = spatial_fit.fit_spatial_decoders(
+        decoders,
+        features,
+        targets,
+        palette,
+        milestones=(1, 2),
+        batch_size=4,
+        conditions=conditions,
+        on_step=metrics.append,
+    )
+
+    assert set(decoders) == set(conditions)
+    assert set(result.snapshots[2].model) == set(conditions)
+    assert len(metrics) == 2
+    assert all(
+        set(row) >= {"step", "loss_kind", *(f"{name}_loss" for name in conditions)}
+        for row in metrics
+    )

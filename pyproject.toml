@@ -70,6 +70,9 @@ select = [
 "src/dodge_native_game/variants/cnn_image_ddqn/telemetry.py" = ["E501", "I001", "B905"]
 "src/dodge_native_game/variants/cnn_image_ddqn/rewards.py" = ["E501", "I001"]
 "src/dodge_native_game/variants/cnn_image_ddqn/replay_server.py" = ["E501"]
+# Pinned third-party reference downloads are kept byte-identical so the
+# provenance manifest hashes remain valid; they are not maintained code.
+"references/pooling/dino_eval_linear.py" = ["E501", "F401", "F821", "I001", "SIM118", "UP008", "UP031", "UP032"]
 
 [tool.uv.sources]
 dodge-native = { path = "native/crates/dodge-python" }

@@ -1,3 +1,5 @@
+Current experiment: [pooling follow-up](POOLING.md), SPEC §AA. Frozen spatial features; matched mean, max, learned attention, and coarse spatial pooling.
+
 Current experiment: [spatial readout diagnosis](SPATIAL-READOUT.md), SPEC §Z. Matched local-token, CLS, and direct-pixel controls on the frozen §Y palette model.
 
 Current experiment: [palette CE/BCE reconstruction](LARGE-PROBE.md), SPEC §X. Frozen LeWM; matched categorical and binary cross-entropy heads, with retained RGB-MSE baseline. Implementation gates precede T4 fitting.

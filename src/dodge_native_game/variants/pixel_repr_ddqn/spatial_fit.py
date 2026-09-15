@@ -1,9 +1,11 @@
-"""Matched raw-logit palette decoders for CLS, patch-token, and pixel probes.
+"""Matched raw-logit palette decoders for frozen representation probes.
 
 The fitter owns only the diagnostic head optimization.  Feature extraction,
 train/validation bank construction, and the T4 launch policy stay with the
 caller.  One CPU sampler supplies every head's minibatch so the three
-conditions remain directly paired.
+conditions remain directly paired.  The original CLS/patch/pixels tuple remains
+the default; pooling diagnostics can pass a separate explicit tuple while
+reusing the same matched optimization protocol.
 """
 
 from __future__ import annotations
@@ -73,21 +75,40 @@ def _states_equal(
     return all(torch.equal(left[name], right[name]) for name in left)
 
 
+def _normalize_conditions(conditions: Sequence[str]) -> tuple[str, ...]:
+    """Validate and freeze a caller-provided condition order."""
+
+    if isinstance(conditions, (str, bytes)):
+        raise TypeError("conditions must be a non-empty sequence of strings")
+    values = tuple(conditions)
+    if not values:
+        raise ValueError("conditions must not be empty")
+    if any(not isinstance(value, str) or not value for value in values):
+        raise TypeError("conditions must contain non-empty strings")
+    if len(set(values)) != len(values):
+        raise ValueError("conditions must be unique")
+    return values
+
+
 def make_spatial_decoders(
-    device: torch.device | str = "cpu", seed: int = INIT_SEED
+    device: torch.device | str = "cpu",
+    seed: int = INIT_SEED,
+    *,
+    conditions: Sequence[str] = CONDITIONS,
 ) -> dict[str, nn.Module]:
-    """Create three byte-identical raw-logit ``LocalPatchDecoder`` heads."""
+    """Create byte-identical raw-logit ``LocalPatchDecoder`` heads."""
 
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise TypeError("seed must be an integer")
+    names = _normalize_conditions(conditions)
     target = torch.device(device)
     with torch.random.fork_rng(devices=_rng_devices(target)):
         torch.manual_seed(seed)
         decoders = {
-            condition: LocalPatchDecoder().to(target) for condition in CONDITIONS
+            condition: LocalPatchDecoder().to(target) for condition in names
         }
-        initial = _state(decoders[CONDITIONS[0]])
-        for condition in CONDITIONS[1:]:
+        initial = _state(decoders[names[0]])
+        for condition in names[1:]:
             if not _states_equal(initial, _state(decoders[condition])):
                 decoders[condition].load_state_dict(initial, strict=True)
             if not _states_equal(initial, _state(decoders[condition])):
@@ -211,13 +232,15 @@ def _validate_inputs(
     *,
     batch_size: int,
     milestones: Sequence[int],
+    conditions: Sequence[str],
 ) -> tuple[np.ndarray, int, torch.device, tuple[int, ...]]:
-    if set(decoders) != set(CONDITIONS):
-        raise ValueError(f"decoders must contain exactly {CONDITIONS}")
-    if set(features) != set(CONDITIONS):
-        raise ValueError(f"features must contain exactly {CONDITIONS}")
+    names = _normalize_conditions(conditions)
+    if set(decoders) != set(names):
+        raise ValueError(f"decoders must contain exactly {names}")
+    if set(features) != set(names):
+        raise ValueError(f"features must contain exactly {names}")
     row_count = _source_length(targets, name="targets")
-    for condition in CONDITIONS:
+    for condition in names:
         if (
             _source_length(features[condition], name=f"{condition} features")
             != row_count
@@ -235,15 +258,15 @@ def _validate_inputs(
     if len(devices) != 1:
         raise ValueError("matched spatial decoders must share a device")
     device = next(iter(devices))
-    initial = _state(decoders[CONDITIONS[0]])
-    for condition in CONDITIONS[1:]:
+    initial = _state(decoders[names[0]])
+    for condition in names[1:]:
         if not _states_equal(initial, _state(decoders[condition])):
             raise ValueError("matched spatial decoders must share initialization")
     if any(_decoder_has_dropout(decoder) for decoder in decoders.values()):
         raise ValueError("spatial decoders must not contain dropout")
     probe_indices = torch.zeros(1, dtype=torch.long)
     _validate_target_batch(_take(targets, probe_indices))
-    for condition in CONDITIONS:
+    for condition in names:
         _validate_feature_batch(
             _take(features[condition], probe_indices), name=condition
         )
@@ -265,13 +288,15 @@ def _snapshot(
     optimizers: Mapping[str, torch.optim.Optimizer],
     sampler: torch.Generator,
     device: torch.device,
+    conditions: Sequence[str],
 ) -> MatchedSnapshot:
+    names = tuple(conditions)
     return MatchedSnapshot(
         step=step,
-        model={condition: _state(decoders[condition]) for condition in CONDITIONS},
+        model={condition: _state(decoders[condition]) for condition in names},
         optimizer={
             condition: _clone(optimizers[condition].state_dict())
-            for condition in CONDITIONS
+            for condition in names
         },
         sampler=sampler.get_state().detach().cpu().clone(),
         torch_rng=torch.get_rng_state().detach().cpu().clone(),
@@ -294,9 +319,11 @@ def fit_spatial_decoders(
     on_step: Callable[[dict[str, Any]], None] | None = None,
     on_milestone: Callable[[MatchedSnapshot, Mapping[str, nn.Module]], None]
     | None = None,
+    conditions: Sequence[str] = CONDITIONS,
 ) -> FitResult:
     """Fit matched CE heads from one shared train-only sampling stream."""
 
+    names = _normalize_conditions(conditions)
     colors, row_count, device, schedule = _validate_inputs(
         decoders,
         features,
@@ -304,6 +331,7 @@ def fit_spatial_decoders(
         palette,
         batch_size=batch_size,
         milestones=milestones,
+        conditions=names,
     )
     optimizers = {
         condition: torch.optim.AdamW(
@@ -311,14 +339,14 @@ def fit_spatial_decoders(
             lr=SPATIAL_DECODER_LR,
             weight_decay=SPATIAL_DECODER_WEIGHT_DECAY,
         )
-        for condition in CONDITIONS
+        for condition in names
     }
     sampler = torch.Generator(device="cpu").manual_seed(SAMPLING_SEED)
     metrics: list[dict[str, Any]] = []
     sampled_indices: list[tuple[int, ...]] = []
     snapshots: dict[int, MatchedSnapshot] = {}
     original_modes = {
-        condition: decoders[condition].training for condition in CONDITIONS
+        condition: decoders[condition].training for condition in names
     }
     with torch.random.fork_rng(devices=_rng_devices(device)):
         began = time.monotonic()
@@ -336,7 +364,7 @@ def fit_spatial_decoders(
                     palette_indices(target_rows.detach().cpu().numpy(), colors)
                 ).to(device=device, dtype=torch.long)
                 losses: dict[str, float] = {}
-                for condition in CONDITIONS:
+                for condition in names:
                     decoder = decoders[condition]
                     latent = _validate_feature_batch(
                         _take(features[condition], indices), name=condition
@@ -368,9 +396,10 @@ def fit_spatial_decoders(
                     losses[condition] = float(loss.detach().cpu())
                 metric = {
                     "step": step,
-                    "cls_loss": losses["cls"],
-                    "patch_loss": losses["patch"],
-                    "pixels_loss": losses["pixels"],
+                    **{
+                        f"{condition}_loss": losses[condition]
+                        for condition in names
+                    },
                     "loss_kind": "palette-ce",
                     "palette_size": len(colors),
                     "loss_normalization": "unweighted-pixel-mean",
@@ -387,6 +416,7 @@ def fit_spatial_decoders(
                         optimizers=optimizers,
                         sampler=sampler,
                         device=device,
+                        conditions=names,
                     )
                     snapshots[step] = snapshot
                     if on_milestone is not None:
@@ -403,7 +433,7 @@ def fit_spatial_decoders(
                 else None
             )
         finally:
-            for condition in CONDITIONS:
+            for condition in names:
                 decoders[condition].train(original_modes[condition])
     return FitResult(
         metrics=tuple(metrics),
