@@ -39,8 +39,7 @@ def _palette_tuple(value: object, *, name: str) -> tuple[tuple[int, int, int], .
         if not isinstance(color, (tuple, list)) or len(color) != 3:
             raise ValueError(f"{name} must contain RGB triples")
         if any(
-            isinstance(channel, bool)
-            or not isinstance(channel, (int, np.integer))
+            isinstance(channel, bool) or not isinstance(channel, (int, np.integer))
             for channel in color
         ):
             raise ValueError(f"{name} channels must be integers")
@@ -301,6 +300,7 @@ def run_probes(
             "decoder_seed": 904,
             "sampling_seed": 903,
             "diagnostic_only": True,
+            "current_frame_only": True,
             **palette_metadata,
         }
         atomic_json(run / "manifest.json", metadata[arm])
@@ -314,7 +314,13 @@ def run_probes(
         for arm, key in zip(ARMS, ("cls", "projected"), strict=True):
             append_metric(
                 runs[arm] / "metrics.jsonl",
-                {**row, "input_arm": arm, "internal_fit_slot": key},
+                {
+                    **row,
+                    "input_arm": arm,
+                    "internal_fit_slot": key,
+                    "loss": row[f"{key}_loss"],
+                    "representation": "cls",
+                },
             )
         if row["step"] % 128 == 0:
             print("INPUT_DECODER", row, flush=True)

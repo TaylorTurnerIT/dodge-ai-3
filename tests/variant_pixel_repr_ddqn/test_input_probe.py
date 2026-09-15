@@ -176,6 +176,12 @@ def test_paired_input_probes_freeze_world_and_use_train_cls(tmp_path, monkeypatc
         assert report["palette_source_split"] == "train"
         checkpoint = torch.load(run / "decoder.pt", weights_only=True)
         assert checkpoint["decoder_kind"] == "cls" and checkpoint["step"] == 2
+        rows = [
+            json.loads(line)
+            for line in (run / "metrics.jsonl").read_text().splitlines()
+        ]
+        assert rows and all(isinstance(row["loss"], float) for row in rows)
+        assert report["current_frame_only"] is True
         states.append(checkpoint["sampler"])
     assert torch.equal(*states)
 
@@ -211,9 +217,7 @@ def test_validate_banks_accepts_actual_producer_metadata(tmp_path):
 
 
 def test_validate_world_pair_rejects_swapped_arm_and_shared_protocol_mismatch():
-    palette = np.asarray(
-        [[29, 43, 83], [41, 173, 255], [255, 241, 232]], dtype="uint8"
-    )
+    palette = np.asarray([[29, 43, 83], [41, 173, 255], [255, 241, 232]], dtype="uint8")
     payloads = _world_payloads(palette, "d" * 64)
     study.validate_world_pair(payloads, "d" * 64)
 

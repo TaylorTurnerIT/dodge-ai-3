@@ -2,6 +2,8 @@
 
 Pixels and executed actions train a LeWM encoder/predictor. A separate frozen-model decoder makes its latents visible. There is no controller yet.
 
+[Overnight experiment report](http://100.100.169.122:8791/lewm-overnight-report-20260915.html) · [RGB/palette input gallery](http://100.100.169.122:8791/lewm-input-study-20260915-v1-comparison.html). Both T4 studies are complete. Palette inputs improve static reconstruction, but the current readouts still miss the small moving objects.
+
 Open the running dashboard at [t3-dev:8790](http://100.100.169.122:8790/). Overview compares observed current/next frames with decoded current/predicted frames. Diagnostics shows loss components, gradient norm, feature spread/rank, attention and latent predictions. Snapshot selection uses held-out windows.
 
 From this worktree, launch a new bounded Colab T4 run:

@@ -43,3 +43,8 @@ python3 variants/pixel-repr-ddqn/scripts/colab_input_study.py \
 ```
 
 The launcher retrieves the archive and leaves the session available for parent checkpoint verification. Release it after verifying all retained world and decoder checkpoints. Compare the two new arms directly: comparison with the older world checkpoint also changes training corpus, update budget, and preprocessing.
+
+
+The input screen completed as `lewm-input-study-20260915-v1`, trained from source `6905cab`. Palette inputs reduced held-out global MSE by 51.7% against the matched RGB arm, but changing cream recall fell from 0.996% to 0.036%. The static layout improved; small moving objects remain unresolved. Four world and six decoder checkpoints passed parent audits, and the T4 was released. A read-only probability inspection found weak changing-cream scores before argmax too.
+
+Open the [overnight report](http://100.100.169.122:8791/lewm-overnight-report-20260915.html) and [input comparison](http://100.100.169.122:8791/lewm-input-study-20260915-v1-comparison.html). Source changes after this run only complete the results documentation and adapt the shared dashboard to the paired artifact schema; they do not alter the retained training results.

@@ -267,6 +267,21 @@
         return rows.length ? rows[rows.length - 1] : {};
       };
 
+      function inputDiagnosticDetail(detail) {
+        const manifest = detail.manifest || {};
+        if (manifest.experiment !== "lewm-input-encoding-v1" || manifest.diagnostic_only !== true) return detail;
+        const slot = manifest.input_arm === "rgb" ? "cls_loss" : "projected_loss";
+        const rows = (detail.metrics || []).map(row => ({...row, loss: row.loss ?? row[slot]}));
+        const validation = detail.report?.splits?.validation;
+        if (validation && rows.length) Object.assign(rows[rows.length - 1], {
+          validation_mse: validation.mse, validation_changed_mse: validation.changed_region_mse,
+          trainmean_validation_mse: validation.training_mean_mse
+        });
+        return {...detail, metrics: rows, manifest: {...manifest, current_frame_only: true,
+          data_hash: manifest.data_sha256, profile: "Frozen CLS diagnostic",
+          model_label: `${manifest.input_arm === "rgb" ? "RGB" : "Palette"} input · palette CE readout`}};
+      }
+
       function setConnection(live, text) {
         $("connection").textContent = text;
         $("connection").classList.toggle("live", live);
@@ -329,7 +344,7 @@
 
       async function loadRun(runId) {
         try {
-          state.detail = await fetchJson(`/api/run?run_id=${encodeURIComponent(runId)}`);
+          state.detail = inputDiagnosticDetail(await fetchJson(`/api/run?run_id=${encodeURIComponent(runId)}`));
           $("top-run").textContent = runId;
           renderDetail();
         } catch (error) {

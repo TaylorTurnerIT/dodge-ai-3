@@ -144,3 +144,40 @@ def test_http_rejects_unsafe_run_path(tmp_path: Path) -> None:
         with pytest.raises(HTTPError) as error:
             urlopen(base_url + "/api/run?run_id=..%2Foutside", timeout=2)
         assert error.value.code == 404
+
+
+def test_input_diagnostic_adapter_displays_retained_loss_and_evaluation():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed for the dashboard JavaScript fixture")
+    from dodge_native_game.variants.pixel_repr_ddqn import dashboard
+
+    html = Path(dashboard.__file__).with_suffix(".html").read_text()
+    helper = html.split("      function inputDiagnosticDetail(detail) {", 1)[1]
+    helper = (
+        "function inputDiagnosticDetail(detail) {"
+        + helper.split("      function setConnection", 1)[0]
+    )
+    script = (
+        helper
+        + """
+const assert=require('node:assert/strict');
+for(const [arm,loss] of [['rgb',0.12],['palette',0.08]]) {
+ const original={manifest:{experiment:'lewm-input-encoding-v1',diagnostic_only:true,
+ input_arm:arm,data_sha256:'data'},metrics:[{step:8192,cls_loss:0.12,projected_loss:0.08}],
+ report:{splits:{validation:{mse:0.003,changed_region_mse:0.14,training_mean_mse:0.013}}}};
+ const output=inputDiagnosticDetail(original);
+ assert.equal(output.metrics[0].loss,loss);
+ assert.equal(output.metrics[0].validation_mse,0.003);
+ assert.equal(output.manifest.current_frame_only,true);
+ assert.equal(output.manifest.data_hash,'data');
+ assert.equal(original.metrics[0].loss,undefined);
+}
+const world={manifest:{experiment:'lewm-input-encoding-v1'},metrics:[{loss:0.2}]};
+assert.equal(inputDiagnosticDetail(world),world);
+"""
+    )
+    subprocess.run([node, "-e", script], check=True, capture_output=True, text=True)
