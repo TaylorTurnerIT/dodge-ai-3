@@ -468,9 +468,9 @@ U.result|lewm-large-probe-20260915-v2 complete; source2870984/archivefd67fa3ab1b
 
 §W — balanced bright-pixel reconstruction
 W1|complete|implementation|Optional balanced-bright loss; class metrics; matched baseline rescoring; T4 launcher protocol|U4|DefaultMSE unchanged; gradient/empty-class/split tests; parentreview and fullchecks before freeze
-W2|active|feature extraction|Same frozen checkpoint, corpus, fourframes/episode and seeds asU|W1|One T4; fresh bank; indexhash must matchU; learner remains pixel-only
-W3|pending|diagnostic fitting|Fresh CLS/projected heads;512→2048→8192 each; equal bright/rest class mass|W2|init904/sample903/batch32/AdamW0.001 decay0.01; no worldmodel updates; loss only intendedchange
-W4|pending|evaluation|Original global/changed metrics plus bright/background MSE, changed-bright MSE and bright precision/recall/IoU; wronglatents; reevaluate U finalheads on same bank|W3|Recomputed baseline global/changed scores within1e-6 of retained U evidence; retrieve allcheckpoints/results; releaseT4
+W2|complete|feature extraction|Same frozen checkpoint, corpus, fourframes/episode and seeds asU|W1|One T4; fresh bank; indexhash must matchU; learner remains pixel-only
+W3|complete|diagnostic fitting|Fresh CLS/projected heads;512→2048→8192 each; equal bright/rest class mass|W2|init904/sample903/batch32/AdamW0.001 decay0.01; no worldmodel updates; loss only intendedchange
+W4|complete|evaluation|Original global/changed metrics plus bright/background MSE, changed-bright MSE and bright precision/recall/IoU; wronglatents; reevaluate U finalheads on same bank|W3|Recomputed baseline global/changed scores within1e-6 of retained U evidence; retrieve allcheckpoints/results; releaseT4
 W.loss|TargetRGB floats0..1; brightmask=min(R,G,B)>=0.8. Loss0.5*meanRGBsquaredError(bright)+0.5*meanRGBsquaredError(rest), per frame then mean across batch; emptygroup uses availablegroup mean for that frame. Target-only mask; no game state/semantic labels. Falsebright predictions on background remain penalized.
 W.invariants|Validation never fits or tunes weights. Threshold0.8/masses0.5 fixed before run; identical sample sequence and selectedframes toU. Preserve U artifacts. Ordinary MSE retained for comparison; classweighted loss cannot alone establish improvement. Bright includes HUD and obstacles; not player/enemy identity. One worker7200s,8192updates/head cap; no controllers or futureframe training.
 W.authorization|User asks to weight missed white pixels above dominantblue background; implement and run this bounded matched follow-up after engineering gates.
@@ -479,3 +479,27 @@ B49|2026-09-15|Baseline delta guard acceptedNaN because NaN>tolerance isfalse|Re
 B50|2026-09-15|Parent launcher fixture used obsolete unusedroot argument during concurrent helper cleanup|Align fixture with final2argument helper; no productionbehavior change/newinvariant needed.
 
 W.validation|384 full-suite tests andRuff pass. Parentloss/metric/launcher review; tests cover per-frame classbalance, targetmask gradients, emptyclasses, defaultMSE equivalence, classmetrics, null/nonfinite baseline rejection and exactartifactbundling. Updateddashboard5tests plus JSsyntax/weighted/missingclass/legacy displayfixture pass. Freeze before T4.
+
+W.result|lewm-bright-probe-20260915-v1 complete;sourceb73d077/archivefbdb6cf414deeb6be9459343868a02074be8e505b9eba1923ad8737f9c033ef6;165remote tests,TeslaT4,8192/head,world frozen,session released. Validation CLS brightMSE0.048415→0.018507 butbackground0.000567→0.046807;projected bright0.043822→0.021414 butbackground0.000608→0.037438. Pale haze/falsepatches remain; not promoted. Six checkpoints/optimizer/matched sampler/within-run RNG/world/index hashes verified; baseline rescoring matches retained scores within1e-6. Comparison viewer retained. User restores plainMSE baseline.
+
+§X — palette classification diagnostic
+X1|complete|implementation|Train-pixel palette, raw color logits, palette CE/BCE, paired T4 runner and class diagnostics|W4|Luna max implementation,parent review; loss/gradient/palette isolation/backward compatibility tests; fulltests/Ruff before freeze
+X2|active|feature extraction|Same frozen world/corpus/seeds asU; native128 targetpixels;4frames/episode|X1|One T4;16384train/2048validation; reuse bank only within frozen job; validate exact frame hashes
+X3|pending|diagnostic fitting|Two independent loss arms palette-ce/palette-bce; each CLS/projected;512→2048→8192 updates/head|X2|Same init904,sampling903,batch32,AdamW0.001 decay0.01; fourheads total; fresh optimizers; one worker7200s
+X4|pending|evaluation|Native RGB argmax images, original RGB/changed/bright metrics, percolor confusion, wronglatents, retainedMSE comparison|X3|Same heldout frames; inspect smallobject placement; verify checkpoints/source/data/world/palette identity; retrieve and releaseT4
+X.palette|Deterministic sorted exactRGB palette from selected training pixels only; bounded-memory scan,max256colors. Unknown validation colors reject; never expand palette from validation. No game labels/state/palette lookup. Every reconstruction pixel belongs to palette.
+X.loss|Raw logits shapeB×K×128×128. CE targets integerpaletteindex; BCEWithLogits targets onehotK,unweighted mean overpixels/classes. No sigmoid beforeloss. Argmax class→RGB only evaluation/display; no probability-blended reconstruction. Classification loss updates diagnosticdecoder only.
+X.invariants|Defaults existingRGBsigmoid/MSE unchanged; LeWM/predictor/controller untouched. CE/BCE same palette/headarchitecture/init/minibatches/budget; no classweight/edge/motionloss bundled. Metrics cannot establish identity/control; crisp argmax can hide uncertainty. No loss tuning on validation.
+X.authorization|User requests paletteclassification plusBCE experiment. MatchedCE arm provides categorical reference; previousMSE artifacts retained. Implementation→extraction→fitting→evaluation advance after engineering gates within declared cap.
+X.references|CrossEntropyLoss consumes unnormalized classlogits; BCEWithLogitsLoss consumes logits and0..1targets|https://docs.pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html|https://docs.pytorch.org/docs/stable/generated/torch.nn.modules.loss.BCEWithLogitsLoss.html
+
+B51|2026-09-15|Palette gallery draft embedded longHTML/JS lines failed Pythonlint|Move template to companionHTML; formatPython; existing lint gate sufficient.
+B52|2026-09-15|Argmax can convert nonfinite palette logits into finite valid-color images|X.finite: rejectNaN/±Inf before palette rendering/scoring; regressiontest required beforefreeze
+X.finite|Palette scoring/display accepts finite logits only; ⊥ hide model failure behind argmax.
+B53|2026-09-15|New strict palettehash guard rejected placeholder hashes in two launcherfixtures|Compute fixtureSHA from exactRGBbytes; keep hashverification. Firstfullsuite392pass/2fixturefail; rerun afterrepair beforefreeze.
+
+§Y — categorical input follow-up
+Y.authorization|User requests RGB→simplifiedpixelspace→model→simplifiedpixelspace, then overnight work/report. Execute afterX completes; no code mutation duringX fitting. Separate matched RGB/palette-input worldmodel screen, then frozen palette diagnostic fitting. Pixel/action-only; no entitylabels/controllers.
+Y.design|Pending bounded protocol after current screen. Onehot palette channels avoid ordinal colorIDs. Train worldmodel in chosen inputrepresentation; do not feed categorical channels to frozen RGB checkpoint and call it learned. Matched freshRGB control required to distinguish inputencoding from added worldmodel training. PreserveX artifacts and legacydefaults.
+
+X.validation|400fulltests pass112.24s;181varianttests;Ruff/legacy32CPU smoke pass. Parent reviewed rawlogit loss path, train-only palette, exactartifact schema, finite guards, color/change confusion and paired launcher. Allselected inputaudit confirms3colors,16384train/2048validation; no unknownvalidationcolor. Galleryfixture andJSsyntax pass. Freeze beforeT4.

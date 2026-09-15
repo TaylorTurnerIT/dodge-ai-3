@@ -1,3 +1,5 @@
+Current experiment: [palette CE/BCE reconstruction](LARGE-PROBE.md), SPEC §X. Frozen LeWM; matched categorical and binary cross-entropy heads, with retained RGB-MSE baseline. Implementation gates precede T4 fitting.
+
 Latest dataset: [large practice corpus](LARGE-PRACTICE.md), SPEC §Q1–Q3 complete. Published 4,096 training and 512 validation episodes: 594,432 native RGB frames across 16 practice families. Strict validation passed; corrected split leakage in unpublished v1. Raw CLS probe interface prepared; model fitting remains separate.
 
 Latest result: [current-frame decoder screen](DECODER-STUDY.md), SPEC §O32k complete. Continued8192→32768: training current-frame error93.40% lower, held-out overall error8.53% lower; held-out changing-region error0.36% higher. Cleaner images still misplace objects. Checkpoints retained; T4 released.

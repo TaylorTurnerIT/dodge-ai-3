@@ -1,0 +1,54 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LeWM palette comparison</title><style>
+*{box-sizing:border-box}body{margin:0;padding:18px;background:#111820;color:#e8edf2;
+font:14px system-ui;height:100dvh;overflow:hidden}main{max-width:1500px;margin:auto}
+h1{font-size:22px;margin:0 0 8px}p,footer{color:#b7c6d5}nav{display:flex;flex-wrap:wrap;
+gap:14px;margin:16px 0}label{display:flex;align-items:center;gap:6px}
+select{background:#263342;color:white;border:1px solid #53697e;padding:6px}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;
+width:min(100%,calc((100dvh - 350px)*4));margin:auto}figure{margin:0;min-width:0}
+figcaption{font-weight:650;margin-bottom:8px}img{display:block;width:100%;aspect-ratio:1;
+object-fit:contain;image-rendering:pixelated;background:#090d12;border:1px solid #40566b}
+.stats{font:12px ui-monospace,monospace;line-height:1.7;margin-top:8px;min-height:90px}
+footer{font-size:12px;margin-top:14px}a{color:#82c8ff}
+</style><main><h1>LeWM · palette classification</h1>
+<p>Frozen LeWM. Matched examples and updates. CE and BCE display the highest-scoring palette color.</p>
+<nav><label>Representation <select id="rep"><option value="cls">CLS</option>
+<option value="projected" selected>Projected</option></select></label>
+<label>Updates <select id="step"><option>512</option><option>2048</option>
+<option selected>8192</option></select></label><label>Split <select id="split">
+<option value="validation">Validation</option><option value="train">Training</option>
+</select></label><label>Family <select id="family"></select></label>
+<label><input type="checkbox" id="wrong">Another episode's latent</label></nav>
+<p id="sample"></p><section class="grid">
+<figure><figcaption>Observed</figcaption><img id="observed" alt="Observed frame">
+<div class="stats" id="count"></div></figure>
+<figure><figcaption>RGB MSE baseline</figcaption><img id="mse" alt="RGB MSE reconstruction">
+<div class="stats" id="mse-stats"></div></figure>
+<figure><figcaption>Palette cross-entropy</figcaption><img id="ce" alt="CE reconstruction">
+<div class="stats" id="ce-stats"></div></figure>
+<figure><figcaption>Palette BCE</figcaption><img id="bce" alt="BCE reconstruction">
+<div class="stats" id="bce-stats"></div></figure></section>
+<footer>Metrics cover all selected frames in the chosen split, not only this example.
+White pixels include HUD and obstacles; changing pixels are not entity labels.
+Changed color recall follows the sorted RGB palette. Dashes mean unavailable metrics.
+<br>Palette colors guarantee valid colors, not correct object locations. MSE uses an RGB head;
+CE and BCE share the same palette head. <a href="http://100.100.169.122:8790/">Training dashboard</a></footer></main>
+<script id="data" type="application/json">__DATA__</script><script>
+const data=JSON.parse(document.getElementById('data').textContent);
+const el=id=>document.getElementById(id);
+for(const key of Object.keys(data.ce['8192'].cls.entries).filter(k=>k.startsWith('validation|'))){
+const o=document.createElement('option');o.value=key.split('|')[1];o.textContent=o.value;el('family').append(o)}
+const num=x=>x==null?'—':x.toFixed(6),pct=x=>x==null?'—':(100*x).toFixed(1)+'%';
+function render(){const step=el('step').value,rep=el('rep').value,split=el('split').value;
+const key=split+'|'+el('family').value,control=el('wrong').checked?'wrong':'normal';
+const entry=data.ce[step][rep].entries[key];el('observed').src=entry.observed;
+el('sample').textContent=entry.episode+' · frame '+entry.frame+' · '+(control==='wrong'?'incorrect latent':'matching latent');
+for(const arm of ['mse','ce','bce']){const x=data[arm][step][rep],s=x[control][split];
+el(arm).src=x.entries[key][control];el(arm+'-stats').innerHTML='RGB MSE: '+num(s.mse)+
+'<br>Changed MSE: '+num(s.changed_region_mse)+'<br>White precision: '+pct(s.bright_precision)+
+'<br>White recall: '+pct(s.bright_recall);}
+el('count').textContent=data.ce[step][rep].normal[split].frame_count.toLocaleString()+' frames scored';}
+for(const id of ['rep','step','split','family','wrong'])el(id).addEventListener('change',render);render();
+</script></html>

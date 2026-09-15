@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,6 +39,26 @@ class _NativeTinyDecoder(nn.Module):
     def forward(self, latent: torch.Tensor) -> torch.Tensor:
         value = torch.sigmoid(latent[:, :1] + self.bias)
         return value[:, :, None, None].expand(-1, 3, 128, 128)
+
+
+class _NativePaletteTinyDecoder(nn.Module):
+    def __init__(
+        self,
+        latent_dim: int,
+        output_channels: int = 3,
+        raw_logits: bool = True,
+    ) -> None:
+        super().__init__()
+        self.output_channels = output_channels
+        self.raw_logits = raw_logits
+        self.projection = nn.Linear(latent_dim, output_channels)
+
+    def forward_logits(self, latent: torch.Tensor) -> torch.Tensor:
+        values = self.projection(latent)
+        return values[:, :, None, None].expand(-1, -1, 128, 128)
+
+    def forward(self, latent: torch.Tensor) -> torch.Tensor:
+        return self.forward_logits(latent)
 
 
 class _IdentityDecoder(nn.Module):
@@ -352,6 +373,61 @@ def _fake_frame_bank(train_rows: int = 32, validation_rows: int = 16) -> FrameBa
     )
 
 
+def _fake_palette_frame_bank(
+    train_rows: int = 32, validation_rows: int = 16
+) -> tuple[FrameBank, np.ndarray]:
+    rng = np.random.default_rng(29)
+    palette = np.asarray(
+        [[29, 43, 83], [41, 173, 255], [255, 241, 232]], dtype=np.uint8
+    )
+    train_ids = rng.integers(0, len(palette), size=(train_rows, 128, 128))
+    validation_ids = rng.integers(0, len(palette), size=(validation_rows, 128, 128))
+    pixels_train = palette[train_ids].transpose(0, 3, 1, 2).copy()
+    pixels_validation = palette[validation_ids].transpose(0, 3, 1, 2).copy()
+    changed_train = np.zeros((train_rows, 128, 128), dtype=bool)
+    changed_validation = np.zeros((validation_rows, 128, 128), dtype=bool)
+    changed_validation[:, 0, 0] = True
+    cls_train = rng.normal(size=(train_rows, 4)).astype(np.float32)
+    cls_validation = rng.normal(size=(validation_rows, 4)).astype(np.float32)
+    projected_train = rng.normal(size=(train_rows, 4)).astype(np.float32)
+    projected_validation = rng.normal(size=(validation_rows, 4)).astype(np.float32)
+    train_cls = _Rows(cls_train)
+    train_projected = _Rows(projected_train)
+    train_pixels = _Rows(pixels_train)
+    train = SimpleNamespace(
+        cls=train_cls,
+        projected=train_projected,
+        pixels=train_pixels,
+    )
+    validation = SimpleNamespace(
+        cls=cls_validation,
+        projected=projected_validation,
+        pixels=pixels_validation,
+    )
+    records = _records(train_rows, "train") + _records(
+        validation_rows, "validation", offset=train_rows
+    )
+    bank = FrameBank(
+        root=Path("/fake-palette-bank"),
+        train=train,  # type: ignore[arg-type]
+        validation=validation,  # type: ignore[arg-type]
+        pixels=large_probe._Concat((pixels_train, pixels_validation)),
+        changed=large_probe._Concat((changed_train, changed_validation)),
+        features={
+            "cls": large_probe._Concat((cls_train, cls_validation)),
+            "projected": large_probe._Concat((projected_train, projected_validation)),
+        },
+        records=tuple(records),
+        split_ranges={
+            "train": (0, train_rows),
+            "validation": (train_rows, train_rows + validation_rows),
+        },
+        data_hash="d" * 64,
+        frame_index_hash="f" * 64,
+    )
+    return bank, palette
+
+
 @pytest.mark.parametrize(
     ("loss_kind", "expected_experiment", "equal_class_weights"),
     [
@@ -470,5 +546,162 @@ def test_run_study_fits_train_rows_and_publishes_each_milestone(
             1,
             2,
         }
+    for key, value in frozen.state_dict().items():
+        torch.testing.assert_close(value, before[key], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    ("loss_kind", "expected_experiment", "expected_normalization"),
+    [
+        (
+            "palette-ce",
+            large_probe._PALETTE_CE_EXPERIMENT,
+            "unweighted-pixel-mean",
+        ),
+        (
+            "palette-bce",
+            large_probe._PALETTE_BCE_EXPERIMENT,
+            "unweighted-pixel-class-mean",
+        ),
+    ],
+)
+def test_palette_run_study_publishes_train_only_palette_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loss_kind: str,
+    expected_experiment: str,
+    expected_normalization: str,
+) -> None:
+    bank, palette = _fake_palette_frame_bank()
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"frozen-world-model")
+    frozen = nn.Linear(1, 1)
+    before = {key: value.detach().clone() for key, value in frozen.state_dict().items()}
+    derive_sources: list[object] = []
+    validate_sources: list[object] = []
+    real_derive = large_probe.derive_palette
+    real_validate = large_probe.validate_palette_coverage
+
+    def observe_derive(pixels: object, indices: object, **kwargs: object) -> np.ndarray:
+        derive_sources.append(pixels)
+        return real_derive(pixels, indices, **kwargs)
+
+    def observe_validate(
+        pixels: object, indices: object, palette_value: np.ndarray, **kwargs: object
+    ) -> None:
+        validate_sources.append(pixels)
+        real_validate(pixels, indices, palette_value, **kwargs)
+
+    monkeypatch.setattr(
+        large_probe.pretrain,
+        "load_model",
+        lambda path: (
+            frozen,
+            {
+                "inference_only": True,
+                "experiment": "practice-batch32-v1",
+                "step": 512,
+                "batch_size": 32,
+                "profile": "reference",
+                "calibration": {},
+                "data_hash": "dataset",
+            },
+        ),
+    )
+    monkeypatch.setattr(large_probe, "_validate_protocol", lambda *_: "NVIDIA T4")
+    monkeypatch.setattr(large_probe, "_ensure_bank", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(large_probe, "open_frame_bank", lambda *_args, **_kwargs: bank)
+    monkeypatch.setattr(large_probe, "derive_palette", observe_derive)
+    monkeypatch.setattr(large_probe, "validate_palette_coverage", observe_validate)
+    real_make_pair = large_probe.make_decoder_pair
+
+    def make_palette_pair(*args: object, **kwargs: object):
+        return real_make_pair(
+            4,
+            decoder_factory=_NativePaletteTinyDecoder,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(large_probe, "make_decoder_pair", make_palette_pair)
+
+    runs = large_probe.run_study(
+        checkpoint,
+        tmp_path / "dataset",
+        tmp_path / "history",
+        f"tiny-{loss_kind}",
+        milestones=(1, 2),
+        device="cpu",
+        bank_root=tmp_path / "bank",
+        loss_kind=loss_kind,
+    )
+
+    expected_palette = palette.tolist()
+    expected_hash = hashlib.sha256(palette.tobytes()).hexdigest()
+    expected_metadata = {
+        "loss_kind": loss_kind,
+        "loss_normalization": expected_normalization,
+        "palette_rgb": expected_palette,
+        "palette_sha256": expected_hash,
+        "palette_source_split": "train",
+        "palette_size": len(palette),
+        "output_channels": len(palette),
+        "raw_logits": True,
+        "decoder_input_split": "train",
+        "train_only_input": True,
+    }
+    expected_experiment_metadata = {"experiment": expected_experiment}
+    assert derive_sources == [bank.train.pixels]
+    assert validate_sources == [bank.validation.pixels]
+    assert {path.name for path in runs} == {
+        f"tiny-{loss_kind}-cls",
+        f"tiny-{loss_kind}-projected",
+    }
+    comparison = json.loads(
+        (
+            tmp_path / "history" / f"tiny-{loss_kind}-comparison.json"
+        ).read_text()
+    )
+    for key, value in expected_metadata.items():
+        assert comparison[key] == value
+    for key, value in expected_experiment_metadata.items():
+        assert comparison[key] == value
+    for run in runs:
+        manifest = json.loads((run / "manifest.json").read_text())
+        config = json.loads((run / "config.json").read_text())
+        report = json.loads((run / "report.json").read_text())
+        decoder_checkpoint = torch.load(
+            run / "decoder-2.pt", map_location="cpu", weights_only=True
+        )
+        evaluation = json.loads((run / "evaluation-2.json").read_text())
+        for metadata in (
+            manifest,
+            config,
+            report,
+            decoder_checkpoint,
+            evaluation,
+        ):
+            for key, value in expected_metadata.items():
+                assert metadata[key] == value
+        for metadata in (manifest, config, decoder_checkpoint):
+            for key, value in expected_experiment_metadata.items():
+                assert metadata[key] == value
+        assert (run / "decoder-1.pt").is_file()
+        assert (run / "decoder-2.pt").is_file()
+        assert (run / "visualizations-1.json").is_file()
+        assert (run / "visualizations-2.json").is_file()
+        assert len(json.loads((run / "visualizations.json").read_text())) == 16
+        assert all(
+            "palette_rgb" in view["metadata"]
+            for view in json.loads((run / "visualizations.json").read_text())
+        )
+        rows = [
+            json.loads(line)
+            for line in (run / "metrics.jsonl").read_text().splitlines()
+        ]
+        assert {row["step"] for row in rows if row["phase"].endswith("evaluation")} == {
+            1,
+            2,
+        }
+        assert evaluation["splits"]["validation"]["palette_class_count"] == 3
     for key, value in frozen.state_dict().items():
         torch.testing.assert_close(value, before[key], rtol=0, atol=0)

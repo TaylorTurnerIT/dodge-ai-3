@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -22,6 +23,17 @@ from torch import nn
 from torch.nn import functional as F
 
 from . import pretrain
+from .palette import (
+    MAX_PALETTE_SIZE,
+    bce_palette_loss,
+    ce_palette_loss,
+    derive_palette,
+    forward_logits,
+    palette_indices,
+    palette_to_json,
+    render_palette_rgb,
+    validate_palette_coverage,
+)
 from .probe_bank import ProbeBank, build_bank
 from .query_decoder import QueryPixelDecoder
 from .run_artifacts import (
@@ -36,7 +48,10 @@ __all__ = [
     "FitResult",
     "FrameBank",
     "MatchedSnapshot",
+    "bce_palette_loss",
     "balanced_bright_loss",
+    "ce_palette_loss",
+    "palette_loss",
     "evaluate_decoder_stream",
     "fit_matched_decoders",
     "make_decoder_pair",
@@ -61,8 +76,13 @@ _BRIGHT_THRESHOLD = 0.8
 _LOSS_NORMALIZATION = "per-frame-then-batch"
 _MSE_NORMALIZATION = "global-pixel-mean"
 _BALANCED_BRIGHT_EXPERIMENT = "large-current-frame-decoder-balanced-bright-v1"
+_PALETTE_CE_EXPERIMENT = "large-current-frame-decoder-palette-ce-v1"
+_PALETTE_BCE_EXPERIMENT = "large-current-frame-decoder-palette-bce-v1"
 _TRAIN_FRAMES = 16_384
 _VALIDATION_FRAMES = 2_048
+_PALETTE_BATCH_SIZE = 64
+_PALETTE_CE_NORMALIZATION = "unweighted-pixel-mean"
+_PALETTE_BCE_NORMALIZATION = "unweighted-pixel-class-mean"
 
 
 def _rng_devices(device: torch.device) -> list[int]:
@@ -120,13 +140,64 @@ def _digest(value: object) -> str:
 
 
 def _validate_loss_kind(loss_kind: str) -> str:
-    if loss_kind not in {"mse", "balanced-bright"}:
-        raise ValueError("loss_kind must be 'mse' or 'balanced-bright'")
+    if loss_kind not in {"mse", "balanced-bright", "palette-ce", "palette-bce"}:
+        raise ValueError(
+            "loss_kind must be 'mse', 'balanced-bright', 'palette-ce', or "
+            "'palette-bce'"
+        )
     return loss_kind
 
 
 def _loss_normalization(loss_kind: str) -> str:
+    if loss_kind == "palette-ce":
+        return _PALETTE_CE_NORMALIZATION
+    if loss_kind == "palette-bce":
+        return _PALETTE_BCE_NORMALIZATION
     return _LOSS_NORMALIZATION if loss_kind == "balanced-bright" else _MSE_NORMALIZATION
+
+
+def _experiment_for_loss(loss_kind: str) -> str:
+    return {
+        "mse": _EXPERIMENT,
+        "balanced-bright": _BALANCED_BRIGHT_EXPERIMENT,
+        "palette-ce": _PALETTE_CE_EXPERIMENT,
+        "palette-bce": _PALETTE_BCE_EXPERIMENT,
+    }[loss_kind]
+
+
+def _palette_metadata(palette: np.ndarray | None) -> dict[str, Any]:
+    """Return one stable palette provenance bundle for every artifact surface."""
+
+    colors = palette_to_json(palette)
+    digest = (
+        hashlib.sha256(
+            np.ascontiguousarray(palette, dtype=np.uint8).tobytes()
+        ).hexdigest()
+        if palette is not None
+        else None
+    )
+    return {
+        "palette_rgb": colors,
+        "palette_sha256": digest,
+        "palette_source_split": "train" if palette is not None else None,
+        "palette_size": len(palette) if palette is not None else None,
+        "output_channels": len(palette) if palette is not None else 3,
+        "raw_logits": palette is not None,
+        "decoder_input_split": "train",
+        "train_only_input": True,
+    }
+
+
+def palette_loss(
+    logits: torch.Tensor, targets: torch.Tensor, loss_kind: str
+) -> torch.Tensor:
+    """Apply the selected unweighted per-pixel palette objective."""
+
+    if loss_kind == "palette-ce":
+        return ce_palette_loss(logits, targets)
+    if loss_kind == "palette-bce":
+        return bce_palette_loss(logits, targets)
+    raise ValueError("palette_loss requires 'palette-ce' or 'palette-bce'")
 
 
 def _bright_mask(
@@ -321,16 +392,45 @@ def make_decoder_pair(
     *,
     device: torch.device | str = "cpu",
     seed: int = _INIT_SEED,
-    decoder_factory: Callable[[int], nn.Module] = QueryPixelDecoder,
+    output_channels: int = 3,
+    raw_logits: bool = False,
+    decoder_factory: Callable[..., nn.Module] = QueryPixelDecoder,
 ) -> tuple[nn.Module, nn.Module]:
-    """Create two decoders with byte-identical initial parameters."""
+    """Create two decoders with byte-identical initial parameters.
+
+    Palette heads use the same ``output_channels`` and raw-logit contract for
+    both representations.  Tiny test factories that only accept ``latent_dim``
+    retain the historical call shape.
+    """
+
+    def create() -> nn.Module:
+        if decoder_factory is QueryPixelDecoder:
+            return decoder_factory(
+                latent_dim,
+                output_channels=output_channels,
+                raw_logits=raw_logits,
+            )
+        parameters = inspect.signature(decoder_factory).parameters
+        accepts_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        kwargs = {
+            key: value
+            for key, value in (
+                ("output_channels", output_channels),
+                ("raw_logits", raw_logits),
+            )
+            if key in parameters or accepts_kwargs
+        }
+        return decoder_factory(latent_dim, **kwargs)
 
     target = torch.device(device)
     with torch.random.fork_rng(devices=_rng_devices(target)):
         torch.manual_seed(seed)
-        first = decoder_factory(latent_dim)
+        first = create()
         initial = _state(first)
-        second = decoder_factory(latent_dim)
+        second = create()
         second.load_state_dict(initial, strict=True)
     return first.to(target), second.to(target)
 
@@ -384,6 +484,7 @@ def fit_matched_decoders(
     milestones: Sequence[int] = (512, 2048, 8192),
     batch_size: int = _DECODER_BATCH_SIZE,
     loss_kind: str = "mse",
+    palette: np.ndarray | None = None,
     sampler: torch.Generator | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
     on_milestone: Callable[[MatchedSnapshot, nn.Module, nn.Module], None] | None = None,
@@ -391,6 +492,12 @@ def fit_matched_decoders(
     """Fit both heads with one shared sampling stream and milestone callback."""
 
     loss_kind = _validate_loss_kind(loss_kind)
+    palette_loss_kind = loss_kind in {"palette-ce", "palette-bce"}
+    if palette_loss_kind and palette is None:
+        raise ValueError(f"{loss_kind} requires a train-derived RGB palette")
+    if not palette_loss_kind and palette is not None:
+        raise ValueError("palette metadata is only valid for palette loss kinds")
+    palette_size = len(palette) if palette is not None else None
     schedule = tuple(int(value) for value in milestones)
     if not schedule or tuple(sorted(set(schedule))) != schedule or schedule[0] < 1:
         raise ValueError("milestones must be increasing positive integers")
@@ -421,6 +528,16 @@ def fit_matched_decoders(
             indices = torch.randint(len(targets), (batch_size,), generator=generator)
             sampled_indices = tuple(int(value) for value in indices.tolist())
             sampled.append(sampled_indices)
+            target_rows = _take(targets, indices)
+            if palette_loss_kind:
+                class_targets = torch.from_numpy(
+                    palette_indices(
+                        target_rows.detach().cpu().numpy(),  # type: ignore[arg-type]
+                        palette,  # type: ignore[arg-type]
+                    )
+                ).to(device=device, dtype=torch.long)
+            else:
+                class_targets = None
             losses: dict[str, float] = {}
             for name, decoder, optimizer, features in (
                 ("cls", cls_decoder, cls_optimizer, cls_features),
@@ -432,17 +549,26 @@ def fit_matched_decoders(
                 ),
             ):
                 latent = _take(features, indices).to(device=device, dtype=torch.float32)
-                target = (
-                    _take(targets, indices)
-                    .to(device=device, dtype=torch.float32)
-                    .div(255.0)
-                )
-                prediction = _pixels(decoder(latent), tuple(target.shape))
-                loss = (
-                    F.mse_loss(prediction, target)
-                    if loss_kind == "mse"
-                    else balanced_bright_loss(prediction, target)
-                )
+                if palette_loss_kind:
+                    assert class_targets is not None and palette_size is not None
+                    expected_shape = (
+                        len(indices),
+                        palette_size,
+                        int(target_rows.shape[-2]),
+                        int(target_rows.shape[-1]),
+                    )
+                    logits = _pixels(decoder(latent), expected_shape)
+                    loss = palette_loss(logits, class_targets, loss_kind)
+                else:
+                    target = target_rows.to(
+                        device=device, dtype=torch.float32
+                    ).div(255.0)
+                    prediction = _pixels(decoder(latent), tuple(target.shape))
+                    loss = (
+                        F.mse_loss(prediction, target)
+                        if loss_kind == "mse"
+                        else balanced_bright_loss(prediction, target)
+                    )
                 if not torch.isfinite(loss):
                     raise RuntimeError("nonfinite decoder loss")
                 optimizer.zero_grad(set_to_none=True)
@@ -456,6 +582,7 @@ def fit_matched_decoders(
                 "loss_kind": loss_kind,
                 "bright_threshold": _BRIGHT_THRESHOLD,
                 "equal_class_weights": loss_kind == "balanced-bright",
+                "palette_size": palette_size,
                 "loss_normalization": _loss_normalization(loss_kind),
                 "updates_per_second": step / max(time.monotonic() - began, 1e-9),
                 "indices": sampled_indices,
@@ -632,6 +759,60 @@ def _bright_numpy_metrics(
     }
 
 
+def _palette_metrics(
+    confusion: np.ndarray,
+    changed_confusion: np.ndarray,
+) -> dict[str, Any]:
+    """Summarize palette confusion, including the changed-pixel subset."""
+
+    target_counts = confusion.sum(axis=1)
+    predicted_counts = confusion.sum(axis=0)
+    correct = np.diag(confusion)
+    changed_target_counts = changed_confusion.sum(axis=1)
+    changed_correct = np.diag(changed_confusion)
+    total = int(confusion.sum())
+    changed_total = int(changed_confusion.sum())
+    return {
+        "palette_class_count": int(confusion.shape[0]),
+        "palette_pixel_accuracy": (
+            float(correct.sum() / total) if total else None
+        ),
+        "palette_target_counts": target_counts.astype(np.int64).tolist(),
+        "palette_predicted_counts": predicted_counts.astype(np.int64).tolist(),
+        "palette_per_color_recall": [
+            float(value / count) if count else None
+            for value, count in zip(correct, target_counts, strict=True)
+        ],
+        "palette_per_color_precision": [
+            float(value / count) if count else None
+            for value, count in zip(correct, predicted_counts, strict=True)
+        ],
+        "palette_confusion_matrix": confusion.astype(np.int64).tolist(),
+        "palette_changed_pixel_accuracy": (
+            float(changed_correct.sum() / changed_total) if changed_total else None
+        ),
+        "palette_changed_target_counts": (
+            changed_target_counts.astype(np.int64).tolist()
+        ),
+        "palette_changed_predicted_counts": changed_confusion.sum(axis=0)
+        .astype(np.int64)
+        .tolist(),
+        "palette_changed_per_color_recall": [
+            float(value / count) if count else None
+            for value, count in zip(
+                changed_correct, changed_target_counts, strict=True
+            )
+        ],
+        "palette_changed_per_color_precision": [
+            float(value / count) if count else None
+            for value, count in zip(
+                changed_correct, changed_confusion.sum(axis=0), strict=True
+            )
+        ],
+        "palette_changed_confusion_matrix": changed_confusion.astype(np.int64).tolist(),
+    }
+
+
 def evaluate_decoder_stream(
     decoder: nn.Module,
     features: object,
@@ -644,6 +825,7 @@ def evaluate_decoder_stream(
     device: torch.device | str,
     batch_size: int = _EVAL_BATCH_SIZE,
     wrong_permutation: bool = False,
+    palette: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Evaluate all rows in batches; changed masks come from the bank."""
 
@@ -656,6 +838,7 @@ def evaluate_decoder_stream(
         "examples": [],
         "wrong_latent": wrong_permutation,
     }
+    palette_size = len(palette) if palette is not None else None
     try:
         with (
             torch.random.fork_rng(devices=_rng_devices(target_device)),
@@ -672,6 +855,16 @@ def evaluate_decoder_stream(
                 changed_bright_error = 0.0
                 changed_bright_count = 0
                 rows = changed_count = 0
+                palette_confusion = (
+                    np.zeros((palette_size, palette_size), dtype=np.int64)
+                    if palette_size is not None
+                    else None
+                )
+                palette_changed_confusion = (
+                    np.zeros((palette_size, palette_size), dtype=np.int64)
+                    if palette_size is not None
+                    else None
+                )
                 for cursor in range(start, stop, batch_size):
                     end = min(cursor + batch_size, stop)
                     positions = np.arange(cursor, end, dtype=np.int64)
@@ -683,11 +876,28 @@ def evaluate_decoder_stream(
                     latent = torch.from_numpy(
                         np.asarray(features[feature_positions], dtype=np.float32)  # type: ignore[index]
                     ).to(target_device)
-                    prediction = decoder(latent)
+                    if palette is not None:
+                        logits = forward_logits(decoder, latent)
+                    else:
+                        logits = decoder(latent)
                     current = torch.from_numpy(
                         np.asarray(pixels[positions], dtype=np.float32) / 255.0  # type: ignore[index]
                     ).to(target_device)
-                    prediction = _pixels(prediction, tuple(current.shape))
+                    if palette is not None:
+                        expected_shape = (
+                            len(positions),
+                            len(palette),
+                            int(current.shape[-2]),
+                            int(current.shape[-1]),
+                        )
+                        logits = _pixels(logits, expected_shape)
+                        prediction = render_palette_rgb(logits, palette)
+                        predicted_classes = (
+                            logits.argmax(dim=1).detach().cpu().numpy()
+                        )
+                    else:
+                        prediction = _pixels(logits, tuple(current.shape))
+                        predicted_classes = None
                     predicted = prediction.detach().cpu().numpy()
                     target = current.detach().cpu().numpy()
                     mean = np.broadcast_to(training_mean, target.shape)
@@ -708,6 +918,24 @@ def evaluate_decoder_stream(
                     changed_count += int(mask.sum())
                     changed_total += float((error * mask[:, None]).sum())
                     changed_baseline += float((baseline_error * mask[:, None]).sum())
+                    if palette is not None:
+                        target_classes = palette_indices(
+                            np.asarray(pixels[positions]), palette  # type: ignore[index]
+                        )
+                        assert palette_confusion is not None
+                        assert palette_changed_confusion is not None
+                        np.add.at(
+                            palette_confusion,
+                            (target_classes.reshape(-1), predicted_classes.reshape(-1)),
+                            1,
+                        )
+                        changed_target = target_classes[mask]
+                        changed_predicted = predicted_classes[mask]
+                        np.add.at(
+                            palette_changed_confusion,
+                            (changed_target.reshape(-1), changed_predicted.reshape(-1)),
+                            1,
+                        )
                     target_bright_mask = np.min(target, axis=1) >= _BRIGHT_THRESHOLD
                     changed_bright_mask = mask & target_bright_mask
                     changed_bright_count += int(changed_bright_mask.sum())
@@ -733,7 +961,7 @@ def evaluate_decoder_stream(
                             + int(one_bright["predicted_bright"])
                             - int(one_bright["bright_true_positive"])
                         )
-                        examples[global_index] = {
+                        example = {
                             "index": global_index,
                             "split": split,
                             "episode_id": records[global_index]["episode_id"],
@@ -816,7 +1044,24 @@ def evaluate_decoder_stream(
                             "reconstructed": np.asarray(predicted[local_index]).copy(),
                             "training_mean": np.asarray(training_mean).copy(),
                         }
-                result["splits"][split] = _stats(
+                        if palette is not None:
+                            example["palette_pixel_accuracy"] = float(
+                                (
+                                    predicted_classes[local_index]
+                                    == target_classes[local_index]
+                                ).mean()
+                            )
+                            if bool(changed_one.any()):
+                                example["palette_changed_pixel_accuracy"] = float(
+                                    (
+                                        predicted_classes[local_index][changed_one]
+                                        == target_classes[local_index][changed_one]
+                                    ).mean()
+                                )
+                            else:
+                                example["palette_changed_pixel_accuracy"] = None
+                        examples[global_index] = example
+                split_stats = _stats(
                     rows,
                     total,
                     baseline,
@@ -836,6 +1081,13 @@ def evaluate_decoder_stream(
                     changed_bright_error=changed_bright_error,
                     changed_bright=changed_bright_count,
                 )
+                if palette is not None:
+                    assert palette_confusion is not None
+                    assert palette_changed_confusion is not None
+                    split_stats.update(
+                        _palette_metrics(palette_confusion, palette_changed_confusion)
+                    )
+                result["splits"][split] = split_stats
                 result["examples"].extend(
                     examples[index] for index in wanted if index in examples
                 )
@@ -892,8 +1144,10 @@ def _save_decoder_checkpoint(
     frame_index_hash: str,
     final_step: int,
     loss_kind: str,
+    palette: np.ndarray | None = None,
 ) -> Path:
     path = run / f"decoder-{snapshot.step}.pt"
+    palette_metadata = _palette_metadata(palette)
     pretrain.save_checkpoint(
         path,
         {
@@ -908,16 +1162,13 @@ def _save_decoder_checkpoint(
             "latent_dim": _LATENT_DIM,
             "decoder_seed": _INIT_SEED,
             "sampling_seed": _SAMPLING_SEED,
-            "experiment": (
-                _BALANCED_BRIGHT_EXPERIMENT
-                if loss_kind == "balanced-bright"
-                else _EXPERIMENT
-            ),
+            "experiment": _experiment_for_loss(loss_kind),
             "loss_kind": loss_kind,
             "bright_threshold": _BRIGHT_THRESHOLD,
             "equal_class_weights": loss_kind == "balanced-bright",
             "loss_class_weights": {"bright": 0.5, "background": 0.5},
             "loss_normalization": _loss_normalization(loss_kind),
+            **palette_metadata,
             "world_model_sha256": world_hash,
             "data_sha256": data_hash,
             "frame_index_sha256": frame_index_hash,
@@ -976,6 +1227,7 @@ def _write_visuals(
     step: int,
     world_hash: str,
     decoder_hash: str,
+    palette: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     root = run / "images" / f"step-{step}"
     root.mkdir(parents=True, exist_ok=True)
@@ -1041,6 +1293,7 @@ def _write_visuals(
                     "observed_path": str(observed_path),
                     "reconstructed_path": str(reconstruction_path),
                     "wrong_latent_path": str(wrong_path),
+                    **_palette_metadata(palette),
                 },
             }
         )
@@ -1095,10 +1348,24 @@ def run_study(
     bank = open_frame_bank(
         Path(dataset_root), shared_bank, checkpoint_sha256=checkpoint_sha256
     )
+    palette = None
+    if loss_kind in {"palette-ce", "palette-bce"}:
+        palette = derive_palette(
+            bank.train.pixels,
+            range(len(bank.train.pixels)),
+            batch_size=_PALETTE_BATCH_SIZE,
+            max_colors=MAX_PALETTE_SIZE,
+        )
+        validate_palette_coverage(
+            bank.validation.pixels,
+            range(len(bank.validation.pixels)),
+            palette,
+            batch_size=_PALETTE_BATCH_SIZE,
+            split="validation",
+        )
     history = Path(history_root)
-    experiment = (
-        _BALANCED_BRIGHT_EXPERIMENT if loss_kind == "balanced-bright" else _EXPERIMENT
-    )
+    experiment = _experiment_for_loss(loss_kind)
+    palette_metadata = _palette_metadata(palette)
     common = {
         "variant": "pixel-repr-ddqn",
         "experiment": experiment,
@@ -1134,6 +1401,7 @@ def run_study(
         "diagnostic_only": True,
         "world_model_fits": False,
         "predictor_used": False,
+        **palette_metadata,
     }
     runs: dict[str, Path] = {}
     evaluations: dict[str, dict[int, dict[str, Any]]] = {"cls": {}, "projected": {}}
@@ -1163,7 +1431,12 @@ def run_study(
         training_mean = stream_train_mean(bank.pixels, bank.indices("train"))
         for path in runs.values():
             _save_png(path / "training-mean.png", training_mean)
-        cls_decoder, projected_decoder = make_decoder_pair(_LATENT_DIM, device=device)
+        cls_decoder, projected_decoder = make_decoder_pair(
+            _LATENT_DIM,
+            device=device,
+            output_channels=len(palette) if palette is not None else 3,
+            raw_logits=palette is not None,
+        )
         sampler = torch.Generator(device="cpu").manual_seed(_SAMPLING_SEED)
 
         def on_step(metric: dict[str, Any]) -> None:
@@ -1215,6 +1488,7 @@ def run_study(
                     frame_index_hash=bank.frame_index_hash,
                     final_step=schedule[-1],
                     loss_kind=loss_kind,
+                    palette=palette,
                 )
                 normal = evaluate_decoder_stream(
                     decoder,
@@ -1226,6 +1500,7 @@ def run_study(
                     training_mean,
                     device=device,
                     batch_size=_EVAL_BATCH_SIZE,
+                    palette=palette,
                 )
                 wrong = evaluate_decoder_stream(
                     decoder,
@@ -1238,6 +1513,7 @@ def run_study(
                     device=device,
                     batch_size=_EVAL_BATCH_SIZE,
                     wrong_permutation=True,
+                    palette=palette,
                 )
                 wrong_by_index = {item["index"]: item for item in wrong["examples"]}
                 for item in normal["examples"]:
@@ -1251,6 +1527,7 @@ def run_study(
                     "bright_threshold": _BRIGHT_THRESHOLD,
                     "equal_class_weights": loss_kind == "balanced-bright",
                     "loss_normalization": _loss_normalization(loss_kind),
+                    **palette_metadata,
                     "world_model_sha256": checkpoint_sha256,
                     "data_sha256": bank.data_hash,
                     "frame_index_sha256": bank.frame_index_hash,
@@ -1268,6 +1545,7 @@ def run_study(
                     step=snapshot.step,
                     world_hash=checkpoint_sha256,
                     decoder_hash=decoder_hash,
+                    palette=palette,
                 )
                 atomic_json(runs[mode] / f"visualizations-{snapshot.step}.json", views)
                 atomic_json(runs[mode] / "visualizations.json", views)
@@ -1321,6 +1599,11 @@ def run_study(
                         "validation_changed_bright_count": validation_stats[
                             "changed_bright_count"
                         ],
+                        **{
+                            f"validation_{key}": value
+                            for key, value in validation_stats.items()
+                            if key.startswith("palette_")
+                        },
                         "phase": "frozen current-frame decoder evaluation",
                     },
                 )
@@ -1343,6 +1626,7 @@ def run_study(
             milestones=schedule,
             batch_size=batch_size,
             loss_kind=loss_kind,
+            palette=palette,
             sampler=sampler,
             on_step=on_step,
             on_milestone=on_milestone,
@@ -1359,6 +1643,7 @@ def run_study(
                     "bright_threshold": _BRIGHT_THRESHOLD,
                     "equal_class_weights": loss_kind == "balanced-bright",
                     "loss_normalization": _loss_normalization(loss_kind),
+                    **palette_metadata,
                     "world_model_sha256": checkpoint_sha256,
                     "data_sha256": bank.data_hash,
                     "frame_index_sha256": bank.frame_index_hash,
@@ -1384,6 +1669,7 @@ def run_study(
                 "bright_threshold": _BRIGHT_THRESHOLD,
                 "equal_class_weights": loss_kind == "balanced-bright",
                 "loss_normalization": _loss_normalization(loss_kind),
+                **palette_metadata,
                 "checkpoint_sha256": checkpoint_sha256,
                 "data_sha256": bank.data_hash,
                 "frame_index_sha256": bank.frame_index_hash,

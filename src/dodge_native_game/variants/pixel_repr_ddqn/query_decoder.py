@@ -78,6 +78,8 @@ class QueryPixelDecoder(nn.Module):
         heads: int = 4,
         output_size: int = 128,
         patch_size: int = 16,
+        output_channels: int = _OUTPUT_CHANNELS,
+        raw_logits: bool = False,
     ) -> None:
         super().__init__()
         for name, value in (
@@ -87,6 +89,7 @@ class QueryPixelDecoder(nn.Module):
             ("heads", heads),
             ("output_size", output_size),
             ("patch_size", patch_size),
+            ("output_channels", output_channels),
         ):
             _positive_int(name, value)
         if hidden_dim % heads:
@@ -100,6 +103,8 @@ class QueryPixelDecoder(nn.Module):
         self.heads = heads
         self.output_size = output_size
         self.patch_size = patch_size
+        self.output_channels = output_channels
+        self.raw_logits = raw_logits
         self.patches_per_side = output_size // patch_size
         self.num_patches = self.patches_per_side**2
 
@@ -113,7 +118,7 @@ class QueryPixelDecoder(nn.Module):
         )
         self.patch_head = nn.Linear(
             hidden_dim,
-            _OUTPUT_CHANNELS * patch_size * patch_size,
+            output_channels * patch_size * patch_size,
         )
 
     @property
@@ -123,10 +128,10 @@ class QueryPixelDecoder(nn.Module):
         return self.query_tokens
 
     def _unpatchify(self, patches: torch.Tensor) -> torch.Tensor:
-        """Rearrange channels-last patch predictions into ``(B,3,H,W)``."""
+        """Rearrange channels-last patch predictions into ``(B,C,H,W)``."""
 
         batch, num_patches, values = patches.shape
-        expected_values = _OUTPUT_CHANNELS * self.patch_size**2
+        expected_values = self.output_channels * self.patch_size**2
         if num_patches != self.num_patches or values != expected_values:
             raise ValueError(
                 "patch predictions must have shape "
@@ -138,17 +143,17 @@ class QueryPixelDecoder(nn.Module):
             self.patches_per_side,
             self.patch_size,
             self.patch_size,
-            _OUTPUT_CHANNELS,
+            self.output_channels,
         )
         return patches.permute(0, 5, 1, 3, 2, 4).reshape(
             batch,
-            _OUTPUT_CHANNELS,
+            self.output_channels,
             self.output_size,
             self.output_size,
         )
 
-    def forward(self, latent: torch.Tensor) -> torch.Tensor:
-        """Return sigmoid RGB pixels for latent input shaped ``(B, latent_dim)``."""
+    def forward_logits(self, latent: torch.Tensor) -> torch.Tensor:
+        """Return raw patch logits for latent input shaped ``(B, latent_dim)``."""
 
         if latent.ndim != 2 or latent.shape[-1] != self.latent_dim:
             raise ValueError(
@@ -159,5 +164,10 @@ class QueryPixelDecoder(nn.Module):
         queries = self.query_tokens.expand(latent.shape[0], -1, -1)
         for block in self.blocks:
             queries = block(queries, memory)
-        patches = torch.sigmoid(self.patch_head(queries))
-        return self._unpatchify(patches)
+        return self._unpatchify(self.patch_head(queries))
+
+    def forward(self, latent: torch.Tensor) -> torch.Tensor:
+        """Return sigmoid RGB by default, or raw logits when configured."""
+
+        logits = self.forward_logits(latent)
+        return logits if self.raw_logits else torch.sigmoid(logits)
