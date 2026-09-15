@@ -27,6 +27,12 @@ def png(tensor: torch.Tensor) -> str:
     return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
+def make_decoder(dimension: int) -> nn.Module:
+    return nn.Sequential(
+        nn.Linear(dimension, 256), nn.GELU(), nn.Linear(256, 3 * 32 * 32), nn.Sigmoid()
+    )
+
+
 def fit_probe(
     run: Path,
     dataset_root: Path,
@@ -45,6 +51,7 @@ def fit_probe(
     practice = payload.get("experiment") in {
         "practice-overfit-v1",
         "practice-diverse-v1",
+        "practice-batch32-v1",
     }
     if steps > 32 and not practice:
         raise ValueError("decoder smoke requires 1..32 updates")
@@ -69,9 +76,7 @@ def fit_probe(
     example, _ = batch_from_dataset(train, 2, rng)
     with torch.no_grad():
         dimension = model.encode(example.to(device)).shape[-1]
-    decoder = nn.Sequential(
-        nn.Linear(dimension, 256), nn.GELU(), nn.Linear(256, 3 * 32 * 32), nn.Sigmoid()
-    ).to(device)
+    decoder = make_decoder(dimension).to(device)
     optimizer = torch.optim.AdamW(decoder.parameters(), lr=1e-3)
     for step in range(1, steps + 1):
         pixels, _ = batch_from_dataset(train, batch_size, rng)
@@ -166,6 +171,15 @@ def fit_probe(
             "world_model_sha256": checkpoint_hash,
         },
     )
+    from .pixel_diagnostics import evaluate_pixels
+
+    pixel_checks = evaluate_pixels(model, decoder, train, validation, device)
+    pixel_checks.update(
+        checkpoint_sha256=checkpoint_hash,
+        decoder_sha256=file_hash(run / "decoder.pt"),
+        data_hash=payload["data_hash"],
+    )
+    atomic_json(run / "pixel_diagnostics.json", pixel_checks)
     atomic_json(run / "visualizations.json", snapshots)
     atomic_json(run / "visualization.json", snapshots[0])
     write_status(

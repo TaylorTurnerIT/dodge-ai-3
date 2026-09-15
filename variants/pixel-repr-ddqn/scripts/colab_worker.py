@@ -56,54 +56,114 @@ def main():
         experiment=protocol["experiment"] if protocol else "mvp",
         device="cuda",
     )
-    fit_probe(
-        run,
-        dataset,
-        steps=protocol["decoder_updates"] if protocol else 32,
-        batch_size=protocol["batch_size"] if protocol else 4,
-        device="cuda",
+    from dodge_native_game.variants.pixel_repr_ddqn.run_artifacts import (
+        atomic_json,
+        create_run,
     )
-    if protocol:
-        from dodge_native_game.variants.pixel_repr_ddqn.dynamics import (
-            evaluate_dynamics,
+
+    runs = [run]
+    if protocol and protocol["experiment"] == "practice-batch32-v1":
+        import shutil
+
+        manifest = json.loads((run / "manifest.json").read_text())
+        manifest.update(total_steps=128, retained_from=RUN_ID)
+        retained = create_run(root / "history", RUN_ID + "-step128", manifest)
+        shutil.copyfile(run / "checkpoint-128.pt", retained / "checkpoint.pt")
+        shutil.copyfile(run / "config.json", retained / "config.json")
+        rows = [
+            json.loads(line)
+            for line in (run / "metrics.jsonl").read_text().splitlines()
+        ]
+        (retained / "metrics.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in rows if row["step"] <= 128)
+        )
+        atomic_json(
+            retained / "report.json",
+            {
+                "quality_gate": "engineering-only",
+                "steps": 128,
+                "checkpoint_sha256": file_hash(retained / "checkpoint.pt"),
+                "comparison": "4096 windows; fewer optimizer updates than batch8",
+            },
+        )
+        runs.insert(0, retained)
+
+    def diagnose(target):
+        fit_probe(
+            target,
+            dataset,
+            steps=protocol["decoder_updates"] if protocol else 32,
+            batch_size=8 if protocol else 4,
+            device="cuda",
+        )
+        if protocol:
+            from dodge_native_game.variants.pixel_repr_ddqn.dynamics import (
+                evaluate_dynamics,
+            )
+            from dodge_native_game.variants.pixel_repr_ddqn.pretrain import load_model
+
+            model, _ = load_model(target / "checkpoint.pt")
+            model = model.to("cuda")
+            checks = {
+                split: evaluate_dynamics(
+                    model, PixelSequenceDataset(dataset, split=split), "cuda"
+                )
+                for split in ("train", "validation")
+            }
+            checks.update(
+                checkpoint_sha256=file_hash(target / "checkpoint.pt"), protocol=protocol
+            )
+            atomic_json(target / "dynamics.json", checks)
+
+    for target in runs:
+        diagnose(target)
+        if protocol and protocol.get("calibrate_encoder"):
+            from dodge_native_game.variants.pixel_repr_ddqn.calibration import (
+                export_calibrated_run,
+            )
+
+            calibrated = export_calibrated_run(
+                target, dataset, root / "history", target.name + "-calibrated"
+            )
+            diagnose(calibrated)
+
+    if protocol and protocol.get("baseline"):
+        from dodge_native_game.variants.pixel_repr_ddqn.pixel_diagnostics import (
+            evaluate_pixels,
         )
         from dodge_native_game.variants.pixel_repr_ddqn.pretrain import load_model
-        from dodge_native_game.variants.pixel_repr_ddqn.run_artifacts import atomic_json
+        from dodge_native_game.variants.pixel_repr_ddqn.probe import make_decoder
 
-        model, _ = load_model(run / "checkpoint.pt")
-        model = model.to("cuda")
-        checks = {
-            split: evaluate_dynamics(
-                model, PixelSequenceDataset(dataset, split=split), "cuda"
-            )
-            for split in ("train", "validation")
-        }
+        baseline = root / "baseline"
+        for name, digest in protocol["baseline"].items():
+            assert file_hash(baseline / name) == digest
+        model, payload = load_model(baseline / "checkpoint.pt")
+        assert payload["data_hash"] == protocol["data_hash"]
+        decoder_payload = torch.load(
+            baseline / "decoder.pt", map_location="cpu", weights_only=True
+        )
+        assert (
+            decoder_payload["world_model_sha256"]
+            == protocol["baseline"]["checkpoint.pt"]
+        )
+        decoder = make_decoder(decoder_payload["latent_dim"])
+        decoder.load_state_dict(decoder_payload["model"])
+        checks = evaluate_pixels(
+            model.to("cuda"),
+            decoder.to("cuda").eval(),
+            PixelSequenceDataset(dataset, split="train"),
+            PixelSequenceDataset(dataset, split="validation"),
+            "cuda",
+        )
         checks.update(
-            checkpoint_sha256=file_hash(run / "checkpoint.pt"), protocol=protocol
+            checkpoint_sha256=protocol["baseline"]["checkpoint.pt"],
+            decoder_sha256=protocol["baseline"]["decoder.pt"],
+            data_hash=protocol["data_hash"],
         )
-        atomic_json(run / "dynamics.json", checks)
-    if protocol and protocol.get("calibrate_encoder"):
-        from dodge_native_game.variants.pixel_repr_ddqn.calibration import (
-            export_calibrated_run,
-        )
+        atomic_json(run / "baseline_pixel_diagnostics.json", checks)
+        for name, digest in protocol["baseline"].items():
+            assert file_hash(baseline / name) == digest
 
-        calibrated = export_calibrated_run(
-            run, dataset, root / "history", RUN_ID + "-calibrated"
-        )
-        calibrated_model, _ = load_model(calibrated / "checkpoint.pt")
-        calibrated_model = calibrated_model.to("cuda")
-        calibrated_checks = {
-            split: evaluate_dynamics(
-                calibrated_model, PixelSequenceDataset(dataset, split=split), "cuda"
-            )
-            for split in ("train", "validation")
-        }
-        calibrated_checks.update(
-            checkpoint_sha256=file_hash(calibrated / "checkpoint.pt"), protocol=protocol
-        )
-        atomic_json(calibrated / "dynamics.json", calibrated_checks)
-        del calibrated_model
-        fit_probe(calibrated, dataset, steps=256, batch_size=8, device="cuda")
     (run / "remote_environment.json").write_text(
         json.dumps(
             {

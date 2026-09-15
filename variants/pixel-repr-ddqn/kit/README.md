@@ -1,3 +1,5 @@
+Current iteration: [batch-size screen and pixel controls](BATCH-SCREEN.md), SPEC §L. Freeze implementation before one fixed-data T4 run; compare both128 and512 updates.
+
 Latest result: [calibrated diverse-practice screen](CALIBRATED-PRACTICE.md), SPEC §K. K1-K4 complete. Encoder calibration brings held-out error close to persistence, with a modest wrong-action penalty; decoded entities remain indistinct. Reference architecture unchanged; controllers deferred.
 
 Prior diagnosis: [frozen normalization audit](NORMALIZATION-AUDIT.md). Encoder running statistics obscure the training fit; train-only recalibration recovers it, but validation still fails persistence. Original checkpoint and dashboard unchanged.

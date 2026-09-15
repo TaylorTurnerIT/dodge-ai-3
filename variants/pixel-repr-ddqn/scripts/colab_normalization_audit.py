@@ -12,7 +12,14 @@ from pathlib import Path
 from colab_mvp import ROOT, cli
 
 
-def upload_archive(archive: Path, session: str, job: Path, *, start_index=0):
+def upload_archive(
+    archive: Path,
+    session: str,
+    job: Path,
+    *,
+    start_index=0,
+    remote_path="/content/lewm-audit.tar.gz",
+):
     """Bound request size; verify reassembled bytes before executing source."""
     parts = job / "transfer-parts"
     parts.mkdir(exist_ok=True)
@@ -34,7 +41,7 @@ def upload_archive(archive: Path, session: str, job: Path, *, start_index=0):
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     assembly.write_text(
         "from pathlib import Path\nimport hashlib\n"
-        "destination=Path('/content/lewm-audit.tar.gz')\n"
+        f"destination=Path({remote_path!r})\n"
         "with destination.open('wb') as out:\n"
         f" for i in range({count}):\n"
         "  out.write(Path(f'/content/lewm-audit.part-{i:03d}').read_bytes())\n"

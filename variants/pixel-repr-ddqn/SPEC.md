@@ -214,6 +214,14 @@ V48|Calibration export preserves original checkpoint and learned weights; only e
 V49|Diverse suite stays native/pixel/action-only:12train+4validation captures,16decisions each,all9training actions, varied starts/static/moving enemies; all invulnerable, difficulty1, no patterns. Explicit episode splits/hashes, total256 cap. New dataset comparison with prior21-transition corpus not a matched generalization claim.
 V50|practice-diverse-v1 opt-in fresh reference CUDA512updates,batch8,seed42, no resume; default MVP unchanged. Calibration/evaluation after training; no validation calibration or selecting raw/calibrated checkpoints by validation. Report both and limits; no automatic long run.
 
+§L — batch-size screen and pixel controls
+L1|accepted|implementation|Batch32 protocol, retained128-step checkpoint, pixel diagnostics and paired runner|K4|Envelope/retention tests; pixel controls analytic fixtures; full Python/Ruff
+L2|active|training|Fresh reference batch32,512updates,seed42 on same frozen corpus|L1|One T4,float32,same objective/optimizer; retain128 and512; no new collection
+L3|unopened|calibration and diagnostic fitting/evaluation|Raw/calibrated128 and512 checkpoints; same256-step decoder each; old batch8 calibrated decoder read-only baseline|L2|All validation windows/persistence/wrong actions; train-mean image and changing-pixel controls; per-episode reporting; square dashboard
+V51|practice-batch32-v1 exact fresh referenceCUDA512updates,batch32,seed42, imported corpus;128-step retained optimizer snapshot immutable.128×32 equals prior512×8 sampled windows;512-step comparison matches updates but sees4× windows. Neither isolates BN causally; reference architecture/SIGReg/optimizer unchanged.
+V52|Pixel diagnostics only:32×32 area targets, train-window current-frame mean baseline; validation-only abs(next-current) meanRGB>1/255 mask. No mask/mean input or loss to LeWM/decoder. Report global/changed-region SSE per channel-pixel, counts/null empty masks, per-episode metrics. Frozen model/decoder/modes/RNG preserved; static HUD recognition alone not entity retention evidence.
+V53|L resource cap:one T4,3000s worker,512 modelupdates,4×256 decoderupdates; baseline checkpoint/decoder read-only,no refit. Fixed old corpusSHA7769398938b2be30934779fc5851e767653df7b31b2e7fad7a2a0adcd80e6a1f. Stop source defect/OOM/nonfinite; no automatic batch fallback/extension/controller promotion.
+
 §T
 id|status|task|cites
 ---|---|---|---
@@ -280,6 +288,9 @@ T53|x|K1: calibration export, diverse suite and paired evaluation integration|V1
 T54|x|K2: collect/hash/review bounded diverse practice corpus|V49
 T55|x|K3/K4: T4 screen and original/calibrated diagnostics|V14,V48-V50
 
+T56|x|L1: bounded batch32/checkpoint retention and pixel controls|V48,V51-V53
+T57|~|L2/L3: matched-exposure/update T4 screen and visual review|V48,V51-V53
+
 §B
 id|date|cause|fix
 ---|---|---|---
@@ -325,3 +336,9 @@ B25|2026-09-14|Calibration first lint found long docstring, loop closure and unu
 B26|2026-09-15|Browser review traversed image handles while polling replaced DOM; detached parent exception|Read all image bounds in one evaluate_all call; both viewports/tabs pass. Harness-only race, existing layout V sufficient; no product or frozen source change
 
 K.result|Completed T4 screen512updates/194.79s;91 remote tests,310 local tests,legacy32-step smoke. Original train/validation prediction:persistence185.721/28.140; encoder-calibrated1.25434/0.996191. Calibrated wrong-action error+14.45%train/+4.73%validation. Validation persistence margin0.38%, weak one-seed evidence; decoded entities indistinct. Only two encoder buffers changed, all learned tensors preserved; inference-only export and separate decoders verified; T4 released. Engineering delivery accepted, scientific P4/P6 and controllers remain deferred.
+
+R.batch|Pinned upstream train/lewm.yaml batch128 and paper AppendixD agree; batch32 intermediate T4 screen, not exact reproduction|https://arxiv.org/html/2603.19312v3#A4
+
+B27|2026-09-15|Batch-screen first lint:long comparison string/import grouping|Shorten label and format imports; existing lint invariant sufficient
+
+B28|2026-09-15|Probe integration hung: legacy fake dataset __getitem__ accepted unlimited indices, violating Python sequence iteration boundary|Fixture raises IndexError at len; real dataset already bounded. Existing episode-boundary invariant sufficient; stop duplicate task tests and rerun full suite

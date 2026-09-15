@@ -29,6 +29,13 @@ from .run_artifacts import (
 )
 
 DEFAULT_ROOT = Path("history/dodge/gymnasium/pixel-repr-ddqn")
+PRACTICE_BATCH32_EXPERIMENT = "practice-batch32-v1"
+PRACTICE_BATCH32_CHECKPOINT_STEP = 128
+PRACTICE_ENVELOPES = {
+    "practice-overfit-v1": 8,
+    "practice-diverse-v1": 8,
+    PRACTICE_BATCH32_EXPERIMENT: 32,
+}
 
 
 def save_checkpoint(path: Path, payload: dict[str, Any]) -> None:
@@ -43,6 +50,27 @@ def save_checkpoint(path: Path, payload: dict[str, Any]) -> None:
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def save_experiment_checkpoint(
+    run: Path,
+    payload: dict[str, Any],
+    *,
+    step: int,
+    experiment: str,
+) -> None:
+    """Publish the regular checkpoint and experiment-specific retention.
+
+    The caller constructs one payload at the completed optimizer step. The
+    batch32 screen keeps a second serialized copy at update 128; this helper
+    performs no sampling and does not touch RNG state.
+    """
+    save_checkpoint(run / "checkpoint.pt", payload)
+    if (
+        experiment == PRACTICE_BATCH32_EXPERIMENT
+        and step == PRACTICE_BATCH32_CHECKPOINT_STEP
+    ):
+        save_checkpoint(run / "checkpoint-128.pt", payload)
 
 
 def load_model(checkpoint: Path) -> tuple[LeWorldModel, dict[str, Any]]:
@@ -78,12 +106,13 @@ def train(
     device: str = "cuda",
     experiment: str = "mvp",
 ) -> Path:
-    if experiment not in {"mvp", "practice-overfit-v1", "practice-diverse-v1"}:
+    if experiment not in {"mvp", *PRACTICE_ENVELOPES}:
         raise ValueError("unknown experiment")
-    if experiment in {"practice-overfit-v1", "practice-diverse-v1"}:
+    if experiment in PRACTICE_ENVELOPES:
+        required_batch = PRACTICE_ENVELOPES[experiment]
         if (steps, batch_size, seed, profile, device, resume) != (
             512,
-            8,
+            required_batch,
             42,
             "reference",
             "cuda",
@@ -91,7 +120,7 @@ def train(
         ):
             raise ValueError(
                 f"{experiment} requires fresh reference CUDA, "
-                "512 updates, batch8, seed42"
+                f"512 updates, batch{required_batch}, seed42"
             )
     elif not 1 <= steps <= 32:
         raise ValueError("MVP training is bounded to 1..32 updates per run")
@@ -113,11 +142,8 @@ def train(
     )
     if not len(dataset):
         raise ValueError("dataset contains no valid training windows")
-    if experiment in {
-        "practice-overfit-v1",
-        "practice-diverse-v1",
-    } and not dataset.manifest.get("practice_import"):
-        raise ValueError("practice-overfit-v1 requires an imported practice corpus")
+    if experiment in PRACTICE_ENVELOPES and not dataset.manifest.get("practice_import"):
+        raise ValueError(f"{experiment} requires an imported practice corpus")
     data_hash = file_hash(dataset_root / "manifest.json")
     scenario_provenance = getattr(dataset, "manifest", {}).get("scenario")
     model = LeWorldModel(config).to(device)
@@ -152,10 +178,13 @@ def train(
         label = "Practice overfit diagnostic — no generalization or gameplay claim"
     if experiment == "practice-diverse-v1":
         label = "Diverse practice diagnostic — no generalization or gameplay claim"
+    if experiment == PRACTICE_BATCH32_EXPERIMENT:
+        label = "Practice batch32 screen — no generalization or gameplay claim"
     phase = {
         "mvp": "world-model smoke",
         "practice-overfit-v1": "practice overfit",
         "practice-diverse-v1": "diverse practice",
+        PRACTICE_BATCH32_EXPERIMENT: "practice batch32 screen",
     }[experiment]
     run = create_run(
         history_root,
@@ -245,27 +274,37 @@ def train(
                 total_steps=steps,
                 message=label,
             )
-            if offset == steps or offset % 8 == 0:
-                save_checkpoint(
-                    run / "checkpoint.pt",
-                    {
-                        "config": asdict(config),
-                        "model": model.state_dict(),
-                        "optimizer": optimizer.state_dict(),
-                        "step": start + offset,
-                        "torch_rng": torch.get_rng_state(),
-                        "cuda_rng": torch.cuda.get_rng_state_all()
-                        if device == "cuda"
-                        else None,
-                        "sampling_rng": sampling_rng.get_state(),
-                        "batch_size": batch_size,
-                        "seed": seed,
-                        "data_hash": data_hash,
-                        "profile": profile,
-                        "experiment": experiment,
-                        "model_label": label,
-                        "scenario": scenario_provenance,
-                    },
+            if (
+                offset == steps
+                or offset % 8 == 0
+                or (
+                    experiment == PRACTICE_BATCH32_EXPERIMENT
+                    and offset == PRACTICE_BATCH32_CHECKPOINT_STEP
+                )
+            ):
+                payload = {
+                    "config": asdict(config),
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "step": start + offset,
+                    "torch_rng": torch.get_rng_state(),
+                    "cuda_rng": torch.cuda.get_rng_state_all()
+                    if device == "cuda"
+                    else None,
+                    "sampling_rng": sampling_rng.get_state(),
+                    "batch_size": batch_size,
+                    "seed": seed,
+                    "data_hash": data_hash,
+                    "profile": profile,
+                    "experiment": experiment,
+                    "model_label": label,
+                    "scenario": scenario_provenance,
+                }
+                save_experiment_checkpoint(
+                    run,
+                    payload,
+                    step=start + offset,
+                    experiment=experiment,
                 )
             print(json.dumps(metric), flush=True)
         atomic_json(
@@ -319,7 +358,12 @@ def main() -> None:
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cuda")
     parser.add_argument(
         "--experiment",
-        choices=["mvp", "practice-overfit-v1", "practice-diverse-v1"],
+        choices=[
+            "mvp",
+            "practice-overfit-v1",
+            "practice-diverse-v1",
+            PRACTICE_BATCH32_EXPERIMENT,
+        ],
         default="mvp",
     )
     args = parser.parse_args()

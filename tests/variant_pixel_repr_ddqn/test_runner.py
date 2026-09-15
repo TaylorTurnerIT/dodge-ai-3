@@ -35,6 +35,8 @@ class _FixtureDataset:
         return 4
 
     def __getitem__(self, index):
+        if not 0 <= index < len(self):
+            raise IndexError(index)
         pixels = torch.arange(4 * 3 * 16 * 16).reshape(4, 3, 16, 16)
         return {
             "pixels": ((pixels + index * 17) % 256).to(torch.uint8),

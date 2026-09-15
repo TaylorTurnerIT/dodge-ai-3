@@ -42,10 +42,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--practice-experiment",
-        choices=["practice-overfit-v1", "practice-diverse-v1"],
+        choices=["practice-overfit-v1", "practice-diverse-v1", "practice-batch32-v1"],
         default="practice-overfit-v1",
     )
     parser.add_argument("--calibrate-encoder", action="store_true")
+    parser.add_argument("--baseline-run", type=Path)
     args = parser.parse_args()
     if (
         args.calibrate_encoder or args.practice_experiment != "practice-overfit-v1"
@@ -53,6 +54,15 @@ def main() -> None:
         raise ValueError("practice experiment/calibration requires a frozen dataset")
     if args.practice_dataset is not None and args.scenario is not None:
         raise ValueError("practice dataset and scenario collection are exclusive")
+    if args.practice_experiment == "practice-batch32-v1" and (
+        not args.calibrate_encoder or args.baseline_run is None
+    ):
+        raise ValueError("batch32 screen requires calibration and baseline run")
+    if (
+        args.baseline_run is not None
+        and args.practice_experiment != "practice-batch32-v1"
+    ):
+        raise ValueError("baseline run is only supported for batch32 screen")
     practice = None
     if args.practice_dataset is not None:
         corpus = args.practice_dataset.resolve()
@@ -65,9 +75,20 @@ def main() -> None:
             "calibrate_encoder": args.calibrate_encoder,
             "model_updates": 512,
             "decoder_updates": 256,
-            "batch_size": 8,
+            "batch_size": 32
+            if args.practice_experiment == "practice-batch32-v1"
+            else 8,
             "seed": 42,
             "data_hash": hashlib.sha256(raw).hexdigest(),
+        }
+    if args.baseline_run is not None:
+        baseline = args.baseline_run.resolve()
+        baseline_manifest = json.loads((baseline / "manifest.json").read_text())
+        if baseline_manifest.get("data_hash") != practice["data_hash"]:
+            raise ValueError("baseline dataset hash mismatch")
+        practice["baseline"] = {
+            name: hashlib.sha256((baseline / name).read_bytes()).hexdigest()
+            for name in ("checkpoint.pt", "decoder.pt")
         }
     if args.scenario is not None:
         # Parse before creating a job or allocating a GPU. Native/schema validation
@@ -102,6 +123,9 @@ def main() -> None:
         if practice is not None:
             output.add(corpus, arcname="dataset")
             output.add(job / "practice_protocol.json", arcname="practice_protocol.json")
+        if args.baseline_run is not None:
+            for name in ("checkpoint.pt", "decoder.pt"):
+                output.add(args.baseline_run / name, arcname="baseline/" + name)
         if args.scenario is not None:
             output.add(args.scenario, arcname="scenario.toml")
     if archive.stat().st_size > 2 * 1024**3:
@@ -131,7 +155,12 @@ def main() -> None:
     )
 
     cli("new", "--session", session, "--gpu", "T4", timeout=180)
-    cli("upload", str(archive), "/content/lewm-source.tar.gz", "--session", session)
+    if args.baseline_run is not None:
+        from colab_normalization_audit import upload_archive
+
+        upload_archive(archive, session, job, remote_path="/content/lewm-source.tar.gz")
+    else:
+        cli("upload", str(archive), "/content/lewm-source.tar.gz", "--session", session)
     destination = ROOT / "history/dodge/gymnasium/pixel-repr-ddqn" / args.run_id
     destination.mkdir(parents=True, exist_ok=False)
     command = [
@@ -203,6 +232,10 @@ def main() -> None:
         shutil.copytree(
             job / "results/history" / calibrated_name, calibrated_destination
         )
+    if practice and practice["experiment"] == "practice-batch32-v1":
+        for suffix in ("-step128", "-step128-calibrated"):
+            name = args.run_id + suffix
+            shutil.copytree(job / "results/history" / name, destination.with_name(name))
     cli("stop", "--session", session)
     print(f"Artifacts: {destination}", flush=True)
 
