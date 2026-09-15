@@ -60,3 +60,18 @@ Review the same eight current-frame views at512/2048 and train/validation recons
 Completed1,536 additional updates from512 in18.347s on T4. Current-frame reconstruction MSE fell from0.00264568 to0.00126317 on training windows (52.26% improvement), while held-out MSE rose from0.00276618 to0.00340290 (23.02% worse). Held-out changing-region error rose0.42%. Images contain more visible shapes, often at incorrect positions. The decoder fits training images more closely; held-out generalization remains weak. Source/resume/optimizer/sampler checks pass; T4 released.
 
 User requests8,192 total updates. Add6,144 updates from saved2048 with the same optimizer, sampler, native128 MSE, LeWM and data. Validate the expanded resume envelope before source freeze. Compare current-frame train/validation errors and identical2048/8192 views; retain512 as reference. Stop8192 and release T4. More distinct shapes alone do not establish accurate reconstruction.
+
+## 8,192 result
+
+Completed6,144 additional updates from the saved2048 decoder in70.982s on Tesla T4. Optimizer step8192 and exact sampler continuation verified. LeWM weights and corpus remain unchanged. All338 local and119 remote tests passed; source `4524c5f`, archive SHA `3c7dd7ba33505d6a5668f79b9d6cdda255c21fccce7dd69a6d9125a9e64b1115`. Results retrieved; T4 released.
+
+| Current-frame reconstruction |2,048|8,192|Change|
+|---|---:|---:|---:|
+| Training MSE|0.00126317|0.000763095|−39.59%|
+| Training changing-region MSE|0.0796794|0.0442144|−44.51%|
+| Held-out MSE|0.00340290|0.00366236|+7.62%|
+| Held-out changing-region MSE|0.138582|0.139783|+0.87%|
+
+Some player-like tails and squares are sharper, but often appear at incorrect positions. Training reconstruction continues improving while held-out error worsens. This supports an overfitting concern for the current-frame probe; it does not establish whether the decoder or the learned representation limits generalization. No prediction-specific tuning was performed.
+
+Comparison image: job `lewm-decoder128-20260915-v1-8192/decoder-2048-vs-8192.png`. Paired metrics, fixed-view checks and provenance: `comparison.json`. Dashboard retains all checkpoints;32 exported panel images verified native128×128, with no scrolling at1280×720 or1366×768. This iteration ends at8192.

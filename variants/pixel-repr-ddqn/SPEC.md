@@ -390,8 +390,8 @@ O.current.result|2048 complete:1536 new updates,18.347s fitting;338 local/119 re
 
 §O.long — decoder fit to8192
 O9|accepted|implementation|Permit8192 total only from saved2048 decoder|O8|Preserve existing resume envelopes; reject wrong prior step; full tests/Ruff
-O10|active|diagnostic fitting|User8192 request:6144 additional updates from2048|O9|One T4,3000s worker; identical pixel reconstruction loss/model/corpus; saved optimizer/sampler
-O11|unopened|evaluation|Current reconstruction focus; compare2048/8192 and retain512 reference|O10|Train/validation MSE and same eight images; separate visual detail from correct object placement; verify hashes/state and releaseT4
+O10|complete|diagnostic fitting|User8192 request:6144 additional updates from2048|O9|One T4,3000s worker; identical pixel reconstruction loss/model/corpus; saved optimizer/sampler
+O11|complete|evaluation|Current reconstruction focus; compare2048/8192 and retain512 reference|O10|Train/validation MSE and same eight images; separate visual detail from correct object placement; verify hashes/state and releaseT4
 O.long.authorization|Explicit8192 request supersedes2048 cap. Stop8192 total; no world-model updates, collection, controller or prediction-specific tuning.
 
 B33|2026-09-15|8192 launcher envelope exceeded line limit|Format launcher; mechanical issue, existing Ruff invariant sufficient
@@ -399,3 +399,5 @@ B33|2026-09-15|8192 launcher envelope exceeded line limit|Format launcher; mecha
 B34|2026-09-15|Standalone artifact image helper used system Python without Pillow|Use project environment; artifact-only invocation, existing verification sufficient
 
 O.long.validation|338 local tests pass; Ruff clean; previous bounded smoke same task passed. Parent-reviewed Luna max resume extension; source freeze before8192 continuation.
+
+O.long.result|8192 complete;6144 additional updates from2048,70.982s fitting,T4 peak192290816B.338 local/119 remote tests; Ruff clean. Train current MSE0.000763095 (−39.59% vs2048);changed-current−44.51%. Validation current0.00366236 (+7.62%);changed-current0.139783 (+0.87%). Sharper player-like tails/squares in some views, frequently misplaced. Current-frame generalization weak; no prediction tuning. Resume/world/source/optimizer8192/sampler/fixedviews verified;32 native128 PNGs and both dashboard viewports pass. Artifacts retrieved,T4 released. Source4524c5f,archive3c7dd7ba33505d6a5668f79b9d6cdda255c21fccce7dd69a6d9125a9e64b1115. Stop8192; no controller promotion.
