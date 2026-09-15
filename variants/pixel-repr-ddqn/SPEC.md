@@ -416,8 +416,8 @@ O.32k.result|32768 complete;24576 new updates from8192,285.788s fitting,T4 peak1
 
 §Q — large practice corpus
 Q1|accepted|implementation|Deterministic varied recipes; resumable native capture; bounded-memory dataset; raw CLS reconstruction interface|O14|Parent review; split/corruption/cache tests; native pilot; preserve legacy corpus guards
-Q2|active|collection|4096 train +512 validation episodes ×128 decisions; native128 RGB, cadence4|Q1|Freeze source/recipes; ≤4 CPU workers; no model fitting; stream-validate before READY
-Q3|pending|evaluation|Audit counts, episode/recipe separation, hashes, action/family coverage; frame gallery|Q2|Actual totals and unsupported scene types; collection success ≠ learned representation
+Q2|complete|collection|4096 train +512 validation episodes ×128 decisions; native128 RGB, cadence4|Q1|Freeze source/recipes; ≤4 CPU workers; no model fitting; stream-validate before READY
+Q3|complete|evaluation|Audit counts, episode/recipe separation, hashes, action/family coverage; frame gallery|Q2|Actual totals and unsupported scene types; collection success ≠ learned representation
 Q4|deferred|diagnostic fitting|Matched raw CLS versus projected current-frame decoder comparison|Q3|Separate T4 protocol; same corpus/budget; frozen world model within comparison
 Q.authorization|User requests massive varied dataset; implementation/collection authorized. Old256-decision importer unchanged; new explicit format. Coordinates/configuration provenance never enters learner inputs.
 Q.invariants|Native owns gameplay/actions/terminal flags. Whole unique episode/recipe/seed splits; reject cross-split duplicate captures. Bounded episode cache; no full-corpus pixel/latent cache. Resume only identical plan/source; complete marker after validation. Preserve old runs/checkpoints.
@@ -436,3 +436,6 @@ Q.repair|Reuse only training episodes whose exact native config and capture impl
 B40|2026-09-14|Import pilot passed dataset provenance envelope into frozen capture identity guard|Separate import lineage from exact capture provenance; retain original guard and AST equality
 
 Q.repair.validation|365 full-suite tests pass; Ruff clean; real32-import/16-fresh pilot passes strict publication; original v1 has exactly1 cross-split byte duplicate. Uniform difficulty and semantic uniqueness checks pass; source freeze before v2 import/collection.
+
+Q.result|Published large-practice-20260914-v2:4096train/512validation,589824transitions,594432native128frames;16families,256/32recipes each; all9actions, matched action proportions;64/64 player-start grid cells;0..6enemies,size2..16;39permanent patterns in train. Zero cross-split episode-hash/recipe overlap; difficulty1 both.365 tests,Ruff,legacy smoke; strict streaming validation and64 sampled windows/split pass. Cache4episodes/25366528arraybytes;516096/64512windows. EpisodeNPZ185319858bytes; tar231823360bytes,archive891db46f072dab0390535eac9e7306b0bbcb52374b7899961792365d27c4382b. Manifest683a524eee34030517713d3e29d0f06959c2cf83186313197983b9a9ffef6afa. Source4e38fcc; verified training imports1469782;534.08s v2 phase. Galleries/coverage/checksums retained; Tailscale artifact server8791 verified. Rejectedv1 preserved; no model fitting/controller promotion.
+B41|2026-09-14|Gallery midpoint64 aliased repeated scripted motion at128|Use intermediate43; regenerate selected images only; collection/model unchanged

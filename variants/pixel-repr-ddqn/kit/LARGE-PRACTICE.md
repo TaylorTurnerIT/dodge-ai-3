@@ -31,3 +31,19 @@ window = dataset[0]
 The historical training launchers still target the tiny corpus. A future training phase must explicitly use the large loader and freeze its sampling protocol; do not substitute the new directory into an old bounded launcher.
 
 The first full collection was withheld: one validation recording matched a training recording byte for byte. Difficulty differed between splits but did not change that empty-arena recording. The corrected planner uses difficulty 1 throughout. Version 2 imports the unchanged training captures only after checking their configurations, receipts, original source hash, capture-function AST, dependencies and native binary; it records that lineage and collects validation again. Version 1 remains unpublished. The pixel-hash rejection remains enabled.
+
+Published dataset: `history/dodge/gymnasium/pixel-repr-ddqn/large-practice-20260914-v2`. Native 128×128 RGB, 4,096 training and 512 validation episodes, 589,824 transitions and 594,432 frames. Each of 16 families has 256 training and 32 validation recipes. Both splits cover all 64 cells of an 8×8 player-start grid, enemy counts 0–6 and sizes 2–16; training includes all 39 permanent patterns. Whole-episode hashes and recipe identities have zero cross-split overlap.
+
+Implementation checks: 365 tests, Ruff clean, bounded legacy smoke, native collection/import pilots. The published dataset passed full streaming validation. Sampling 64 windows per split confirmed four cached episodes (25,366,528 array bytes), with 516,096 training and 64,512 validation windows. Version 2 import/collection/publication took 534.08 seconds; original training captures came from the earlier collection.
+
+Reproduce from scratch with the frozen corrected source:
+
+```bash
+python -m dodge_native_game.variants.pixel_repr_ddqn.large_practice \
+  --output history/dodge/gymnasium/pixel-repr-ddqn/large-practice-reproduction \
+  --workers 4
+```
+
+Source freeze: `4e38fcc`; reused training source: `1469782`. Dataset manifest SHA256: `683a524eee34030517713d3e29d0f06959c2cf83186313197983b9a9ffef6afa`. Adjacent source archives, dataset tar, timing record and audit directory retain provenance. No model fitting ran during this phase.
+
+[Download dataset](http://100.100.169.122:8791/large-practice-20260914-v2.tar) · [Training gallery](http://100.100.169.122:8791/large-practice-20260914-v2-audit/train-gallery.png) · [Validation gallery](http://100.100.169.122:8791/large-practice-20260914-v2-audit/validation-gallery.png). Artifact server binds only the Tailscale address on port 8791; existing model dashboard remains on 8790.

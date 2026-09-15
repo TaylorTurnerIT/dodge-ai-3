@@ -13,7 +13,7 @@ from .large_dataset import read_dataset_metadata
 
 
 def audit_corpus(root: Path, output: Path) -> dict[str, object]:
-    """Summarize executed actions and render first/middle/last sample frames.
+    """Summarize executed actions and render first/intermediate/last sample frames.
 
     This reads one episode at a time. Pixel change is a visual coverage probe,
     not an entity detector or a measure of representation quality.
@@ -45,7 +45,7 @@ def audit_corpus(root: Path, output: Path) -> dict[str, object]:
                 byte_count += record.path.stat().st_size
                 if index in selected:
                     for column, frame_index in enumerate(
-                        (0, len(pixels) // 2, len(pixels) - 1)
+                        (0, len(pixels) // 3, len(pixels) - 1)
                     ):
                         frame = Image.fromarray(pixels[frame_index].transpose(1, 2, 0))
                         gallery.paste(
