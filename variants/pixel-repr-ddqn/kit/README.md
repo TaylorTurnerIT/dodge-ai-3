@@ -1,8 +1,8 @@
-Current delivery: [calibrated diverse-practice screen](CALIBRATED-PRACTICE.md), SPEC §K. Separate implementation, collection, training and paired diagnostics; reference architecture unchanged.
+Latest result: [calibrated diverse-practice screen](CALIBRATED-PRACTICE.md), SPEC §K. K1-K4 complete. Encoder calibration brings held-out error close to persistence, with a modest wrong-action penalty; decoded entities remain indistinct. Reference architecture unchanged; controllers deferred.
 
-Latest diagnosis: [frozen normalization audit](NORMALIZATION-AUDIT.md). Encoder running statistics obscure the training fit; train-only recalibration recovers it, but validation still fails persistence. Original checkpoint and dashboard unchanged.
+Prior diagnosis: [frozen normalization audit](NORMALIZATION-AUDIT.md). Encoder running statistics obscure the training fit; train-only recalibration recovers it, but validation still fails persistence. Original checkpoint and dashboard unchanged.
 
-Latest result: [practice overfit diagnostic](PRACTICE-CORPUS.md), D3/D4 complete with negative dynamics evidence. Persistence beat prediction on train and validation. Next: matched training/evaluation mode audit; controllers remain deferred.
+Earlier result: [practice overfit diagnostic](PRACTICE-CORPUS.md), D3/D4 complete with negative dynamics evidence. Persistence beat prediction on train and validation. The subsequent normalization audit is linked above; controllers remain deferred.
 
 Practice corpus bridge: [contract](PRACTICE-CORPUS.md), SPEC §D; D1 implementation → D2 bounded import verification → separately scoped D3 training. [Reading the diagnostic panels](DIAGNOSTICS.md).
 
