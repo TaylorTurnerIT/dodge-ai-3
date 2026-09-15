@@ -355,6 +355,27 @@ class LeWorldModel(nn.Module):
         output = projector(flat)
         return output.reshape(batch, time, self.config.embed_dim)
 
+    def encode_cls(self, pixels: torch.Tensor) -> torch.Tensor:
+        """Return encoder CLS tokens before projection, shaped ``(B,T,D)``.
+
+        This is the representation used by the paper's visualization decoder.
+        The world-model predictor continues to consume projected latents.
+        """
+
+        cls, _ = self._encode_tokens(pixels)
+        return cls
+
+    def encode_representation(
+        self, pixels: torch.Tensor, *, representation: str = "projected"
+    ) -> torch.Tensor:
+        """Select the input for a current-frame reconstruction probe."""
+
+        if representation == "cls":
+            return self.encode_cls(pixels)
+        if representation == "projected":
+            return self.encode(pixels)
+        raise ValueError("representation must be 'cls' or 'projected'")
+
     def encode(self, pixels: torch.Tensor) -> torch.Tensor:
         """Encode RGB frames into projected CLS latents shaped ``(B,T,D)``."""
 

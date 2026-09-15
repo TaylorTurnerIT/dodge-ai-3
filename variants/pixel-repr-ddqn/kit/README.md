@@ -1,3 +1,5 @@
+Current work: [large practice corpus](LARGE-PRACTICE.md), SPEC §Q. Implementation → native pilot → frozen bulk collection → coverage audit. Model fitting remains separate.
+
 Latest result: [current-frame decoder screen](DECODER-STUDY.md), SPEC §O32k complete. Continued8192→32768: training current-frame error93.40% lower, held-out overall error8.53% lower; held-out changing-region error0.36% higher. Cleaner images still misplace objects. Checkpoints retained; T4 released.
 
 Latest iteration: [batch-size screen and pixel controls](BATCH-SCREEN.md), SPEC §L complete. Stronger training action conditioning;7.45% lower changed-region decoder error, but held-out dynamics remain near persistence and global reconstruction loses to a fixed mean image. Both128 and512 checkpoints retained.

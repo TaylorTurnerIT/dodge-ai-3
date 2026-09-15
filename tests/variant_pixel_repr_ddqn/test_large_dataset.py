@@ -194,3 +194,38 @@ def test_coordinates_are_not_exposed_as_window_features(tmp_path: Path) -> None:
     sample = LargePixelSequenceDataset(tmp_path)[0]
     assert set(sample) == {"pixels", "actions", "episode_id", "start"}
     assert "config_coordinates" not in sample
+
+
+@pytest.mark.parametrize("defect", ["internal", "both", "missing", "dtype"])
+def test_cache_miss_rejects_invalid_episode_boundaries(
+    tmp_path: Path, defect: str
+) -> None:
+    manifest = _make_dataset(tmp_path)
+    record = manifest["episodes"]["train"][0]
+    path = tmp_path / record["path"]
+    with np.load(path, allow_pickle=False) as payload:
+        arrays = {name: payload[name] for name in payload.files}
+    if defect == "internal":
+        arrays["terminated"][4] = True
+    elif defect == "both":
+        arrays["terminated"][-1] = True
+    elif defect == "missing":
+        arrays["truncated"][-1] = False
+    else:
+        arrays["terminated"] = arrays["terminated"].astype(np.int8)
+    np.savez_compressed(path, **arrays)
+    record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest) + "\n")
+    dataset = LargePixelSequenceDataset(tmp_path)
+    with pytest.raises(DatasetValidationError):
+        dataset[0]
+    with pytest.raises(DatasetValidationError):
+        validate_dataset(tmp_path)
+
+
+def test_unpublished_corpus_requires_explicit_validation_mode(tmp_path: Path) -> None:
+    _make_dataset(tmp_path)
+    (tmp_path / "READY").unlink()
+    with pytest.raises(DatasetValidationError, match="READY"):
+        LargePixelSequenceDataset(tmp_path)
+    validate_dataset(tmp_path, require_ready=False)

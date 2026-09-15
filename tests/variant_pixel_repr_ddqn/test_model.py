@@ -99,6 +99,24 @@ def test_encode_and_attention_shapes_and_uint8_float_equivalence(
     torch.testing.assert_close(uint8_latents, float_latents, rtol=1e-5, atol=1e-5)
 
 
+def test_reconstruction_representation_selection(tiny_model: LeWorldModel) -> None:
+    pixels = torch.randint(0, 256, (1, 2, 3, 32, 32), dtype=torch.uint8)
+    before = {key: value.clone() for key, value in tiny_model.state_dict().items()}
+    with torch.no_grad():
+        expected_cls, _ = tiny_model._encode_tokens(pixels)
+        cls = tiny_model.encode_representation(pixels, representation="cls")
+        projected = tiny_model.encode_representation(pixels)
+        expected_projected = tiny_model._apply_projector(
+            tiny_model.projector, expected_cls
+        )
+    torch.testing.assert_close(cls, expected_cls, rtol=0, atol=0)
+    torch.testing.assert_close(projected, expected_projected, rtol=0, atol=0)
+    for key, value in tiny_model.state_dict().items():
+        torch.testing.assert_close(value, before[key], rtol=0, atol=0)
+    with pytest.raises(ValueError, match="representation"):
+        tiny_model.encode_representation(pixels, representation="patches")
+
+
 def test_predictor_is_causal_in_eval_mode(tiny_model: LeWorldModel) -> None:
     z = torch.randn(2, 3, 64)
     actions = torch.tensor([[0, 1, 2], [3, 4, 5]])

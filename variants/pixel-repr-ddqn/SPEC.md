@@ -412,3 +412,20 @@ O.32k.authorization|Explicit user request supersedes8192 cap; stop32768. Hold pr
 O.32k.validation|342 local tests pass; Ruff clean; bounded32-step legacy smoke expected warnings. Luna max envelope extension parent-reviewed; freeze before32768 continuation.
 
 O.32k.result|32768 complete;24576 new updates from8192,285.788s fitting,T4 peak192290816B.342 local/123 remote tests, Ruff/smoke pass. Train current MSE0.0000503655 (−93.40% vs8192),changed-current0.00231104 (−94.77%). Validation current0.00335008 (−8.53%),changed-current0.140285 (+0.36%); mean baseline0.00268604/0.137958 still better. Cleaner images, some sharper shapes; object placement inaccurate in held-out views. Resume/optimizer32768/sampler/source/world/fixedviews verified;32 native128 PNGs, both dashboard viewports pass. Artifacts retrieved,T4 released. Sourcea904395,archive92860e4d89a2cc3411eb2d52688badb8d48ea28e22ea4daba4d8f401fa4e33d7. Stop32768; no prediction-specific tuning or controller promotion.
+
+
+§Q — large practice corpus
+Q1|accepted|implementation|Deterministic varied recipes; resumable native capture; bounded-memory dataset; raw CLS reconstruction interface|O14|Parent review; split/corruption/cache tests; native pilot; preserve legacy corpus guards
+Q2|active|collection|4096 train +512 validation episodes ×128 decisions; native128 RGB, cadence4|Q1|Freeze source/recipes; ≤4 CPU workers; no model fitting; stream-validate before READY
+Q3|pending|evaluation|Audit counts, episode/recipe separation, hashes, action/family coverage; frame gallery|Q2|Actual totals and unsupported scene types; collection success ≠ learned representation
+Q4|deferred|diagnostic fitting|Matched raw CLS versus projected current-frame decoder comparison|Q3|Separate T4 protocol; same corpus/budget; frozen world model within comparison
+Q.authorization|User requests massive varied dataset; implementation/collection authorized. Old256-decision importer unchanged; new explicit format. Coordinates/configuration provenance never enters learner inputs.
+Q.invariants|Native owns gameplay/actions/terminal flags. Whole unique episode/recipe/seed splits; reject cross-split duplicate captures. Bounded episode cache; no full-corpus pixel/latent cache. Resume only identical plan/source; complete marker after validation. Preserve old runs/checkpoints.
+
+B35|2026-09-15|Large-loader draft accepted ambiguous aliases/dtypes and lacked boundary/recipe checks|Strict new schema; shared cache-miss/stream array validation; Q invariants cover
+B36|2026-09-15|Collector draft allowed source drift on resume and stopped on interrupted sidecars|Freeze source/native identity; recover only incomplete episodes; preserve complete receipts; validate split before READY
+B37|2026-09-15|Planner draft mixed permanent obstacles into player-only families and repeated one-way stop-go motion|Keep player-only empty; alternate opposing movement bursts; audit native variation
+
+B38|2026-09-15|Full planner rejected odd-size enemy geometry: rounded half-integer margins expand bounds|Use ceil(low)/floor(high); full-plan construction test before capture
+
+Q.validation|356 full-suite tests pass;5 added boundary/publication cases pass (12 loader tests total); Ruff clean; legacy32 smoke pass. Native48-episode pilot6144 transitions strict validation complete; all9 actions in both splits. Full plan4608 unique semantic recipes; source freeze before bulk collection.
