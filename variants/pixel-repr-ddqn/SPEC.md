@@ -460,3 +460,6 @@ B46|2026-09-15|Large-probe draft published latest visualizations only at final m
 B47|2026-09-15|Tiny wrapper fixture expected16 dashboard views from only8 validation examples after stride2selection|Align fixture family count with intended8train+8validation views; production16families unchanged. Existing bound16 invariant sufficient.
 
 U.validation|372 full-suite tests pass; Ruff clean; legacy32 CPU smoke passes. Parent reviewed bank/fitting/worker; independent Luna audit found no remaining split/scaling/pairing defects. Tiny fixture verifies matched init/sampling, optimizer step, train-only wrapper and early milestone publication. Dashboard JS syntax plus current/legacy metric-label fixture pass; Tailscale8790 serves updated UI. Freeze source before T4 extraction/fitting.
+
+B48|2026-09-15|Colab CPU BLAS differed by1.91e-6 between batched and single-row float32 fake encoder; exact equality blocked remote preflight|Use rtol1e-6/atol1e-5 for computed CLS; retain exact nativepixels/masks and frozen-state checks. First job v1 stopped before extraction/fitting; preserve logs, refreeze corrected tests.
+U.preflight_repair|Only computed-feature test tolerance changed;4 bank tests pass and scopedRuff clean. Training/encoding code unchanged from31a46d5. Old T4 terminated; v2 reruns all153 variant tests before extraction.

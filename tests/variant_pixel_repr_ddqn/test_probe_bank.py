@@ -207,7 +207,10 @@ def test_bank_is_aligned_with_current_pixels_previous_mask_and_features(
         expected_projected = model._apply_projector(
             model.projector, model.encode_cls(expected_input)
         )[:, 0]
-    np.testing.assert_allclose(bank.cls[0], expected_cls[0].numpy(), rtol=0, atol=0)
+    # BLAS may round batched and single-row float32 reductions differently.
+    np.testing.assert_allclose(
+        bank.cls[0], expected_cls[0].numpy(), rtol=1e-6, atol=1e-5
+    )
     np.testing.assert_allclose(
         bank.projected[0], expected_projected[0].numpy(), rtol=0, atol=1e-5
     )
