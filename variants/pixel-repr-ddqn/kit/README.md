@@ -22,6 +22,8 @@ User authorized MVP implementation with Luna max agents and parent validation. F
 
 # LeWM phase kit
 
+Current screen: [matched large-corpus reconstruction](LARGE-PROBE.md), SPEC §U. Compare fresh CLS and projected decoders on one frozen LeWM checkpoint; 512, 2,048 and 8,192 updates per head on a Colab T4.
+
 [SPEC](../SPEC.md) owns architecture, phases, tasks, gates and budgets. P0-P6 validate LeWM independently of controller selection. Existing filesystem slug retained for continuity; DDQN is optional.
 
 | Phase | Mode | Card | Depends on |

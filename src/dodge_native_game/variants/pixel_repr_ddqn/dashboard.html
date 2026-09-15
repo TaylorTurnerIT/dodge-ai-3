@@ -220,10 +220,10 @@
                 <div class="stats">
                   <div class="stat"><label>Step</label><strong id="stat-step">—</strong></div>
                   <div class="stat"><label>Loss</label><strong id="stat-loss">—</strong></div>
-                  <div class="stat"><label>Feature std</label><strong id="stat-feature">—</strong></div>
-                  <div class="stat"><label>Rank</label><strong id="stat-rank">—</strong></div>
+                  <div class="stat"><label id="label-feature">Feature std</label><strong id="stat-feature">—</strong></div>
+                  <div class="stat"><label id="label-rank">Rank</label><strong id="stat-rank">—</strong></div>
                   <div class="stat"><label>Updates / s</label><strong id="stat-speed">—</strong></div>
-                  <div class="stat"><label>Grad norm · pre-clip</label><strong id="stat-grad">—</strong></div>
+                  <div class="stat"><label id="label-grad">Grad norm · pre-clip</label><strong id="stat-grad">—</strong></div>
                 </div>
               </section>
               <section class="card profile-card">
@@ -354,11 +354,17 @@
         $("updated").textContent = safeText(status.updated_at, "Waiting for status.json");
         $("stat-step").textContent = safeText(metric.step, status.step);
         $("stat-loss").textContent = number(metric.loss);
-        $("stat-feature").textContent = number(metric.feature_std);
+        const currentOnly = manifest.current_frame_only === true;
+        const rows = Array.isArray(detail.metrics) ? detail.metrics : [];
+        const evaluation = [...rows].reverse().find((row) => row.validation_mse !== undefined) || {};
+        $("label-feature").textContent = currentOnly ? "Validation MSE" : "Feature std";
+        $("label-rank").textContent = currentOnly ? "Changed-pixel MSE" : "Rank";
+        $("label-grad").textContent = currentOnly ? "Mean-image MSE" : "Grad norm · pre-clip";
+        $("stat-feature").textContent = number(currentOnly ? evaluation.validation_mse : metric.feature_std, currentOnly ? 6 : 4);
         $("pulse-phase").textContent = safeText(status.phase || metric.phase);
-        $("stat-rank").textContent = number(metric.feature_rank, 1);
+        $("stat-rank").textContent = number(currentOnly ? evaluation.validation_changed_mse : metric.feature_rank, currentOnly ? 6 : 1);
         $("stat-speed").textContent = number(metric.updates_per_second, 1);
-        $("stat-grad").textContent = number(metric.grad_norm);
+        $("stat-grad").textContent = number(currentOnly ? evaluation.trainmean_validation_mse : metric.grad_norm, currentOnly ? 6 : 4);
         $("profile-name").textContent = safeText(manifest.profile, "unreported");
         $("profile-architecture").textContent = safeText(manifest.architecture || manifest.model_label, "unreported");
         const step = status.step === undefined ? metric.step : status.step;
@@ -407,7 +413,7 @@
         const frame = frameFor(snapshot, wanted, fallbackIndex);
         const image = frame && dataImage(frame.image);
         const prefix = labelId === "label-observed-current" ? "Input · actual current" : labelId === "label-input" ? "Input · actual next" : labelId === "label-current" ? "Diagnostic decoder · current" : "Diagnostic decoder · predicted next";
-        $(labelId).textContent = frame && frame.label ? `${prefix} · ${frame.label}` : `${prefix} frame`;
+        $(labelId).textContent = snapshot && snapshot.metadata && snapshot.metadata.current_frame_only ? safeText(frame && frame.label, "Current-frame diagnostic") : (frame && frame.label ? `${prefix} · ${frame.label}` : `${prefix} frame`);
         if (image) {
           const element = document.createElement("img"); element.src = image; element.alt = safeText(frame.label, "native diagnostic frame"); body.appendChild(element);
         } else {
@@ -416,10 +422,17 @@
       }
 
       function renderSnapshot(snapshot) {
+        if (snapshot && snapshot.metadata && snapshot.metadata.current_frame_only) {
+          renderFrame("body-observed-current", "label-observed-current", snapshot, [], 0, "Waiting for observed pixels.");
+          renderFrame("body-input", "label-input", snapshot, [], 1, "Waiting for reconstruction.");
+          renderFrame("body-current", "label-current", snapshot, [], 2, "Waiting for the training-mean control.");
+          renderFrame("body-predicted", "label-predicted", snapshot, [], 3, "Waiting for the incorrect-latent control.");
+        } else {
         renderFrame("body-observed-current", "label-observed-current", snapshot, ["observed current", "actual current", "current input"], 0, "Waiting for an actual-current frame.");
         renderFrame("body-input", "label-input", snapshot, ["observed next", "actual next", "input", "target", "next actual"], 1, "Waiting for an actual-next frame.");
         renderFrame("body-current", "label-current", snapshot, ["decoded current", "diagnostic decoder", "reconstruction"], 2, "Diagnostic decoder unavailable before fitting.");
         renderFrame("body-predicted", "label-predicted", snapshot, ["decoded prediction", "predicted next", "prediction", "next predicted"], 3, "Diagnostic decoder unavailable before fitting.");
+        }
         const metadata = snapshot && snapshot.metadata ? snapshot.metadata : {};
         if (snapshot) {
           const step = snapshot.step === undefined ? metadata.step : snapshot.step;

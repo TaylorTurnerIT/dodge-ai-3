@@ -418,7 +418,7 @@ O.32k.result|32768 complete;24576 new updates from8192,285.788s fitting,T4 peak1
 Q1|accepted|implementation|Deterministic varied recipes; resumable native capture; bounded-memory dataset; raw CLS reconstruction interface|O14|Parent review; split/corruption/cache tests; native pilot; preserve legacy corpus guards
 Q2|complete|collection|4096 train +512 validation episodes ×128 decisions; native128 RGB, cadence4|Q1|Freeze source/recipes; ≤4 CPU workers; no model fitting; stream-validate before READY
 Q3|complete|evaluation|Audit counts, episode/recipe separation, hashes, action/family coverage; frame gallery|Q2|Actual totals and unsupported scene types; collection success ≠ learned representation
-Q4|deferred|diagnostic fitting|Matched raw CLS versus projected current-frame decoder comparison|Q3|Separate T4 protocol; same corpus/budget; frozen world model within comparison
+Q4|authorized|diagnostic fitting|Matched raw CLS versus projected current-frame decoder comparison|Q3|Separate T4 protocol; same corpus/budget; frozen world model within comparison
 Q.authorization|User requests massive varied dataset; implementation/collection authorized. Old256-decision importer unchanged; new explicit format. Coordinates/configuration provenance never enters learner inputs.
 Q.invariants|Native owns gameplay/actions/terminal flags. Whole unique episode/recipe/seed splits; reject cross-split duplicate captures. Bounded episode cache; no full-corpus pixel/latent cache. Resume only identical plan/source; complete marker after validation. Preserve old runs/checkpoints.
 
@@ -439,3 +439,24 @@ Q.repair.validation|365 full-suite tests pass; Ruff clean; real32-import/16-fres
 
 Q.result|Published large-practice-20260914-v2:4096train/512validation,589824transitions,594432native128frames;16families,256/32recipes each; all9actions, matched action proportions;64/64 player-start grid cells;0..6enemies,size2..16;39permanent patterns in train. Zero cross-split episode-hash/recipe overlap; difficulty1 both.365 tests,Ruff,legacy smoke; strict streaming validation and64 sampled windows/split pass. Cache4episodes/25366528arraybytes;516096/64512windows. EpisodeNPZ185319858bytes; tar231823360bytes,archive891db46f072dab0390535eac9e7306b0bbcb52374b7899961792365d27c4382b. Manifest683a524eee34030517713d3e29d0f06959c2cf83186313197983b9a9ffef6afa. Source4e38fcc; verified training imports1469782;534.08s v2 phase. Galleries/coverage/checksums retained; Tailscale artifact server8791 verified. Rejectedv1 preserved; no model fitting/controller promotion.
 B41|2026-09-14|Gallery midpoint64 aliased repeated scripted motion at128|Use intermediate43; regenerate selected images only; collection/model unchanged
+
+
+§U — matched current-frame reconstruction on large corpus
+U1|complete|implementation|Bounded disk feature/target banks; matched CLS/projected query fitting; T4 launcher and checkpoint/artifact verification|Q3|Unit tests, source review, full Python/Ruff; preserve prior trainers/corpus
+U2|active|feature extraction|Frozen calibrated LeWM;4 sampled frames per episode;16384train/2048validation|U1|One T4; dataset683a524eee34030517713d3e29d0f06959c2cf83186313197983b9a9ffef6afa; pixel targets/masks and features disk-backed; frame choices/index hash frozen
+U3|pending|diagnostic fitting|Two fresh QueryPixelDecoder heads; CLS versus projected;512→2048→8192 updates each|U2|Identical init904/sampling903/batch32; AdamW lr0.001 decay0.01; plain current RGB MSE; same minibatches; world state frozen
+U4|pending|evaluation|All selected train/validation frames at each milestone; fixedtrainmean and wrong-latent controls; same square images|U3|Both heads finish milestone before evaluation; save optimizer/sampler/RNG; retain checkpoints; retrieve and verify provenance; release T4
+U.authorization|User requests training runs; advance implementation→extraction→fitting→evaluation after engineering gates. This first screen follows Q4 and current-frame priority; no LeWM/predictor updates, gameplay collection, or controllers. Cap8192 perhead and one T4 worker7200s. Further world-model training remains separate.
+U.invariants|Learner inputs pixels only for current-frame probe; action metadata unused. Validation never fits decoder or mean image. No full-corpus RAM cache. Source/data/world checkpoint frozen; no training-mode BN updates. Checkpoint7714c2afcea1f755513a624a7d0f885361271d4c144869f25c8d3a0189432b5d unchanged. Record measured reconstruction gains separately from gameplay understanding.
+
+B42|2026-09-14|New remote worker first lint classified absent pending module as third-party|Rerun import formatting once module exists; existing Ruff gate sufficient
+B43|2026-09-14|Existing dashboard hardcoded next-frame labels would mislabel current-only control images|Explicit current_frame_only metadata selects ordered images and literal labels; legacy snapshots unchanged
+
+U.scoring|Score RGB floats0..1; mean from training only, same scale. Changed mask exact any-channel inequality against preceding native frame, stored by bank. Wrong latent paired from a different episode within same split; never adjacent same-episode sample or cross-split wrap.
+
+B44|2026-09-15|Large-probe draft passed combined train/validation maps into fitting wrapper|Pass train-only maps; end-to-end wrapper fixture asserts optimizer input excludes validation. Existing U.invariants forbid validation fitting; add regression coverage before T4.
+B45|2026-09-15|Large-probe draft inferred output batch dimension from one sampled row|Validate decoder shape against current minibatch target; batch-size>1 fixture covers. Existing shape contract sufficient.
+B46|2026-09-15|Large-probe draft published latest visualizations only at final milestone|Publish latest plus retained milestone file at512/2048/8192; wrapper fixture covers.
+B47|2026-09-15|Tiny wrapper fixture expected16 dashboard views from only8 validation examples after stride2selection|Align fixture family count with intended8train+8validation views; production16families unchanged. Existing bound16 invariant sufficient.
+
+U.validation|372 full-suite tests pass; Ruff clean; legacy32 CPU smoke passes. Parent reviewed bank/fitting/worker; independent Luna audit found no remaining split/scaling/pairing defects. Tiny fixture verifies matched init/sampling, optimizer step, train-only wrapper and early milestone publication. Dashboard JS syntax plus current/legacy metric-label fixture pass; Tailscale8790 serves updated UI. Freeze source before T4 extraction/fitting.
