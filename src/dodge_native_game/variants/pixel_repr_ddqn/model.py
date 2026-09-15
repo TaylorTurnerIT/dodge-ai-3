@@ -464,12 +464,12 @@ class LeWorldModel(nn.Module):
             self.config.image_size,
         )
 
-    def _encode_tokens(
+    def _encode_hidden_states(
         self,
         pixels: torch.Tensor,
         *,
         output_attention: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, int, int]:
         prepared = self._prepare_pixels(pixels)
         batch, time = prepared.shape[:2]
         frames = prepared.reshape(-1, 3, self.config.image_size, self.config.image_size)
@@ -484,10 +484,51 @@ class LeWorldModel(nn.Module):
             attentions = outputs.attentions
             if attentions:
                 attention = attentions[-1].mean(dim=1)[:, 0, 1:]
+        expected_tokens = self.config.num_patches + 1
+        if tokens.shape[1:] != (expected_tokens, self.config.embed_dim):
+            raise ValueError(
+                "encoder hidden states must have shape "
+                f"(batch*time, {expected_tokens}, {self.config.embed_dim}), "
+                f"got {tuple(tokens.shape)}"
+            )
+        if attention is not None and attention.shape[1] != self.config.num_patches:
+            raise ValueError("encoder attention does not match patch-token count")
+        return tokens, attention, batch, time
+
+    def _encode_tokens(
+        self,
+        pixels: torch.Tensor,
+        *,
+        output_attention: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        tokens, attention, batch, time = self._encode_hidden_states(
+            pixels,
+            output_attention=output_attention,
+        )
         cls = tokens[:, 0].reshape(batch, time, self.config.embed_dim)
         if attention is not None:
             attention = attention.reshape(batch, time, self.config.num_patches)
         return cls, attention
+
+    def encode_readout_tokens(
+        self, pixels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return CLS and final encoder patch tokens in raster order.
+
+        The patch sequence is the ViT embedding order: row-major spatial
+        patches after the leading CLS token.  Reference inputs therefore
+        return ``(B, T, 192)`` and ``(B, T, 256, 192)``.
+        """
+
+        tokens, _, batch, time = self._encode_hidden_states(pixels)
+        cls = tokens[:, 0].reshape(batch, time, self.config.embed_dim)
+        patches = tokens[:, 1:].reshape(
+            batch,
+            time,
+            self.config.num_patches,
+            self.config.embed_dim,
+        )
+        return cls, patches
 
     def _apply_projector(self, projector: MLP, values: torch.Tensor) -> torch.Tensor:
         batch, time, dim = values.shape
