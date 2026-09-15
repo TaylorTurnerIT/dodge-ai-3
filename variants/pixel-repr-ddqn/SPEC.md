@@ -484,9 +484,9 @@ W.result|lewm-bright-probe-20260915-v1 complete;sourceb73d077/archivefbdb6cf414d
 
 §X — palette classification diagnostic
 X1|complete|implementation|Train-pixel palette, raw color logits, palette CE/BCE, paired T4 runner and class diagnostics|W4|Luna max implementation,parent review; loss/gradient/palette isolation/backward compatibility tests; fulltests/Ruff before freeze
-X2|active|feature extraction|Same frozen world/corpus/seeds asU; native128 targetpixels;4frames/episode|X1|One T4;16384train/2048validation; reuse bank only within frozen job; validate exact frame hashes
-X3|pending|diagnostic fitting|Two independent loss arms palette-ce/palette-bce; each CLS/projected;512→2048→8192 updates/head|X2|Same init904,sampling903,batch32,AdamW0.001 decay0.01; fourheads total; fresh optimizers; one worker7200s
-X4|pending|evaluation|Native RGB argmax images, original RGB/changed/bright metrics, percolor confusion, wronglatents, retainedMSE comparison|X3|Same heldout frames; inspect smallobject placement; verify checkpoints/source/data/world/palette identity; retrieve and releaseT4
+X2|complete|feature extraction|Same frozen world/corpus/seeds asU; native128 targetpixels;4frames/episode|X1|One T4;16384train/2048validation; reuse bank only within frozen job; validate exact frame hashes
+X3|complete|diagnostic fitting|Two independent loss arms palette-ce/palette-bce; each CLS/projected;512→2048→8192 updates/head|X2|Same init904,sampling903,batch32,AdamW0.001 decay0.01; fourheads total; fresh optimizers; one worker7200s
+X4|complete|evaluation|Native RGB argmax images, original RGB/changed/bright metrics, percolor confusion, wronglatents, retainedMSE comparison|X3|Same heldout frames; inspect smallobject placement; verify checkpoints/source/data/world/palette identity; retrieve and releaseT4
 X.palette|Deterministic sorted exactRGB palette from selected training pixels only; bounded-memory scan,max256colors. Unknown validation colors reject; never expand palette from validation. No game labels/state/palette lookup. Every reconstruction pixel belongs to palette.
 X.loss|Raw logits shapeB×K×128×128. CE targets integerpaletteindex; BCEWithLogits targets onehotK,unweighted mean overpixels/classes. No sigmoid beforeloss. Argmax class→RGB only evaluation/display; no probability-blended reconstruction. Classification loss updates diagnosticdecoder only.
 X.invariants|Defaults existingRGBsigmoid/MSE unchanged; LeWM/predictor/controller untouched. CE/BCE same palette/headarchitecture/init/minibatches/budget; no classweight/edge/motionloss bundled. Metrics cannot establish identity/control; crisp argmax can hide uncertainty. No loss tuning on validation.
@@ -500,6 +500,29 @@ B53|2026-09-15|New strict palettehash guard rejected placeholder hashes in two l
 
 §Y — categorical input follow-up
 Y.authorization|User requests RGB→simplifiedpixelspace→model→simplifiedpixelspace, then overnight work/report. Execute afterX completes; no code mutation duringX fitting. Separate matched RGB/palette-input worldmodel screen, then frozen palette diagnostic fitting. Pixel/action-only; no entitylabels/controllers.
-Y.design|Pending bounded protocol after current screen. Onehot palette channels avoid ordinal colorIDs. Train worldmodel in chosen inputrepresentation; do not feed categorical channels to frozen RGB checkpoint and call it learned. Matched freshRGB control required to distinguish inputencoding from added worldmodel training. PreserveX artifacts and legacydefaults.
+Y.design|Bounded protocol locked in Y1–Y4 below. Onehot palette channels avoid ordinal colorIDs. Train worldmodel in chosen inputrepresentation; do not feed categorical channels to frozen RGB checkpoint and call it learned. Matched freshRGB control required to distinguish inputencoding from added worldmodel training. PreserveX artifacts and legacydefaults.
 
 X.validation|400fulltests pass112.24s;181varianttests;Ruff/legacy32CPU smoke pass. Parent reviewed rawlogit loss path, train-only palette, exactartifact schema, finite guards, color/change confusion and paired launcher. Allselected inputaudit confirms3colors,16384train/2048validation; no unknownvalidationcolor. Galleryfixture andJSsyntax pass. Freeze beforeT4.
+
+B54|2026-09-15|Post-fit packaging read world_model_sha256 from top comparison whose schema uses checkpoint_sha256|X.contract: worker tested against actual run_study artifact; fixed reader+integration test. Four completed8192 heads recovered without refit; original source hash retained.
+B55|2026-09-15|One-off PNG audit wrongly applied categorical membership to arithmetic training-mean control|Limit membership to observed/reconstructed/wrong-latent images; mean intentionally continuous. No production change/new invariant.
+X.contract|Validate exact producer schema in integration test before remote launch; topcomparison checkpoint_sha256 distinct from perhead world_model_sha256.
+X.result|lewm-palette-probe-20260915-v1;sourcec874a27;T4 fourheads8192,181remote tests. Recovered archive386f50fadc4123a6c71a37a24dbdef01d0492c917cf16a516fb52cb4137b1744;12checkpoint optimizer/sampler/world/data/index/palette checks,1152palette PNG checks pass; T4 released. CE valMSE CLS0.002837/projected0.002750; BCE0.003692/0.002877. ChangedMSE all≈0.1414; changingcream recall below0.5%. No localization promotion. Nearestpalette retainedMSE control matches changederrors; classifier gain mainly global appearance. Recovery peakGPU memory unavailable.
+Y1|complete|implementation|Matched fresh RGB/onehot worldtrainer; old config compatibility; frozen CLS probes; dedicated T4 runner|X4|Luna max,parent review; fulltests/Ruff; freeze source before fit
+Y2|active|world fitting|1024updates/arm; retain512/1024; freshreference; batch32/history3; init42/sample43/stochastic44|Y1|Same minibatches and paired stochastic draws; original attached prediction+SIGReg0.09; AdamW5e-5 decay1e-3 clip1
+Y3|pending|frozen diagnostic|Same4frames/episode seed903 banks; rawCLS only; two paletteCE heads512/2048/8192|Y2|init904/sample903/batch32/AdamW0.001 decay0.01; same native targets; world frozen; no projector calibration
+Y4|pending|evaluation|Alltrain/validation; meanimage/wronglatent; square matched gallery; hashes/checkpoints; report|Y3|OneT4 worker7200s cap; retrieve+verify then release; no tuning/controllers
+Y.encoding|K=3 train-derived palette; RGB and onehot both3channels, identicalparametercount. Newarms nearest224 then2*x−1; palette lookup before resize. Legacy RGB bilinear/ImageNet preprocessing unchanged. Enum+canonicalpalette config; unknowncolors reject. Lossless reparameterization, no extra information.
+Y.matching|Same freshweights, sampletrace and paired RNG; train-only palette. Compare withinnewpair; oldcheckpoint comparison confounds corpus/budget/preprocessing. CE chosen before newworld results. RawCLS bypasses projector BN; preserve rawtrainingcheckpoints.
+
+B56|2026-09-15|Draft input-bank validator used filenames as metadata keys; producer uses logical pixels/changed names|Read producer directly; align validator+fixture beforelaunch; add actualbank schema check. No fitted results affected.
+B57|2026-09-15|New script formatting/import order failed initial Ruff pass|Run formatter/importfix then fullcheck beforefreeze; existing lint gate sufficient.
+
+Y.preflight|Actual4096train episode scan selects16384frames;K3 palettehash48adab0cc165e3499cde6d1678823cb12ec371095b5b65fb2fde480293e3f90b;trainindexf637fdfdbb3e7664a2d60088b2812033ee8d609714d679102b88d3f3d15cbe85 matches retainedbank. No validation arrays opened for discovery.
+
+B58|2026-09-15|Parent audit found draft worldpair check tried JSON-canonicalizing tensor checkpoint payloads|Use exact filehash plus metadata/config validation; real producer-payload integration test beforelaunch. No remote fitting affected.
+Y.contract|Before bank extraction, require correctarm/encoding, exactreferenceconfig, shared dataset/palette/seeds/budget/sampletrace/stochastictrace; reject swapped/legacy/incompatible checkpoints. Validator tested against input_pretrain actual checkpoint producer.
+
+B59|2026-09-15|Galleryfixture hardlinked across workspace/tmp filesystems and hitEXDEV|Use temporary directorysymlinks; fixture passes; no production code/invariant change.
+
+Y.validation|408fullsuite tests pass124.51s before final additions;199finalvariant tests pass87.78s;7trainer/5probe/modelroundtrip focusedchecks; Ruff/native32CPU smoke/JSsyntax/matchedgalleryfixture pass. Parent reviewed encoderpreprocessing, sharedsampling/RNG, source paperAppendixD, realcheckpointproducer preflight, palette/bankhashes. Freeze beforeT4.

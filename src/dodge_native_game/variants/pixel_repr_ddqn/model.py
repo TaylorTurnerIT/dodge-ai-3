@@ -10,6 +10,7 @@ comparison profile.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Final
 
 import torch
@@ -22,6 +23,10 @@ from .upstream import MLP, ARPredictor
 __all__ = [
     "IMAGE_MEAN",
     "IMAGE_STD",
+    "INPUT_ENCODING_LEGACY",
+    "INPUT_ENCODING_PALETTE_ONEHOT_NEAREST_SYMMETRIC",
+    "INPUT_ENCODING_RGB_NEAREST_SYMMETRIC",
+    "INPUT_ENCODINGS",
     "LeWMConfig",
     "LeWorldModel",
 ]
@@ -36,6 +41,18 @@ IMAGE_STD: Final[tuple[float, float, float]] = (
     0.224,
     0.225,
 )
+INPUT_ENCODING_LEGACY: Final[str] = "legacy"
+INPUT_ENCODING_RGB_NEAREST_SYMMETRIC: Final[str] = "rgb-nearest-symmetric"
+INPUT_ENCODING_PALETTE_ONEHOT_NEAREST_SYMMETRIC: Final[str] = (
+    "palette-onehot-nearest-symmetric"
+)
+INPUT_ENCODINGS: Final[tuple[str, ...]] = (
+    INPUT_ENCODING_LEGACY,
+    INPUT_ENCODING_RGB_NEAREST_SYMMETRIC,
+    INPUT_ENCODING_PALETTE_ONEHOT_NEAREST_SYMMETRIC,
+)
+_PALETTE_INPUT_ENCODING = INPUT_ENCODING_PALETTE_ONEHOT_NEAREST_SYMMETRIC
+_PALETTE_CHANNELS = 3
 
 
 @dataclass(frozen=True)
@@ -64,8 +81,48 @@ class LeWMConfig:
     sigreg_weight: float = 0.09
     sigreg_knots: int = 17
     sigreg_num_proj: int = 1024
+    input_encoding: str = INPUT_ENCODING_LEGACY
+    palette_rgb: tuple[tuple[int, int, int], ...] | None = None
 
     def __post_init__(self) -> None:
+        if self.input_encoding not in INPUT_ENCODINGS:
+            raise ValueError(
+                f"input_encoding must be one of {INPUT_ENCODINGS}, "
+                f"got {self.input_encoding!r}"
+            )
+        if self.palette_rgb is None:
+            canonical_palette = None
+        else:
+            if not isinstance(self.palette_rgb, (tuple, list)):
+                raise TypeError("palette_rgb must be a sequence of RGB triples")
+            canonical_colors: list[tuple[int, int, int]] = []
+            for color in self.palette_rgb:
+                if not isinstance(color, (tuple, list)) or len(color) != 3:
+                    raise ValueError("palette_rgb must contain RGB triples")
+                if any(
+                    isinstance(channel, bool) or not isinstance(channel, Integral)
+                    for channel in color
+                ):
+                    raise TypeError("palette_rgb channels must be integers")
+                values = tuple(int(channel) for channel in color)
+                if any(channel < 0 or channel > 255 for channel in values):
+                    raise ValueError("palette_rgb channels must be in [0, 255]")
+                canonical_colors.append(values)
+            canonical_palette = tuple(canonical_colors)
+            if tuple(sorted(canonical_palette)) != canonical_palette:
+                raise ValueError("palette_rgb must be sorted lexicographically")
+            if len(set(canonical_palette)) != len(canonical_palette):
+                raise ValueError("palette_rgb must contain unique colors")
+        if self.input_encoding == _PALETTE_INPUT_ENCODING:
+            if canonical_palette is None:
+                raise ValueError(
+                    "palette_rgb is required for palette-onehot-nearest-symmetric"
+                )
+            if len(canonical_palette) != _PALETTE_CHANNELS:
+                raise ValueError("palette-onehot-nearest-symmetric requires K=3")
+        elif canonical_palette is not None:
+            raise ValueError("palette_rgb is only valid for palette input encoding")
+        object.__setattr__(self, "palette_rgb", canonical_palette)
         positive_fields = (
             "image_size",
             "patch_size",
@@ -290,6 +347,8 @@ class LeWorldModel(nn.Module):
             raise ValueError(f"pixels must have three channels, got {pixels.shape[2]}")
         if pixels.shape[1] < 1 or pixels.shape[3] < 1 or pixels.shape[4] < 1:
             raise ValueError("pixels must have positive batch, time, and spatial sizes")
+        if self.config.input_encoding != INPUT_ENCODING_LEGACY:
+            return self._prepare_new_pixels(pixels)
         if pixels.dtype == torch.uint8:
             values = pixels.float() / 255.0
             needs_normalization = True
@@ -316,6 +375,87 @@ class LeWorldModel(nn.Module):
                 align_corners=False,
                 antialias=True,
             )
+        return frames.reshape(
+            pixels.shape[0],
+            pixels.shape[1],
+            3,
+            self.config.image_size,
+            self.config.image_size,
+        )
+
+    def _unit_pixels(self, pixels: torch.Tensor) -> torch.Tensor:
+        """Convert uint8 or normalized RGB input to float values in ``[0, 1]``."""
+
+        if pixels.dtype == torch.uint8:
+            return pixels.float().div(255.0)
+        if torch.is_floating_point(pixels):
+            values = pixels.float()
+            low = values.detach().amin().item()
+            high = values.detach().amax().item()
+            if low >= 0.0 and high <= 1.0:
+                return values
+            raise ValueError(
+                "floating pixels must be normalized RGB values in [0, 1]"
+            )
+        raise TypeError("pixels must be uint8 or floating point")
+
+    def _native_palette_pixels(self, pixels: torch.Tensor) -> torch.Tensor:
+        """Return exact native RGB bytes for palette lookup before resizing."""
+
+        if pixels.dtype == torch.uint8:
+            return pixels
+        values = self._unit_pixels(pixels)
+        scaled = values * 255.0
+        rounded = scaled.round()
+        if not bool(torch.allclose(scaled, rounded, rtol=0.0, atol=1e-5)):
+            raise ValueError(
+                "palette input requires exact native RGB values before resizing"
+            )
+        return rounded.to(dtype=torch.uint8)
+
+    def _palette_class_indices(self, pixels: torch.Tensor) -> torch.Tensor:
+        """Map native RGB pixels to the configured three palette classes."""
+
+        palette = torch.tensor(
+            self.config.palette_rgb,
+            device=pixels.device,
+            dtype=torch.uint8,
+        )
+        native = self._native_palette_pixels(pixels)
+        batch, time, _, height, width = native.shape
+        native = native.reshape(-1, 3, height, width)
+        matches = (
+            native.unsqueeze(1)
+            == palette.view(1, _PALETTE_CHANNELS, 3, 1, 1)
+        ).all(dim=2)
+        covered = matches.any(dim=1)
+        if not bool(torch.all(covered)):
+            raise ValueError("pixels contain an RGB color outside configured palette")
+        return matches.to(dtype=torch.int64).argmax(dim=1).reshape(
+            batch, time, height, width
+        )
+
+    def _prepare_new_pixels(self, pixels: torch.Tensor) -> torch.Tensor:
+        """Apply nearest resize and symmetric normalization for new input arms."""
+
+        if self.config.input_encoding == INPUT_ENCODING_RGB_NEAREST_SYMMETRIC:
+            frames = self._unit_pixels(pixels).reshape(
+                -1, 3, pixels.shape[-2], pixels.shape[-1]
+            )
+        else:
+            classes = self._palette_class_indices(pixels).reshape(
+                -1, pixels.shape[-2], pixels.shape[-1]
+            )
+            frames = F.one_hot(classes, num_classes=_PALETTE_CHANNELS).permute(
+                0, 3, 1, 2
+            ).to(dtype=torch.float32)
+        if frames.shape[-2:] != (self.config.image_size, self.config.image_size):
+            frames = F.interpolate(
+                frames,
+                size=(self.config.image_size, self.config.image_size),
+                mode="nearest",
+            )
+        frames = frames.mul(2.0).sub(1.0)
         return frames.reshape(
             pixels.shape[0],
             pixels.shape[1],

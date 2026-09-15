@@ -129,11 +129,11 @@ def _palette_condition_evidence(
         raise RuntimeError(f"{condition_id} palette provenance differs between heads")
     if any(not _has_train_only_input(payload) for payload in metadata):
         raise RuntimeError(f"{condition_id} does not declare train-only input")
-    expected_world = protocol["checkpoint_sha256"]
+    expected_checkpoint = protocol["checkpoint_sha256"]
     expected_data = protocol["data_hash"]
     if comparison.get("loss_kind") != loss_kind:
         raise RuntimeError(f"{condition_id} loss provenance mismatch")
-    if comparison.get("world_model_sha256") != expected_world:
+    if comparison.get("checkpoint_sha256") != expected_checkpoint:
         raise RuntimeError(f"{condition_id} checkpoint provenance mismatch")
     if comparison.get("data_sha256") != expected_data:
         raise RuntimeError(f"{condition_id} dataset provenance mismatch")
@@ -145,7 +145,7 @@ def _palette_condition_evidence(
         "palette_rgb": palette_rgb,
         "palette_sha256": palette_hash,
         "palette_source_split": "train",
-        "world_model_sha256": expected_world,
+        "checkpoint_sha256": expected_checkpoint,
         "data_sha256": expected_data,
         "frame_index_sha256": comparison.get("frame_index_sha256"),
         "milestones": comparison.get("milestones"),
@@ -177,8 +177,10 @@ def _write_palette_comparison(
     )
     data_hashes = {value.get("data_sha256") for value in evidence.values()}
     frame_hashes = {value.get("frame_index_sha256") for value in evidence.values()}
-    world_hashes = {value.get("world_model_sha256") for value in evidence.values()}
-    if data_hashes != {protocol["data_hash"]} or world_hashes != {
+    checkpoint_hashes = {
+        value.get("checkpoint_sha256") for value in evidence.values()
+    }
+    if data_hashes != {protocol["data_hash"]} or checkpoint_hashes != {
         protocol["checkpoint_sha256"]
     }:
         raise RuntimeError("CE/BCE frozen source provenance differs")

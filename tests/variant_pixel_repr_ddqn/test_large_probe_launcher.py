@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -11,6 +12,15 @@ import pytest
 def _script(name: str):
     path = Path(__file__).parents[2] / "variants/pixel-repr-ddqn/scripts" / name
     spec = importlib.util.spec_from_file_location(name.removesuffix(".py"), path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _large_probe_fixture() -> ModuleType:
+    path = Path(__file__).with_name("test_large_probe.py")
+    spec = importlib.util.spec_from_file_location("large_probe_test_fixture", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -155,7 +165,7 @@ def test_worker_palette_comparison_record_keeps_identity_and_frozen_hashes(
             "palette_rgb": [[0, 0, 0], [255, 255, 255]],
             "palette_sha256": palette_hash,
             "palette_source_split": "train",
-            "world_model_sha256": "c" * 64,
+            "checkpoint_sha256": "c" * 64,
             "data_sha256": "d" * 64,
             "frame_index_sha256": "f" * 64,
             "milestones": [512, 2048, 8192],
@@ -211,7 +221,7 @@ def test_worker_palette_condition_requires_provenance_on_each_head(
     comparison = {
         **common,
         "loss_kind": "palette-ce",
-        "world_model_sha256": "c" * 64,
+        "checkpoint_sha256": "c" * 64,
         "data_sha256": "d" * 64,
         "frame_index_sha256": "f" * 64,
         "milestones": [512, 2048, 8192],
@@ -222,9 +232,79 @@ def test_worker_palette_condition_requires_provenance_on_each_head(
         tmp_path, protocol, "screen", "palette-ce"
     )
     assert evidence["palette_sha256"] == palette_hash
+    assert evidence["checkpoint_sha256"] == "c" * 64
 
     broken = json.loads((history / "screen-ce-projected/config.json").read_text())
     broken.pop("palette_sha256")
     (history / "screen-ce-projected/config.json").write_text(json.dumps(broken))
     with pytest.raises(RuntimeError, match="incomplete"):
         worker._palette_condition_evidence(tmp_path, protocol, "screen", "palette-ce")
+
+
+def test_worker_accepts_real_run_study_comparison_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker reads checkpoint_sha256 from run_study's top comparison."""
+
+    from torch import nn
+
+    worker = _script("colab_large_probe_worker.py")
+    fixture = _large_probe_fixture()
+    large_probe = fixture.large_probe
+    bank, palette = fixture._fake_palette_frame_bank()
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"frozen-world-model")
+    checkpoint_hash = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    frozen = nn.Linear(1, 1)
+
+    monkeypatch.setattr(
+        large_probe.pretrain,
+        "load_model",
+        lambda path: (
+            frozen,
+            {
+                "inference_only": True,
+                "experiment": "practice-batch32-v1",
+                "step": 512,
+                "batch_size": 32,
+                "profile": "reference",
+                "calibration": {},
+                "data_hash": bank.data_hash,
+            },
+        ),
+    )
+    monkeypatch.setattr(large_probe, "_validate_protocol", lambda *_: "NVIDIA T4")
+    monkeypatch.setattr(large_probe, "_ensure_bank", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(large_probe, "open_frame_bank", lambda *_args, **_kwargs: bank)
+    real_make_pair = large_probe.make_decoder_pair
+
+    def make_palette_pair(*args: object, **kwargs: object):
+        return real_make_pair(
+            4,
+            decoder_factory=fixture._NativePaletteTinyDecoder,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(large_probe, "make_decoder_pair", make_palette_pair)
+    large_probe.run_study(
+        checkpoint,
+        tmp_path / "dataset",
+        tmp_path / "history",
+        "screen-ce",
+        milestones=(1, 2),
+        device="cpu",
+        bank_root=tmp_path / "bank",
+        loss_kind="palette-ce",
+    )
+
+    comparison = json.loads(
+        (tmp_path / "history" / "screen-ce-comparison.json").read_text()
+    )
+    assert comparison["checkpoint_sha256"] == checkpoint_hash
+    assert "world_model_sha256" not in comparison
+    protocol = {"checkpoint_sha256": checkpoint_hash, "data_hash": bank.data_hash}
+    evidence = worker._palette_condition_evidence(
+        tmp_path, protocol, "screen", "palette-ce"
+    )
+    assert evidence["checkpoint_sha256"] == checkpoint_hash
+    assert evidence["palette_rgb"] == palette.tolist()

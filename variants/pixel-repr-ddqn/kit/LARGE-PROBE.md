@@ -25,3 +25,21 @@ The bright-balanced follow-up completed at 8,192 updates per head. White-pixel e
 Only the diagnostic decoder trains. Sharp palette images can still put objects in the wrong place; image crispness alone does not qualify as improvement.
 
 The palette head is a local diagnostic experiment. It keeps the Appendix D query-decoder structure and vendored upstream feed-forward blocks, but replaces sigmoid RGB regression with color logits. The paper does not establish this palette loss; results must be judged as a Dodge adaptation.
+
+### Palette loss result and input experiment
+
+The completed `lewm-palette-probe-20260915-v1` comparison did not resolve moving detail. CE reduced global error relative to BCE, but changing cream recall stayed below 0.5%. Snapping the retained MSE outputs to the palette produced essentially the same changed-pixel errors. See the artifact report and both galleries under the run prefix.
+
+§Y tests the input representation with two fresh LeWM models. RGB and one-hot palette inputs each have three channels. Both new arms use nearest-neighbor resize and symmetric normalization, `2*x − 1`. Palette membership comes from training pixels; unknown colors fail. The old RGB preprocessing remains the default for existing checkpoints.
+
+World fitting uses the original prediction plus SIGReg objective, 1,024 updates per arm, batch 32, matched initial weights, windows, and stochastic draws. Then the worlds freeze. Two identical CE diagnostic decoders read raw CLS, each for 512/2,048/8,192 updates. No reconstruction gradients enter LeWM. This follows the paper's Appendix D separation between world training and visualization; palette inputs, categorical outputs, and native 128×128 diagnostics are local adaptations.
+
+Run only after full checks and a source freeze:
+
+```bash
+python3 variants/pixel-repr-ddqn/scripts/colab_input_study.py \
+  --dataset history/dodge/gymnasium/pixel-repr-ddqn/large-practice-20260914-v2 \
+  --run-id lewm-input-study-20260915-v1
+```
+
+The launcher retrieves the archive and leaves the session available for parent checkpoint verification. Release it after verifying all retained world and decoder checkpoints. Compare the two new arms directly: comparison with the older world checkpoint also changes training corpus, update budget, and preprocessing.
