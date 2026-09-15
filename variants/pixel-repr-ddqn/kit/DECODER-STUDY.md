@@ -33,3 +33,18 @@ All32 panel PNGs verified128×128; optimizer step256, sampler progression and ch
 ## User-directed continuation to 512
 
 User reports emerging detail and requests another iteration. Resume the saved query256 decoder for256 additional updates, reaching512 total. This supersedes the earlier stop decision for this extension; the original negative measurements remain unchanged. Reuse model, data, native128 target, optimizer state, sampler state and architecture. No code changes or new collection. Compare the same eight validation views and all56 validation windows before and after, with fixed mean/persistence controls. Retrieve artifacts, verify source/resume/world identity and release the T4 at512.
+
+## Continuation result
+
+Completed `lewm-decoder128-20260915-v1-query512` from the saved256 checkpoint, preserving AdamW and sampler state. Exactly256 additional updates;3.557s fitting on Tesla T4. All118 remote tests passed; implementation unchanged from the337-test local validation. Artifacts retrieved and T4 released.
+
+| Native128 validation metric |256 updates|512 updates|Change|
+|---|---:|---:|---:|
+| Current reconstruction MSE|0.00291185|0.00276618|−5.00%|
+| Current reconstruction on changing regions|0.13859245|0.13800573|−0.42%|
+| Next prediction MSE|0.00291038|0.00277741|−4.57%|
+| Next prediction on changing regions|0.14212736|0.14137371|−0.53%|
+
+Current reconstruction improves, but still loses to the fixed training mean by2.98% overall and0.034% on changing regions. Changed-current error improves in3/4 validation episodes; training changed-current error increases0.14%. Score reconstruction is visibly clearer; player/enemy shapes remain indistinct. Object tracking is unverified.
+
+Eight observed-frame/256/512 comparisons are saved in job `lewm-decoder128-20260915-v1-512/decoder-256-vs-512.png`; metrics and resume checks in `comparison.json`. Source archive SHA `c9ea5037366c559e37c76d74fcf228e0bf6fbc9ff20fcebdc3e66a4d7be98618`. World checkpoint, input frames, latent values and fixed baselines match; optimizer step512 and exact sampler progression verified. Both dashboard viewports pass with native128 square images. This bounded iteration ends at512.

@@ -1,4 +1,4 @@
-Latest result: [native-resolution query decoder screen](DECODER-STUDY.md), SPEC §O complete. Stopped at256: held-out reconstruction loses to the fixed training mean; player/enemies remain indistinct. No512 continuation; T4 released.
+Latest result: [native-resolution query decoder screen](DECODER-STUDY.md), SPEC §O continuation complete. Same decoder extended256→512: held-out reconstruction error5.00% lower, changing-region error0.42% lower; score clearer, object tracking unverified. Both checkpoints retained; T4 released.
 
 Latest iteration: [batch-size screen and pixel controls](BATCH-SCREEN.md), SPEC §L complete. Stronger training action conditioning;7.45% lower changed-region decoder error, but held-out dynamics remain near persistence and global reconstruction loses to a fixed mean image. Both128 and512 checkpoints retained.
 

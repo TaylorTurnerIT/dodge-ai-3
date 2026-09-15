@@ -371,6 +371,8 @@ O.result|One T4 query decoder256 updates completed;3.252s fitting,peak192290816B
 
 
 §O.continuation — user-directed decoder extension
-O4|active|diagnostic fitting|User sees emerging detail and explicitly requests continued iteration; resume existing query256 to512 total|O3|Same source/model/data/loss/batch;256 additional updates on one T4; saved optimizer/sampler; no world-model updates
-O5|unopened|evaluation|Compare identical eight views and all56 validation windows at256/512|O4|Native128 metrics and fixed mean/persistence controls; verify resume identity and unchanged world state; report measured gain separately from recognizable detail
+O4|complete|diagnostic fitting|User sees emerging detail and explicitly requests continued iteration; resume existing query256 to512 total|O3|Same source/model/data/loss/batch;256 additional updates on one T4; saved optimizer/sampler; no world-model updates
+O5|complete|evaluation|Compare identical eight views and all56 validation windows at256/512|O4|Native128 metrics and fixed mean/persistence controls; verify resume identity and unchanged world state; report measured gain separately from recognizable detail
 O.authorization|User continuation supersedes earlier stop decision for this bounded extension. Original O3 negative result retained; no claim that original gate passed. Stop at512 total, evaluate, release T4.
+
+O.continuation.result|Query256→512 same weights/AdamW/sampler;256 new updates,3.557s fitting,T4 peak192290816B.118 remote tests pass; implementation identical81251c5 (prior337 local tests). Validation current error−5.00%,changed-current−0.42%,next−4.57%,changed-next−0.53% vs256. Changed-current improves3/4 validation episodes. Current reconstruction still+2.98% vsfixedmean;changed-current+0.034%. Score clearer; distinct player/enemy tracking unverified. World/checkpoint unchanged; source/resume/optimizer512/sampler/pairedviews verified. Native128 dashboard passes both viewports; artifacts retrieved,T4 released. Source8f9ee8c,archivec9ea5037366c559e37c76d74fcf228e0bf6fbc9ff20fcebdc3e66a4d7be98618. No controller promotion; stop512.
