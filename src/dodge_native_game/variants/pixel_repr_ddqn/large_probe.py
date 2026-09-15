@@ -36,6 +36,7 @@ __all__ = [
     "FitResult",
     "FrameBank",
     "MatchedSnapshot",
+    "balanced_bright_loss",
     "evaluate_decoder_stream",
     "fit_matched_decoders",
     "make_decoder_pair",
@@ -56,6 +57,10 @@ _DECODER_BATCH_SIZE = 32
 _EVAL_BATCH_SIZE = 64
 _DECODER_LR = 1e-3
 _DECODER_WEIGHT_DECAY = 0.01
+_BRIGHT_THRESHOLD = 0.8
+_LOSS_NORMALIZATION = "per-frame-then-batch"
+_MSE_NORMALIZATION = "global-pixel-mean"
+_BALANCED_BRIGHT_EXPERIMENT = "large-current-frame-decoder-balanced-bright-v1"
 _TRAIN_FRAMES = 16_384
 _VALIDATION_FRAMES = 2_048
 
@@ -112,6 +117,48 @@ def _digest(value: object) -> str:
     return hashlib.sha256(
         value if isinstance(value, bytes) else _canonical(value)
     ).hexdigest()
+
+
+def _validate_loss_kind(loss_kind: str) -> str:
+    if loss_kind not in {"mse", "balanced-bright"}:
+        raise ValueError("loss_kind must be 'mse' or 'balanced-bright'")
+    return loss_kind
+
+
+def _loss_normalization(loss_kind: str) -> str:
+    return _LOSS_NORMALIZATION if loss_kind == "balanced-bright" else _MSE_NORMALIZATION
+
+
+def _bright_mask(
+    target: torch.Tensor, threshold: float = _BRIGHT_THRESHOLD
+) -> torch.Tensor:
+    if target.ndim != 4 or target.shape[1] != 3:
+        raise ValueError("target must have shape (batch, 3, height, width)")
+    return target.amin(dim=1) >= threshold
+
+
+def balanced_bright_loss(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    threshold: float = _BRIGHT_THRESHOLD,
+) -> torch.Tensor:
+    """Weight target-bright and target-background pixel classes equally."""
+
+    if prediction.shape != target.shape:
+        raise ValueError("prediction and target shapes must match")
+    bright = _bright_mask(target, threshold)
+    per_pixel = (prediction - target).square().mean(dim=1)
+    bright_count = bright.flatten(1).sum(dim=1)
+    background_count = (~bright).flatten(1).sum(dim=1)
+    bright_mean = (per_pixel * bright).flatten(1).sum(dim=1) / bright_count.clamp_min(1)
+    background_mean = (per_pixel * ~bright).flatten(1).sum(
+        dim=1
+    ) / background_count.clamp_min(1)
+    both = (bright_count > 0) & (background_count > 0)
+    available = torch.where(bright_count > 0, bright_mean, background_mean)
+    per_frame = torch.where(both, 0.5 * bright_mean + 0.5 * background_mean, available)
+    return per_frame.mean()
 
 
 class _Concat:
@@ -336,12 +383,14 @@ def fit_matched_decoders(
     *,
     milestones: Sequence[int] = (512, 2048, 8192),
     batch_size: int = _DECODER_BATCH_SIZE,
+    loss_kind: str = "mse",
     sampler: torch.Generator | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
     on_milestone: Callable[[MatchedSnapshot, nn.Module, nn.Module], None] | None = None,
 ) -> FitResult:
     """Fit both heads with one shared sampling stream and milestone callback."""
 
+    loss_kind = _validate_loss_kind(loss_kind)
     schedule = tuple(int(value) for value in milestones)
     if not schedule or tuple(sorted(set(schedule))) != schedule or schedule[0] < 1:
         raise ValueError("milestones must be increasing positive integers")
@@ -389,7 +438,11 @@ def fit_matched_decoders(
                     .div(255.0)
                 )
                 prediction = _pixels(decoder(latent), tuple(target.shape))
-                loss = F.mse_loss(prediction, target)
+                loss = (
+                    F.mse_loss(prediction, target)
+                    if loss_kind == "mse"
+                    else balanced_bright_loss(prediction, target)
+                )
                 if not torch.isfinite(loss):
                     raise RuntimeError("nonfinite decoder loss")
                 optimizer.zero_grad(set_to_none=True)
@@ -400,6 +453,10 @@ def fit_matched_decoders(
                 "step": step,
                 "cls_loss": losses["cls"],
                 "projected_loss": losses["projected"],
+                "loss_kind": loss_kind,
+                "bright_threshold": _BRIGHT_THRESHOLD,
+                "equal_class_weights": loss_kind == "balanced-bright",
+                "loss_normalization": _loss_normalization(loss_kind),
                 "updates_per_second": step / max(time.monotonic() - began, 1e-9),
                 "indices": sampled_indices,
             }
@@ -498,9 +555,21 @@ def _stats(
     channels: int = 3,
     height: int = _OUTPUT_SIZE,
     width: int = _OUTPUT_SIZE,
+    bright_error: float = 0.0,
+    background_error: float = 0.0,
+    bright_baseline: float = 0.0,
+    background_baseline: float = 0.0,
+    target_bright: int = 0,
+    predicted_bright: int = 0,
+    bright_true_positive: int = 0,
+    changed_bright_error: float = 0.0,
+    changed_bright: int = 0,
 ) -> dict[str, Any]:
     denominator = rows * channels * height * width
     changed_denominator = changed * channels
+    pixels = rows * height * width
+    background = pixels - target_bright
+    union = target_bright + predicted_bright - bright_true_positive
     return {
         "frame_count": rows,
         "mse": error / denominator if denominator else None,
@@ -511,6 +580,55 @@ def _stats(
             changed_baseline / changed_denominator if changed else None
         ),
         "changed_pixel_fraction": changed / (rows * height * width) if rows else 0.0,
+        "bright_threshold": _BRIGHT_THRESHOLD,
+        "bright_mse": bright_error / target_bright if target_bright else None,
+        "background_mse": (background_error / background if background else None),
+        "bright_training_mean_mse": (
+            bright_baseline / target_bright if target_bright else None
+        ),
+        "background_training_mean_mse": (
+            background_baseline / background if background else None
+        ),
+        "training_mean_bright_mse": (
+            bright_baseline / target_bright if target_bright else None
+        ),
+        "training_mean_background_mse": (
+            background_baseline / background if background else None
+        ),
+        "target_bright_share": target_bright / pixels if pixels else 0.0,
+        "predicted_bright_share": predicted_bright / pixels if pixels else 0.0,
+        "bright_precision": (
+            bright_true_positive / predicted_bright if predicted_bright else None
+        ),
+        "bright_recall": (
+            bright_true_positive / target_bright if target_bright else None
+        ),
+        "bright_iou": bright_true_positive / union if union else None,
+        "changed_bright_count": changed_bright,
+        "changed_bright_mse": (
+            changed_bright_error / changed_bright if changed_bright else None
+        ),
+    }
+
+
+def _bright_numpy_metrics(
+    predicted: np.ndarray,
+    target: np.ndarray,
+    baseline: np.ndarray,
+) -> dict[str, float | int]:
+    target_mask = np.min(target, axis=1) >= _BRIGHT_THRESHOLD
+    predicted_mask = np.min(predicted, axis=1) >= _BRIGHT_THRESHOLD
+    error = np.square(predicted - target).mean(axis=1)
+    baseline_error = np.square(baseline - target).mean(axis=1)
+    true_positive = target_mask & predicted_mask
+    return {
+        "bright_error": float(error[target_mask].sum()),
+        "background_error": float(error[~target_mask].sum()),
+        "bright_baseline": float(baseline_error[target_mask].sum()),
+        "background_baseline": float(baseline_error[~target_mask].sum()),
+        "target_bright": int(target_mask.sum()),
+        "predicted_bright": int(predicted_mask.sum()),
+        "bright_true_positive": int(true_positive.sum()),
     }
 
 
@@ -548,6 +666,11 @@ def evaluate_decoder_stream(
                 wanted = _fixed_examples(records, range(start, stop))
                 examples: dict[int, dict[str, Any]] = {}
                 total = baseline = changed_total = changed_baseline = 0.0
+                bright_error = background_error = 0.0
+                bright_baseline = background_baseline = 0.0
+                target_bright = predicted_bright = bright_true_positive = 0
+                changed_bright_error = 0.0
+                changed_bright_count = 0
                 rows = changed_count = 0
                 for cursor in range(start, stop, batch_size):
                     end = min(cursor + batch_size, stop)
@@ -571,16 +694,45 @@ def evaluate_decoder_stream(
                     mask = np.asarray(changed_masks[positions], dtype=bool)  # type: ignore[index]
                     error = np.square(predicted - target)
                     baseline_error = np.square(mean - target)
+                    bright = _bright_numpy_metrics(predicted, target, mean)
+                    bright_error += float(bright["bright_error"])
+                    background_error += float(bright["background_error"])
+                    bright_baseline += float(bright["bright_baseline"])
+                    background_baseline += float(bright["background_baseline"])
+                    target_bright += int(bright["target_bright"])
+                    predicted_bright += int(bright["predicted_bright"])
+                    bright_true_positive += int(bright["bright_true_positive"])
                     total += float(error.sum())
                     baseline += float(baseline_error.sum())
                     rows += len(positions)
                     changed_count += int(mask.sum())
                     changed_total += float((error * mask[:, None]).sum())
                     changed_baseline += float((baseline_error * mask[:, None]).sum())
+                    target_bright_mask = np.min(target, axis=1) >= _BRIGHT_THRESHOLD
+                    changed_bright_mask = mask & target_bright_mask
+                    changed_bright_count += int(changed_bright_mask.sum())
+                    changed_bright_error += float(
+                        error.mean(axis=1)[changed_bright_mask].sum()
+                    )
                     for local_index, global_index in enumerate(positions.tolist()):
                         if global_index not in wanted:
                             continue
                         changed_one = mask[local_index]
+                        changed_bright_one = (
+                            changed_one & target_bright_mask[local_index]
+                        )
+                        one_bright = _bright_numpy_metrics(
+                            predicted[local_index : local_index + 1],
+                            target[local_index : local_index + 1],
+                            mean[local_index : local_index + 1],
+                        )
+                        one_pixels = target.shape[2] * target.shape[3]
+                        one_background = one_pixels - int(one_bright["target_bright"])
+                        one_union = (
+                            int(one_bright["target_bright"])
+                            + int(one_bright["predicted_bright"])
+                            - int(one_bright["bright_true_positive"])
+                        )
                         examples[global_index] = {
                             "index": global_index,
                             "split": split,
@@ -591,7 +743,63 @@ def evaluate_decoder_stream(
                             "training_mean_mse": float(
                                 baseline_error[local_index].mean()
                             ),
+                            "bright_mse": (
+                                float(one_bright["bright_error"])
+                                / int(one_bright["target_bright"])
+                                if one_bright["target_bright"]
+                                else None
+                            ),
+                            "background_mse": (
+                                float(one_bright["background_error"]) / one_background
+                                if one_background
+                                else None
+                            ),
+                            "bright_training_mean_mse": (
+                                float(one_bright["bright_baseline"])
+                                / int(one_bright["target_bright"])
+                                if one_bright["target_bright"]
+                                else None
+                            ),
+                            "background_training_mean_mse": (
+                                float(one_bright["background_baseline"])
+                                / one_background
+                                if one_background
+                                else None
+                            ),
+                            "target_bright_share": int(one_bright["target_bright"])
+                            / one_pixels,
+                            "predicted_bright_share": int(
+                                one_bright["predicted_bright"]
+                            )
+                            / one_pixels,
+                            "bright_precision": (
+                                int(one_bright["bright_true_positive"])
+                                / int(one_bright["predicted_bright"])
+                                if one_bright["predicted_bright"]
+                                else None
+                            ),
+                            "bright_recall": (
+                                int(one_bright["bright_true_positive"])
+                                / int(one_bright["target_bright"])
+                                if one_bright["target_bright"]
+                                else None
+                            ),
+                            "bright_iou": (
+                                int(one_bright["bright_true_positive"]) / one_union
+                                if one_union
+                                else None
+                            ),
                             "changed_pixel_count": int(changed_one.sum()),
+                            "changed_bright_count": int(changed_bright_one.sum()),
+                            "changed_bright_mse": (
+                                float(
+                                    error[local_index]
+                                    .mean(axis=0)[changed_bright_one]
+                                    .mean()
+                                )
+                                if bool(changed_bright_one.any())
+                                else None
+                            ),
                             "changed_region_mse": (
                                 float(error[local_index][:, changed_one].mean())
                                 if bool(changed_one.any())
@@ -618,6 +826,15 @@ def evaluate_decoder_stream(
                     channels=int(target.shape[1]),
                     height=int(target.shape[2]),
                     width=int(target.shape[3]),
+                    bright_error=bright_error,
+                    background_error=background_error,
+                    bright_baseline=bright_baseline,
+                    background_baseline=background_baseline,
+                    target_bright=target_bright,
+                    predicted_bright=predicted_bright,
+                    bright_true_positive=bright_true_positive,
+                    changed_bright_error=changed_bright_error,
+                    changed_bright=changed_bright_count,
                 )
                 result["examples"].extend(
                     examples[index] for index in wanted if index in examples
@@ -674,6 +891,7 @@ def _save_decoder_checkpoint(
     data_hash: str,
     frame_index_hash: str,
     final_step: int,
+    loss_kind: str,
 ) -> Path:
     path = run / f"decoder-{snapshot.step}.pt"
     pretrain.save_checkpoint(
@@ -690,6 +908,16 @@ def _save_decoder_checkpoint(
             "latent_dim": _LATENT_DIM,
             "decoder_seed": _INIT_SEED,
             "sampling_seed": _SAMPLING_SEED,
+            "experiment": (
+                _BALANCED_BRIGHT_EXPERIMENT
+                if loss_kind == "balanced-bright"
+                else _EXPERIMENT
+            ),
+            "loss_kind": loss_kind,
+            "bright_threshold": _BRIGHT_THRESHOLD,
+            "equal_class_weights": loss_kind == "balanced-bright",
+            "loss_class_weights": {"bright": 0.5, "background": 0.5},
+            "loss_normalization": _loss_normalization(loss_kind),
             "world_model_sha256": world_hash,
             "data_sha256": data_hash,
             "frame_index_sha256": frame_index_hash,
@@ -833,9 +1061,11 @@ def run_study(
     batch_size: int = _DECODER_BATCH_SIZE,
     device: str = "cuda",
     bank_root: Path | None = None,
+    loss_kind: str = "mse",
 ) -> list[Path]:
     """Run matched native-resolution CLS and projected decoder fits."""
 
+    loss_kind = _validate_loss_kind(loss_kind)
     schedule = tuple(int(value) for value in milestones)
     if not schedule or tuple(sorted(set(schedule))) != schedule or schedule[0] < 1:
         raise ValueError("milestones must be increasing positive integers")
@@ -866,9 +1096,12 @@ def run_study(
         Path(dataset_root), shared_bank, checkpoint_sha256=checkpoint_sha256
     )
     history = Path(history_root)
+    experiment = (
+        _BALANCED_BRIGHT_EXPERIMENT if loss_kind == "balanced-bright" else _EXPERIMENT
+    )
     common = {
         "variant": "pixel-repr-ddqn",
-        "experiment": _EXPERIMENT,
+        "experiment": experiment,
         "profile": "reference",
         "model_label": "Frozen LeWM current-frame decoder diagnostic",
         "current_frame_only": True,
@@ -886,6 +1119,11 @@ def run_study(
         "milestones": list(schedule),
         "decoder_init_seed": _INIT_SEED,
         "sampling_seed": _SAMPLING_SEED,
+        "loss_kind": loss_kind,
+        "bright_threshold": _BRIGHT_THRESHOLD,
+        "equal_class_weights": loss_kind == "balanced-bright",
+        "loss_class_weights": {"bright": 0.5, "background": 0.5},
+        "loss_normalization": _loss_normalization(loss_kind),
         "optimizer": {
             "name": "AdamW",
             "lr": _DECODER_LR,
@@ -976,6 +1214,7 @@ def run_study(
                     data_hash=bank.data_hash,
                     frame_index_hash=bank.frame_index_hash,
                     final_step=schedule[-1],
+                    loss_kind=loss_kind,
                 )
                 normal = evaluate_decoder_stream(
                     decoder,
@@ -1008,6 +1247,10 @@ def run_study(
                 clean = {
                     "step": snapshot.step,
                     "representation": mode,
+                    "loss_kind": loss_kind,
+                    "bright_threshold": _BRIGHT_THRESHOLD,
+                    "equal_class_weights": loss_kind == "balanced-bright",
+                    "loss_normalization": _loss_normalization(loss_kind),
                     "world_model_sha256": checkpoint_sha256,
                     "data_sha256": bank.data_hash,
                     "frame_index_sha256": bank.frame_index_hash,
@@ -1036,6 +1279,9 @@ def run_study(
                         "step": snapshot.step,
                         "representation": mode,
                         "loss": None,
+                        "loss_kind": loss_kind,
+                        "bright_threshold": _BRIGHT_THRESHOLD,
+                        "loss_normalization": _loss_normalization(loss_kind),
                         "train_mse": train_stats["mse"],
                         "validation_mse": validation_stats["mse"],
                         "validation_changed_mse": validation_stats[
@@ -1049,6 +1295,31 @@ def run_study(
                         ],
                         "validation_changed_trainmean_mse": validation_stats[
                             "changed_region_training_mean_mse"
+                        ],
+                        "validation_bright_mse": validation_stats["bright_mse"],
+                        "validation_background_mse": validation_stats["background_mse"],
+                        "validation_bright_training_mean_mse": validation_stats[
+                            "bright_training_mean_mse"
+                        ],
+                        "validation_background_training_mean_mse": validation_stats[
+                            "background_training_mean_mse"
+                        ],
+                        "validation_target_bright_share": validation_stats[
+                            "target_bright_share"
+                        ],
+                        "validation_predicted_bright_share": validation_stats[
+                            "predicted_bright_share"
+                        ],
+                        "validation_bright_precision": validation_stats[
+                            "bright_precision"
+                        ],
+                        "validation_bright_recall": validation_stats["bright_recall"],
+                        "validation_bright_iou": validation_stats["bright_iou"],
+                        "validation_changed_bright_mse": validation_stats[
+                            "changed_bright_mse"
+                        ],
+                        "validation_changed_bright_count": validation_stats[
+                            "changed_bright_count"
                         ],
                         "phase": "frozen current-frame decoder evaluation",
                     },
@@ -1071,6 +1342,7 @@ def run_study(
             bank.train.pixels,
             milestones=schedule,
             batch_size=batch_size,
+            loss_kind=loss_kind,
             sampler=sampler,
             on_step=on_step,
             on_milestone=on_milestone,
@@ -1083,6 +1355,10 @@ def run_study(
                     "quality_gate": "inference-only diagnostic",
                     "diagnostic_only": True,
                     "representation": mode,
+                    "loss_kind": loss_kind,
+                    "bright_threshold": _BRIGHT_THRESHOLD,
+                    "equal_class_weights": loss_kind == "balanced-bright",
+                    "loss_normalization": _loss_normalization(loss_kind),
                     "world_model_sha256": checkpoint_sha256,
                     "data_sha256": bank.data_hash,
                     "frame_index_sha256": bank.frame_index_hash,
@@ -1101,9 +1377,13 @@ def run_study(
             history / f"{run_id}-comparison.json",
             {
                 "variant": "pixel-repr-ddqn",
-                "experiment": _EXPERIMENT,
+                "experiment": experiment,
                 "run_id": run_id,
                 "diagnostic_only": True,
+                "loss_kind": loss_kind,
+                "bright_threshold": _BRIGHT_THRESHOLD,
+                "equal_class_weights": loss_kind == "balanced-bright",
+                "loss_normalization": _loss_normalization(loss_kind),
                 "checkpoint_sha256": checkpoint_sha256,
                 "data_sha256": bank.data_hash,
                 "frame_index_sha256": bank.frame_index_hash,

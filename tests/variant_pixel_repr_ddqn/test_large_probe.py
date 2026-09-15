@@ -12,6 +12,7 @@ from torch import nn
 from dodge_native_game.variants.pixel_repr_ddqn import large_probe
 from dodge_native_game.variants.pixel_repr_ddqn.large_probe import (
     FrameBank,
+    balanced_bright_loss,
     evaluate_decoder_stream,
     fit_matched_decoders,
     make_decoder_pair,
@@ -119,6 +120,112 @@ def test_matched_fit_uses_identical_initialization_and_sampling() -> None:
     assert result.snapshots[3].optimizer["cls"]["state"]
 
 
+def test_balanced_bright_is_per_frame_and_weights_gradients_by_class() -> None:
+    target = torch.zeros(2, 3, 1, 4)
+    target[0, :, 0, 0] = 1.0
+    target[1, :, 0, :3] = 1.0
+    prediction = target.clone()
+    prediction[0, :, 0, 0] = 0.0
+
+    loss = balanced_bright_loss(prediction, target)
+
+    # The first frame misses one bright pixel and the second is exact. Per-frame
+    # balancing gives 0.25; pooling its four bright pixels would give 0.125.
+    assert loss.item() == pytest.approx(0.25)
+
+    gradient_target = torch.zeros(2, 3, 1, 2)
+    gradient_target[:, :, 0, 0] = 1.0
+    gradient_prediction = gradient_target.clone()
+    gradient_prediction[0, :, 0, 0] = 0.0
+    gradient_prediction[1, :, 0, 1] = 1.0
+    gradient_prediction.requires_grad_()
+    balanced_bright_loss(gradient_prediction, gradient_target).backward()
+    pixel_gradient = gradient_prediction.grad.abs().sum(dim=1)
+    bright_gradient = pixel_gradient[gradient_target.amin(dim=1) >= 0.8].sum()
+    background_gradient = pixel_gradient[gradient_target.amin(dim=1) < 0.8].sum()
+    assert bright_gradient == pytest.approx(background_gradient)
+
+
+@pytest.mark.parametrize("bright", [True, False])
+def test_balanced_bright_empty_class_is_finite_and_differentiable(
+    bright: bool,
+) -> None:
+    target = torch.ones(2, 3, 2, 2) if bright else torch.zeros(2, 3, 2, 2)
+    prediction = torch.zeros_like(target, requires_grad=True)
+
+    loss = balanced_bright_loss(prediction, target)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert prediction.grad is not None
+    assert torch.isfinite(prediction.grad).all()
+
+
+def test_balanced_bright_uses_target_mask_for_false_white_background() -> None:
+    target = torch.tensor([[[[0.0]], [[0.0]], [[1.0]]]])
+    prediction = torch.ones_like(target, requires_grad=True)
+
+    loss = balanced_bright_loss(prediction, target)
+    loss.backward()
+
+    assert loss.item() == pytest.approx(2.0 / 3.0)
+    assert prediction.grad is not None
+    assert torch.isfinite(prediction.grad).all()
+    assert prediction.grad.abs().sum() > 0
+
+
+def test_explicit_mse_matches_default_fit_exactly() -> None:
+    features = torch.randn(8, 4, generator=torch.Generator().manual_seed(11))
+    targets = torch.randint(
+        0,
+        256,
+        (8, 3, 4, 4),
+        generator=torch.Generator().manual_seed(12),
+        dtype=torch.uint8,
+    )
+    default_cls, default_projected = make_decoder_pair(4, decoder_factory=_TinyDecoder)
+    explicit_cls, explicit_projected = make_decoder_pair(
+        4, decoder_factory=_TinyDecoder
+    )
+    default = fit_matched_decoders(
+        default_cls,
+        default_projected,
+        features,
+        features,
+        targets,
+        milestones=(2,),
+        batch_size=4,
+        sampler=torch.Generator().manual_seed(903),
+    )
+    explicit = fit_matched_decoders(
+        explicit_cls,
+        explicit_projected,
+        features,
+        features,
+        targets,
+        milestones=(2,),
+        batch_size=4,
+        loss_kind="mse",
+        sampler=torch.Generator().manual_seed(903),
+    )
+    for left, right in zip(
+        default_cls.state_dict().values(),
+        explicit_cls.state_dict().values(),
+        strict=True,
+    ):
+        torch.testing.assert_close(left, right, rtol=0, atol=0)
+    for left, right in zip(
+        default_projected.state_dict().values(),
+        explicit_projected.state_dict().values(),
+        strict=True,
+    ):
+        torch.testing.assert_close(left, right, rtol=0, atol=0)
+    for default_metric, explicit_metric in zip(
+        default.metrics, explicit.metrics, strict=True
+    ):
+        assert default_metric["cls_loss"] == explicit_metric["cls_loss"]
+        assert default_metric["projected_loss"] == explicit_metric["projected_loss"]
+
+
 def test_train_mean_streams_normalized_rows_and_evaluation_uses_bank_masks() -> None:
     pixels = np.zeros((16, 3, 4, 4), dtype=np.uint8)
     pixels[:8] = np.arange(8, dtype=np.uint8)[:, None, None, None]
@@ -145,6 +252,9 @@ def test_train_mean_streams_normalized_rows_and_evaluation_uses_bank_masks() -> 
     assert result["splits"]["train"]["changed_region_mse"] is None
     assert result["splits"]["validation"]["changed_pixel_count"] == 1
     assert result["splits"]["validation"]["changed_region_mse"] == pytest.approx(0.0)
+    assert result["splits"]["train"]["bright_mse"] is None
+    assert result["splits"]["train"]["target_bright_share"] == 0.0
+    assert result["splits"]["validation"]["changed_bright_count"] == 0
 
     wrong = evaluate_decoder_stream(
         identity,
@@ -160,6 +270,37 @@ def test_train_mean_streams_normalized_rows_and_evaluation_uses_bank_masks() -> 
     )
     first = next(item for item in wrong["examples"] if item["index"] == 0)
     np.testing.assert_allclose(first["reconstructed"], pixels[4] / 255.0)
+
+
+def test_evaluation_reports_bright_and_changed_bright_metrics() -> None:
+    pixels = np.zeros((4, 3, 4, 4), dtype=np.uint8)
+    pixels[:, 2] = 255  # blue background is target-background, not bright
+    pixels[:, :, 0, 0] = 255  # one white target pixel per frame
+    changed = np.zeros((4, 4, 4), dtype=bool)
+    changed[:, 0, 0] = True
+    features = np.ones((4, 3 * 4 * 4), dtype=np.float32)
+    records = _records(2, "train") + _records(2, "validation", offset=2)
+
+    result = evaluate_decoder_stream(
+        _IdentityDecoder(),
+        features,
+        pixels,
+        changed,
+        records,
+        {"train": (0, 2), "validation": (2, 4)},
+        np.zeros((3, 4, 4), dtype=np.float32),
+        device="cpu",
+        batch_size=3,
+    )
+    train = result["splits"]["train"]
+    assert train["target_bright_share"] == pytest.approx(1 / 16)
+    assert train["predicted_bright_share"] == 1.0
+    assert train["bright_precision"] == pytest.approx(1 / 16)
+    assert train["bright_recall"] == pytest.approx(1.0)
+    assert train["bright_iou"] == pytest.approx(1 / 16)
+    assert train["changed_bright_count"] == 2
+    assert train["changed_bright_mse"] == pytest.approx(0.0)
+    assert train["background_mse"] == pytest.approx(2 / 3)
 
 
 def _fake_frame_bank(train_rows: int = 32, validation_rows: int = 16) -> FrameBank:
@@ -211,8 +352,23 @@ def _fake_frame_bank(train_rows: int = 32, validation_rows: int = 16) -> FrameBa
     )
 
 
+@pytest.mark.parametrize(
+    ("loss_kind", "expected_experiment", "equal_class_weights"),
+    [
+        ("mse", large_probe._EXPERIMENT, False),
+        (
+            "balanced-bright",
+            large_probe._BALANCED_BRIGHT_EXPERIMENT,
+            True,
+        ),
+    ],
+)
 def test_run_study_fits_train_rows_and_publishes_each_milestone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loss_kind: str,
+    expected_experiment: str,
+    equal_class_weights: bool,
 ) -> None:
     bank = _fake_frame_bank()
     checkpoint = tmp_path / "checkpoint.pt"
@@ -267,6 +423,7 @@ def test_run_study_fits_train_rows_and_publishes_each_milestone(
         milestones=(1, 2),
         device="cpu",
         bank_root=tmp_path / "bank",
+        loss_kind=loss_kind,
     )
 
     assert {path.name for path in runs} == {
@@ -286,6 +443,22 @@ def test_run_study_fits_train_rows_and_publishes_each_milestone(
     for run in runs:
         assert (run / "decoder-1.pt").is_file()
         assert (run / "decoder-2.pt").is_file()
+        manifest = json.loads((run / "manifest.json").read_text())
+        config = json.loads((run / "config.json").read_text())
+        decoder_checkpoint = torch.load(
+            run / "decoder-2.pt", map_location="cpu", weights_only=True
+        )
+        for metadata in (manifest, config, decoder_checkpoint):
+            assert metadata["bright_threshold"] == pytest.approx(0.8)
+            assert metadata["loss_kind"] == loss_kind
+            assert metadata["equal_class_weights"] is equal_class_weights
+            assert metadata["loss_normalization"] == (
+                "per-frame-then-batch"
+                if loss_kind == "balanced-bright"
+                else "global-pixel-mean"
+            )
+            assert metadata["experiment"] == expected_experiment
+        assert manifest["experiment"] == expected_experiment
         visualizations = json.loads((run / "visualizations.json").read_text())
         assert len(visualizations) == 16
         assert all(view["metadata"]["current_frame_only"] for view in visualizations)
