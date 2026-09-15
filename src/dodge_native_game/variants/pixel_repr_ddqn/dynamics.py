@@ -13,6 +13,7 @@ __all__ = [
     "AUDIT_FRACTIONS",
     "audit_action_conditioning",
     "evaluate_dynamics",
+    "iter_plan_windows",
     "plan_audit_windows",
 ]
 
@@ -149,6 +150,36 @@ def plan_audit_windows(
     if not plan:
         raise ValueError("no episode can supply a window of the requested history")
     return tuple(plan)
+
+
+def iter_plan_windows(
+    dataset: Any,
+    records: Sequence[Any],
+    plan: Sequence[tuple[int, int]],
+    *,
+    history_size: int,
+) -> Any:
+    """Yield window mappings with episode provenance for a planned audit."""
+
+    if isinstance(history_size, bool) or not isinstance(history_size, int):
+        raise TypeError("history_size must be an integer")
+    if history_size < 1:
+        raise ValueError("history_size must be positive")
+    records = list(records)
+    plan = list(plan)
+    if not plan:
+        raise ValueError("plan must not be empty")
+    prefix = [0]
+    for record in records:
+        prefix.append(prefix[-1] + max(0, int(record.count) - history_size + 1))
+    for episode_index, start in plan:
+        sample = dataset[prefix[episode_index] + start]
+        yield {
+            "pixels": sample["pixels"],
+            "actions": sample["actions"],
+            "episode_id": records[episode_index].episode_id,
+            "start": start,
+        }
 
 
 def _audit_window(
