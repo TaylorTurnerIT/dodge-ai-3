@@ -111,3 +111,22 @@ predicted ≈ persistence ≈ wrong-latent ordering supports H2.
   keep their checksums (the local `visualizations.json` regen is a
   presentation transform of retrieved PNGs, round-trip exact, audit files
   untouched — see SPEC B67).
+
+## Corrections after external review (2026-09-15, recorded as SPEC §AC)
+
+- The claim "the predicted latent carries no forecast-specific detail" is
+  stronger than §AB supports. Similar decoder scores across the predicted,
+  persistence, and wrong-latent conditions do not imply the latents contain
+  the same information — a decoder producing a location-dependent average
+  can score similarly on very different inputs. Supported reading: the
+  fitted decoder "has not demonstrated a robust forecast-specific advantage
+  over the controls under this protocol."
+- "Cream recall" and the 0.0 background recall are changed-region-only
+  statistics (see `_palette_metrics`), not global rates. Zero background
+  recall means the head missed background on changed pixels, not that it
+  never predicts background anywhere. The copy baseline's 100%
+  changed-region error and 0% recalls hold by construction.
+- Protocol numbers, artifacts, and provenance are unchanged; only the
+  interpretation above is corrected. The review's recommended sequence
+  (frozen dynamics audit → actual-next-latent decoder → §AA as compression
+  screen → one scoped world-model change) is recorded in SPEC §AC.
