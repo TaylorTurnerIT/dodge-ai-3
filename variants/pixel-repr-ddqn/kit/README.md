@@ -1,3 +1,5 @@
+Current experiment: [predicted next-frame decode](FUTURE.md), SPEC §AB. Frozen palette world; teacher-forced one-step prediction decoded by a fresh broadcast readout with balanced-bright MSE.
+
 Current experiment: [pooling follow-up](POOLING.md), SPEC §AA. Frozen spatial features; matched mean, max, learned attention, and coarse spatial pooling.
 
 Current experiment: [spatial readout diagnosis](SPATIAL-READOUT.md), SPEC §Z. Matched local-token, CLS, and direct-pixel controls on the frozen §Y palette model.

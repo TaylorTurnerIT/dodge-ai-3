@@ -18,7 +18,14 @@ import numpy as np
 import torch
 from torch import nn
 
-from .large_probe import FitResult, MatchedSnapshot, _clone, _rng_devices, _state
+from .large_probe import (
+    FitResult,
+    MatchedSnapshot,
+    _clone,
+    _rng_devices,
+    _state,
+    balanced_bright_loss,
+)
 from .palette import (
     MAX_PALETTE_SIZE,
     ce_palette_loss,
@@ -320,9 +327,12 @@ def fit_spatial_decoders(
     on_milestone: Callable[[MatchedSnapshot, Mapping[str, nn.Module]], None]
     | None = None,
     conditions: Sequence[str] = CONDITIONS,
+    loss_kind: str = "palette-ce",
 ) -> FitResult:
-    """Fit matched CE heads from one shared train-only sampling stream."""
+    """Fit matched heads from one shared train-only sampling stream."""
 
+    if loss_kind not in ("palette-ce", "balanced-bright"):
+        raise ValueError("loss_kind must be 'palette-ce' or 'balanced-bright'")
     names = _normalize_conditions(conditions)
     colors, row_count, device, schedule = _validate_inputs(
         decoders,
@@ -360,9 +370,16 @@ def fit_spatial_decoders(
                 paired_indices = tuple(int(value) for value in indices.tolist())
                 sampled_indices.append(paired_indices)
                 target_rows = _validate_target_batch(_take(targets, indices))
-                class_targets = torch.from_numpy(
-                    palette_indices(target_rows.detach().cpu().numpy(), colors)
-                ).to(device=device, dtype=torch.long)
+                if loss_kind == "palette-ce":
+                    class_targets: torch.Tensor | None = torch.from_numpy(
+                        palette_indices(target_rows.detach().cpu().numpy(), colors)
+                    ).to(device=device, dtype=torch.long)
+                    float_targets = None
+                else:
+                    class_targets = None
+                    float_targets = target_rows.to(
+                        device=device, dtype=torch.float32
+                    ).div(255.0)
                 losses: dict[str, float] = {}
                 for condition in names:
                     decoder = decoders[condition]
@@ -385,7 +402,11 @@ def fit_spatial_decoders(
                             f"{condition} decoder must return raw logits with shape "
                             f"{expected}, got {getattr(logits, 'shape', None)}"
                         )
-                    loss = ce_palette_loss(logits, class_targets)
+                    if class_targets is not None:
+                        loss = ce_palette_loss(logits, class_targets)
+                    else:
+                        assert float_targets is not None
+                        loss = balanced_bright_loss(logits, float_targets)
                     if not torch.isfinite(loss):
                         raise RuntimeError("nonfinite spatial decoder loss")
                     loss.backward()
@@ -400,9 +421,14 @@ def fit_spatial_decoders(
                         f"{condition}_loss": losses[condition]
                         for condition in names
                     },
-                    "loss_kind": "palette-ce",
+                    "loss_kind": loss_kind,
                     "palette_size": len(colors),
-                    "loss_normalization": "unweighted-pixel-mean",
+                    "loss_normalization": (
+                        "unweighted-pixel-mean"
+                        if loss_kind == "palette-ce"
+                        else "per-frame-then-batch"
+                    ),
+                    "equal_class_weights": loss_kind == "balanced-bright",
                     "updates_per_second": step / max(time.monotonic() - began, 1e-9),
                     "indices": paired_indices,
                 }
