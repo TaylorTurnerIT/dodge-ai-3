@@ -106,6 +106,10 @@
     .frame-body img { position: absolute; inset: 7px; width: calc(100% - 14px); height: calc(100% - 14px); object-fit: contain; image-rendering: pixelated; border-radius: 3px; }
     .frame-empty { max-width: 145px; color: var(--dim); text-align: center; font-size: 11px; }
     .snapshot-meta { overflow: hidden; padding: 8px 11px; color: var(--dim); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; border-top: 1px solid var(--line); }
+    .diff-strip { display: flex; align-items: center; gap: 10px; margin: 0 9px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-soft); overflow: hidden; }
+    .diff-strip.hidden { display: none; }
+    .diff-strip .frame-label { padding: 8px 0 8px 10px; }
+    .diff-strip img { width: 120px; height: 120px; object-fit: contain; image-rendering: pixelated; border-radius: 3px; background: #0b1119; }
     .overview-side { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
     .summary-card { padding-bottom: 9px; }
     .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 9px; }
@@ -212,6 +216,7 @@
                 <article class="frame-card"><div class="frame-label" id="label-current">Diagnostic decoder · current frame</div><div class="frame-body" id="body-current"><span class="frame-empty">Decoder output is unavailable before fitting.</span></div></article>
                 <article class="frame-card"><div class="frame-label" id="label-predicted">Diagnostic decoder · predicted next frame</div><div class="frame-body" id="body-predicted"><span class="frame-empty">Decoder output is unavailable before fitting.</span></div></article>
               </div>
+              <div class="diff-strip hidden" id="diff-strip"><div class="frame-label" id="label-diff">Pixel difference map</div><div class="frame-body" id="body-diff"><span class="frame-empty">No difference map in this snapshot.</span></div></div>
               <div class="snapshot-meta" id="snapshot-meta">Waiting for model diagnostics.</div>
             </section>
             <div class="overview-side">
@@ -437,7 +442,22 @@
         }
       }
 
+      function renderDiff(snapshot) {
+        const strip = $("diff-strip"), body = $("body-diff");
+        body.replaceChildren();
+        const frame = frameFor(snapshot, ["difference", "diff map", "pixel difference"], 4);
+        const image = frame && dataImage(frame.image);
+        if (image) {
+          $("label-diff").textContent = safeText(frame.label, "Pixel difference map");
+          const element = document.createElement("img"); element.src = image; element.alt = safeText(frame.label, "pixel difference map"); body.appendChild(element);
+          strip.classList.remove("hidden");
+        } else {
+          strip.classList.add("hidden");
+        }
+      }
+
       function renderSnapshot(snapshot) {
+        renderDiff(snapshot);
         if (snapshot && snapshot.metadata && snapshot.metadata.current_frame_only) {
           renderFrame("body-observed-current", "label-observed-current", snapshot, [], 0, "Waiting for observed pixels.");
           renderFrame("body-input", "label-input", snapshot, [], 1, "Waiting for reconstruction.");

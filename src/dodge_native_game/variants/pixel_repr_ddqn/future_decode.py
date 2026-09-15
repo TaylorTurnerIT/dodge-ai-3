@@ -334,6 +334,23 @@ def _save_png(path: Path, frame: np.ndarray) -> None:
     probe._save_png(path, frame)
 
 
+def _dashboard_frames(frames: Mapping[str, np.ndarray]) -> list[dict[str, str]]:
+    """Render dashboard-schema frames with embedded image data URLs."""
+
+    labels = {
+        "current-observed": "Observed current frame",
+        "current-decoded": "Decoded current frame (frozen patch readout)",
+        "next-observed": "Observed next frame",
+        "next-decoded": "Decoded predicted next frame",
+        "next-persistence": "Decoded next frame from persistence control",
+        "next-diff": "Pixel difference map (predicted vs observed next)",
+    }
+    return [
+        {"label": labels[kind], "image": probe._data_url(frames[kind])}
+        for kind in labels
+    ]
+
+
 def _write_scene_images(
     run: Path,
     step: int,
@@ -370,6 +387,13 @@ def _write_scene_images(
                 "diagnostic_only": True,
                 "images": {
                     kind: f"images/step-{step}/{prefix}-{kind}.png" for kind in frames
+                },
+                "frames": _dashboard_frames(frames),
+                "metadata": {
+                    "label": f"{name} · next-frame prediction",
+                    "scene": name,
+                    "step": step,
+                    "diagnostic_only": True,
                 },
             }
         )

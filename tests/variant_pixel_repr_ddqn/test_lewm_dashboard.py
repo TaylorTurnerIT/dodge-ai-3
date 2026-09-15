@@ -181,3 +181,62 @@ assert.equal(inputDiagnosticDetail(world),world);
 """
     )
     subprocess.run([node, "-e", script], check=True, capture_output=True, text=True)
+
+
+def test_future_run_snapshots_and_diff_strip_flow_through_dashboard(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "history"
+    run = root / "future-run"
+    run.mkdir(parents=True)
+    _write_json(
+        run / "manifest.json",
+        {"experiment": "lewm-future-decode-v1", "data_sha256": "d" * 64},
+    )
+    _write_json(
+        run / "status.json",
+        {"state": "completed", "phase": "frozen diagnostic", "step": 2048},
+    )
+    (run / "metrics.jsonl").write_text(
+        json.dumps({"step": 2048, "loss": 0.05, "predicted_loss": 0.05}) + "\n"
+    )
+    view = {
+        "step": 2048,
+        "scene": "validation-000000",
+        "diagnostic_only": True,
+        "frames": [
+            {"label": "Observed current frame", "image": "data:image/png;base64,AAA"},
+            {"label": "Observed next frame", "image": "data:image/png;base64,BBB"},
+            {
+                "label": "Decoded current frame (frozen patch readout)",
+                "image": "data:image/png;base64,CCC",
+            },
+            {
+                "label": "Decoded predicted next frame",
+                "image": "data:image/png;base64,DDD",
+            },
+            {
+                "label": "Pixel difference map (predicted vs observed next)",
+                "image": "data:image/png;base64,EEE",
+            },
+        ],
+        "metadata": {
+            "label": "validation-000000 · next-frame prediction",
+            "step": 2048,
+        },
+    }
+    _write_json(run / "visualizations.json", [view])
+    with _running_server(root) as base_url:
+        status, payload = _get_json(base_url, "/api/run?run_id=future-run")
+        assert status == 200
+        snapshot = payload["visualizations"][0]
+        assert [frame["label"] for frame in snapshot["frames"]][3] == (
+            "Decoded predicted next frame"
+        )
+        assert payload["visualization"]["metadata"]["label"].startswith(
+            "validation-000000"
+        )
+        with urlopen(base_url + "/", timeout=2) as response:
+            html = response.read().decode()
+        assert 'id="diff-strip"' in html
+        assert "function renderDiff(snapshot)" in html

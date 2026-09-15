@@ -273,6 +273,21 @@ def test_future_decode_study_bounded_cpu(tmp_path: Path, monkeypatch) -> None:
         "validation-000000",
         "validation-000001",
     ]
+    assert views[0]["metadata"]["label"] == (
+        "validation-000000 · next-frame prediction"
+    )
+    assert [frame["label"] for frame in views[0]["frames"]] == [
+        "Observed current frame",
+        "Decoded current frame (frozen patch readout)",
+        "Observed next frame",
+        "Decoded predicted next frame",
+        "Decoded next frame from persistence control",
+        "Pixel difference map (predicted vs observed next)",
+    ]
+    assert all(
+        frame["image"].startswith("data:image/png;base64,")
+        for frame in views[0]["frames"]
+    )
     gallery = history / "future-test-comparison.html"
     assert gallery.exists() and "__RUN__" not in gallery.read_text()
     comparison = json.loads(
