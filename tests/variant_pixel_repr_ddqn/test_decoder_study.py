@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pytest
 import torch
 from torch import nn
 
+from dodge_native_game.variants.pixel_repr_ddqn import decoder_study
 from dodge_native_game.variants.pixel_repr_ddqn.decoder_study import (
     cache_train_windows,
     fit_cached_decoder,
@@ -174,3 +176,10 @@ def test_cached_fit_resume_matches_uninterrupted_optimizer_and_sampler() -> None
     assert torch.equal(
         full_fit.generator_state, resumed_fit.generator_state
     )
+
+
+def test_2048_decoder_resume_requires_the_512_step_checkpoint() -> None:
+    with pytest.raises(ValueError, match="contain 512 updates"):
+        decoder_study._validate_resume_step({"steps": 256}, total_steps=2048)
+
+    decoder_study._validate_resume_step({"steps": 512}, total_steps=2048)

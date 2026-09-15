@@ -33,10 +33,16 @@ _WORLD_BATCH_SIZE = 32
 _DECODER_BATCH_SIZE = 8
 _DECODER_STEPS = 256
 _EXTENDED_DECODER_STEPS = 512
+_FINAL_DECODER_STEPS = 2048
 _LATENT_DIM = 192
 _OUTPUT_SIZE = 128
 _SAMPLING_SEED = 903
 _DECODER_SEED = 904
+
+_RESUME_STEPS = {
+    _EXTENDED_DECODER_STEPS: _DECODER_STEPS,
+    _FINAL_DECODER_STEPS: _EXTENDED_DECODER_STEPS,
+}
 
 
 @dataclass(frozen=True)
@@ -327,6 +333,18 @@ def _resolve_decoder_checkpoint(path: Path) -> Path:
     return candidate
 
 
+def _validate_resume_step(
+    payload: dict[str, Any], *, total_steps: int
+) -> None:
+    required_steps = _RESUME_STEPS.get(total_steps)
+    if required_steps is None:
+        raise ValueError(f"{total_steps}-update decoder study cannot resume")
+    if payload.get("steps") != required_steps:
+        raise ValueError(
+            f"decoder resume checkpoint must contain {required_steps} updates"
+        )
+
+
 def _link_checkpoint(source: Path, target: Path) -> None:
     try:
         os.link(source, target)
@@ -504,16 +522,24 @@ def run_study(
     batch_size: int = _DECODER_BATCH_SIZE,
     resume_decoder: Path | None = None,
 ) -> list[Path]:
-    """Fit one query decoder, optionally continuing its 256-update checkpoint."""
+    """Fit one query decoder, optionally continuing its declared prior checkpoint."""
 
-    if steps not in {_DECODER_STEPS, _EXTENDED_DECODER_STEPS}:
-        raise ValueError("decoder study requires a total of 256 or 512 updates")
+    if steps not in {
+        _DECODER_STEPS,
+        _EXTENDED_DECODER_STEPS,
+        _FINAL_DECODER_STEPS,
+    }:
+        raise ValueError(
+            "decoder study requires a total of 256, 512, or 2048 updates"
+        )
     if batch_size != _DECODER_BATCH_SIZE:
         raise ValueError("decoder study requires batch8")
     if steps == _DECODER_STEPS and resume_decoder is not None:
         raise ValueError("256-update decoder study cannot resume a checkpoint")
     if steps == _EXTENDED_DECODER_STEPS and resume_decoder is None:
         raise ValueError("512-update decoder study requires a 256-update checkpoint")
+    if steps == _FINAL_DECODER_STEPS and resume_decoder is None:
+        raise ValueError("2048-update decoder study requires a 512-update checkpoint")
     checkpoint_path = _resolve_checkpoint(Path(checkpoint))
     dataset_path = Path(dataset_root)
     manifest_path = dataset_path / "manifest.json"
@@ -553,8 +579,7 @@ def run_study(
         resume_payload = loaded
         if resume_payload.get("decoder_kind") != "query":
             raise ValueError("decoder resume checkpoint must be a query decoder")
-        if resume_payload.get("steps") != _DECODER_STEPS:
-            raise ValueError("decoder resume checkpoint must contain 256 updates")
+        _validate_resume_step(resume_payload, total_steps=steps)
         if resume_payload.get("latent_dim") != _LATENT_DIM:
             raise ValueError("decoder resume latent dimension mismatch")
         if resume_payload.get("batch_size") != _DECODER_BATCH_SIZE:

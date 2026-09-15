@@ -376,3 +376,12 @@ O5|complete|evaluation|Compare identical eight views and all56 validation window
 O.authorization|User continuation supersedes earlier stop decision for this bounded extension. Original O3 negative result retained; no claim that original gate passed. Stop at512 total, evaluate, release T4.
 
 O.continuation.result|Query256→512 same weights/AdamW/sampler;256 new updates,3.557s fitting,T4 peak192290816B.118 remote tests pass; implementation identical81251c5 (prior337 local tests). Validation current error−5.00%,changed-current−0.42%,next−4.57%,changed-next−0.53% vs256. Changed-current improves3/4 validation episodes. Current reconstruction still+2.98% vsfixedmean;changed-current+0.034%. Score clearer; distinct player/enemy tracking unverified. World/checkpoint unchanged; source/resume/optimizer512/sampler/pairedviews verified. Native128 dashboard passes both viewports; artifacts retrieved,T4 released. Source8f9ee8c,archivec9ea5037366c559e37c76d74fcf228e0bf6fbc9ff20fcebdc3e66a4d7be98618. No controller promotion; stop512.
+
+
+§O.current — current-frame reconstruction at2048
+O6|accepted|implementation|Extend bounded runner/launcher to2048 total from saved512 decoder|O5|Reject other resume step; exact optimizer/sampler continuity; native128 pixel-MSE unchanged; full Python/Ruff
+O7|active|diagnostic fitting|User requests2048 total;1536 additional query-decoder updates from512|O6|One T4,3000s worker; frozen world model/corpus/source; no collection or LeWM updates
+O8|unopened|evaluation|Primary focus current-frame reconstruction; fixed eight views and all56 validation windows vs512|O7|Train/validation current errors, mean controls, changed regions; decoded prediction retained as secondary existing diagnostic; verify resume/model/source hashes and release T4
+O.current.authorization|Explicit user2048 request supersedes prior512 cap. Preserve old results; stop2048 total. Decoder fits observed pixels only; no prediction-loss tuning or controller work.
+
+O.current.validation|338 local tests pass; Ruff and bounded32-step legacy smoke pass (expected bounded warnings). Parent-reviewed Luna max extension; no architecture/loss changes. Freeze before2048 continuation.

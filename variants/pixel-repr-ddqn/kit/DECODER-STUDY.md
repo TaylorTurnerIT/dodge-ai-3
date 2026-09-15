@@ -48,3 +48,9 @@ Completed `lewm-decoder128-20260915-v1-query512` from the saved256 checkpoint, p
 Current reconstruction improves, but still loses to the fixed training mean by2.98% overall and0.034% on changing regions. Changed-current error improves in3/4 validation episodes; training changed-current error increases0.14%. Score reconstruction is visibly clearer; player/enemy shapes remain indistinct. Object tracking is unverified.
 
 Eight observed-frame/256/512 comparisons are saved in job `lewm-decoder128-20260915-v1-512/decoder-256-vs-512.png`; metrics and resume checks in `comparison.json`. Source archive SHA `c9ea5037366c559e37c76d74fcf228e0bf6fbc9ff20fcebdc3e66a4d7be98618`. World checkpoint, input frames, latent values and fixed baselines match; optimizer step512 and exact sampler progression verified. Both dashboard viewports pass with native128 square images. This bounded iteration ends at512.
+
+## Current-frame extension to 2,048
+
+User requests2,048 total decoder updates, prioritizing current-frame reconstruction. Resume query512 for1,536 additional updates on one T4. Keep architecture, native128 plain pixel-MSE, AdamW state, sampler, LeWM weights and practice corpus fixed. Implementation phase only expands the accepted resume envelope; full tests/Ruff precede source freeze and fitting. Invalid resume steps must fail.
+
+Review the same eight current-frame views at512/2048 and train/validation reconstruction errors against the fixed training-mean baseline. Changed-region measurements remain pixel-only evaluation diagnostics. Predicted frames remain available through the existing exporter, with no prediction-specific tuning. Stop at2048, retrieve evidence and release the T4.
