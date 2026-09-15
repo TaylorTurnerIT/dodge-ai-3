@@ -13,3 +13,19 @@ Native128 metrics primary: current reconstruction, next prediction, fixed traini
 Before any fitting: full Python/Ruff, frozen source/protocol. One T4 per stage,3000s worker maximum; each stage256 new decoder updates. Retrieve results and release T4. Source/data/world tensors must remain identical.
 
 Continuation gate: changed-region current reconstruction beats training-mean baseline and fixed views show scene-dependent detail beyond fixed HUD. Examine next-prediction versus persistence separately; reconstructing current scenes does not prove useful dynamics. If promising, resume same decoder to512 total; no fresh initialization, optimizer reset or sampler restart. Otherwise stop256. This exploratory validation gate does not establish generalization or open controller training.
+
+## Result: stopped at 256
+
+Run `lewm-decoder128-20260915-v1-query256`; source `81251c5`. One Tesla T4,256 decoder updates in3.252s;192,290,816bytes peak allocated. Frozen world model unchanged; no new game steps. Artifacts retrieved and T4 released. All337 local and118 remote variant tests pass; Ruff clean; bounded legacy smoke expected warnings. Resume equivalence verified with a small local test; no512 fit executed.
+
+| Native128 held-out metric | Query decoder | Control |
+|---|---:|---:|
+| Current reconstruction MSE |0.00291185|0.00268604 fixed train mean|
+| Current reconstruction on changing regions |0.13859245|0.13795829 fixed train mean|
+| Next prediction MSE |0.00291038|0.00233309 current-frame persistence|
+
+Current reconstruction is8.41% worse overall and0.46% worse on changing regions than the fixed training mean. Training-set errors also lose to mean:10.34% overall and2.28% on changing regions. Eight fixed views show mostly blue background and HUD; player/enemy details remain indistinct. The continuation gate failed, so the run stops at256.
+
+Native changing-region next-prediction error does beat persistence, but the fixed mean does too. Removing moving objects can reduce this error; that result alone does not show useful motion prediction. The decoder and representation remain possible bottlenecks.
+
+All32 panel PNGs verified128×128; optimizer step256, sampler progression and checkpoint/data/source hashes verified. Dashboard passes1280×720 and1366×768 with square images and no scrolling. Evidence: run `parent-verification.json` and `review-contact-sheet.png`; job `lewm-decoder128-20260915-v1-256/decision.json`, archived results and browser screenshots. Source archive SHA `a14e6d9a54a8890a1317472e0899fc90f9ca4c89bd1d4eb7ea3ad04a2bbd696a`.
