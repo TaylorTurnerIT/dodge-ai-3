@@ -20,11 +20,13 @@ def main():
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--steps", type=int, choices=(256, 512, 2048), default=256)
+    parser.add_argument(
+        "--steps", type=int, choices=(256, 512, 2048, 8192), default=256
+    )
     parser.add_argument("--resume-decoder", type=Path)
     args = parser.parse_args()
     if (args.steps > 256) != (args.resume_decoder is not None):
-        parser.error("512/2048 require --resume-decoder; 256 must start fresh")
+        parser.error("512/2048/8192 require --resume-decoder; 256 must start fresh")
     if not args.run_id.replace("-", "").isalnum():
         raise ValueError("run id must be alphanumeric with hyphens")
     protocol = {
@@ -35,7 +37,8 @@ def main():
         "world_model_updates": 0,
         "decoder_kind": "query",
         "decoder_total_steps": args.steps,
-        "new_decoder_updates": args.steps - {256: 0, 512: 256, 2048: 512}[args.steps],
+        "new_decoder_updates": args.steps
+        - {256: 0, 512: 256, 2048: 512, 8192: 2048}[args.steps],
         "retained_steps": [args.steps],
         "resume_decoder_sha256": (
             hashlib.sha256(args.resume_decoder.read_bytes()).hexdigest()

@@ -54,3 +54,9 @@ Eight observed-frame/256/512 comparisons are saved in job `lewm-decoder128-20260
 User requests2,048 total decoder updates, prioritizing current-frame reconstruction. Resume query512 for1,536 additional updates on one T4. Keep architecture, native128 plain pixel-MSE, AdamW state, sampler, LeWM weights and practice corpus fixed. Implementation phase only expands the accepted resume envelope; full tests/Ruff precede source freeze and fitting. Invalid resume steps must fail.
 
 Review the same eight current-frame views at512/2048 and train/validation reconstruction errors against the fixed training-mean baseline. Changed-region measurements remain pixel-only evaluation diagnostics. Predicted frames remain available through the existing exporter, with no prediction-specific tuning. Stop at2048, retrieve evidence and release the T4.
+
+## 2,048 result and requested extension to 8,192
+
+Completed1,536 additional updates from512 in18.347s on T4. Current-frame reconstruction MSE fell from0.00264568 to0.00126317 on training windows (52.26% improvement), while held-out MSE rose from0.00276618 to0.00340290 (23.02% worse). Held-out changing-region error rose0.42%. Images contain more visible shapes, often at incorrect positions. The decoder fits training images more closely; held-out generalization remains weak. Source/resume/optimizer/sampler checks pass; T4 released.
+
+User requests8,192 total updates. Add6,144 updates from saved2048 with the same optimizer, sampler, native128 MSE, LeWM and data. Validate the expanded resume envelope before source freeze. Compare current-frame train/validation errors and identical2048/8192 views; retain512 as reference. Stop8192 and release T4. More distinct shapes alone do not establish accurate reconstruction.

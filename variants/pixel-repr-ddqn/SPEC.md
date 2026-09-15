@@ -380,8 +380,22 @@ O.continuation.result|Query256→512 same weights/AdamW/sampler;256 new updates,
 
 §O.current — current-frame reconstruction at2048
 O6|accepted|implementation|Extend bounded runner/launcher to2048 total from saved512 decoder|O5|Reject other resume step; exact optimizer/sampler continuity; native128 pixel-MSE unchanged; full Python/Ruff
-O7|active|diagnostic fitting|User requests2048 total;1536 additional query-decoder updates from512|O6|One T4,3000s worker; frozen world model/corpus/source; no collection or LeWM updates
-O8|unopened|evaluation|Primary focus current-frame reconstruction; fixed eight views and all56 validation windows vs512|O7|Train/validation current errors, mean controls, changed regions; decoded prediction retained as secondary existing diagnostic; verify resume/model/source hashes and release T4
+O7|complete|diagnostic fitting|User requests2048 total;1536 additional query-decoder updates from512|O6|One T4,3000s worker; frozen world model/corpus/source; no collection or LeWM updates
+O8|complete|evaluation|Primary focus current-frame reconstruction; fixed eight views and all56 validation windows vs512|O7|Train/validation current errors, mean controls, changed regions; decoded prediction retained as secondary existing diagnostic; verify resume/model/source hashes and release T4
 O.current.authorization|Explicit user2048 request supersedes prior512 cap. Preserve old results; stop2048 total. Decoder fits observed pixels only; no prediction-loss tuning or controller work.
 
 O.current.validation|338 local tests pass; Ruff and bounded32-step legacy smoke pass (expected bounded warnings). Parent-reviewed Luna max extension; no architecture/loss changes. Freeze before2048 continuation.
+
+O.current.result|2048 complete:1536 new updates,18.347s fitting;338 local/119 remote tests. Train current MSE0.00126317 (−52.26% vs512),validation0.00340290 (+23.02%);validation changed-current0.138582 (+0.42%). Shapes emerge but positions often disagree with observed frames. Resume/optimizer2048/sampler/world/fixedviews verified; T4 released. Generalization remains weak; user explicitly requests8192 next.
+
+§O.long — decoder fit to8192
+O9|accepted|implementation|Permit8192 total only from saved2048 decoder|O8|Preserve existing resume envelopes; reject wrong prior step; full tests/Ruff
+O10|active|diagnostic fitting|User8192 request:6144 additional updates from2048|O9|One T4,3000s worker; identical pixel reconstruction loss/model/corpus; saved optimizer/sampler
+O11|unopened|evaluation|Current reconstruction focus; compare2048/8192 and retain512 reference|O10|Train/validation MSE and same eight images; separate visual detail from correct object placement; verify hashes/state and releaseT4
+O.long.authorization|Explicit8192 request supersedes2048 cap. Stop8192 total; no world-model updates, collection, controller or prediction-specific tuning.
+
+B33|2026-09-15|8192 launcher envelope exceeded line limit|Format launcher; mechanical issue, existing Ruff invariant sufficient
+
+B34|2026-09-15|Standalone artifact image helper used system Python without Pillow|Use project environment; artifact-only invocation, existing verification sufficient
+
+O.long.validation|338 local tests pass; Ruff clean; previous bounded smoke same task passed. Parent-reviewed Luna max resume extension; source freeze before8192 continuation.

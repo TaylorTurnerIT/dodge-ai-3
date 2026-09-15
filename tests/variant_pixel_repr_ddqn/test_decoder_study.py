@@ -178,8 +178,8 @@ def test_cached_fit_resume_matches_uninterrupted_optimizer_and_sampler() -> None
     )
 
 
-def test_2048_decoder_resume_requires_the_512_step_checkpoint() -> None:
-    with pytest.raises(ValueError, match="contain 512 updates"):
-        decoder_study._validate_resume_step({"steps": 256}, total_steps=2048)
+def test_8192_decoder_resume_requires_the_2048_step_checkpoint() -> None:
+    with pytest.raises(ValueError, match="contain 2048 updates"):
+        decoder_study._validate_resume_step({"steps": 512}, total_steps=8192)
 
-    decoder_study._validate_resume_step({"steps": 512}, total_steps=2048)
+    decoder_study._validate_resume_step({"steps": 2048}, total_steps=8192)
