@@ -368,3 +368,9 @@ O.validation|337 local tests pass; Ruff clean; exact split-fit resume equality; 
 B32|2026-09-15|Browser harness invoked project environment without Playwright|Use isolated uv --no-project --with playwright; no source mutation; existing browser layout check sufficient
 
 O.result|One T4 query decoder256 updates completed;3.252s fitting,peak192290816B.337 local/118 remote tests; Ruff/smoke pass. Native128 validation current MSE0.00291185 vs trainmean0.00268604 (+8.41%); changed-current0.138592 vsmean0.137958 (+0.46%). Train current+10.34% vsmean; changed-current+2.28%. Eight views mostly background/HUD, no distinct player/enemies. Nextglobal error+24.74% vs persistence. Continuation gate failed: no512 fit. World SHA unchanged; optimizer256/sampler/source hashes verified;32 native PNGs, no-scroll browser at1280×720/1366×768. Artifacts retrieved,T4 released; source81251c5, archivea14e6d9a54a8890a1317472e0899fc90f9ca4c89bd1d4eb7ea3ad04a2bbd696a. Decoder versus representation bottleneck unresolved; no controller opening.
+
+
+§O.continuation — user-directed decoder extension
+O4|active|diagnostic fitting|User sees emerging detail and explicitly requests continued iteration; resume existing query256 to512 total|O3|Same source/model/data/loss/batch;256 additional updates on one T4; saved optimizer/sampler; no world-model updates
+O5|unopened|evaluation|Compare identical eight views and all56 validation windows at256/512|O4|Native128 metrics and fixed mean/persistence controls; verify resume identity and unchanged world state; report measured gain separately from recognizable detail
+O.authorization|User continuation supersedes earlier stop decision for this bounded extension. Original O3 negative result retained; no claim that original gate passed. Stop at512 total, evaluate, release T4.

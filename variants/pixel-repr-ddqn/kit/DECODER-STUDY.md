@@ -29,3 +29,7 @@ Current reconstruction is8.41% worse overall and0.46% worse on changing regions 
 Native changing-region next-prediction error does beat persistence, but the fixed mean does too. Removing moving objects can reduce this error; that result alone does not show useful motion prediction. The decoder and representation remain possible bottlenecks.
 
 All32 panel PNGs verified128×128; optimizer step256, sampler progression and checkpoint/data/source hashes verified. Dashboard passes1280×720 and1366×768 with square images and no scrolling. Evidence: run `parent-verification.json` and `review-contact-sheet.png`; job `lewm-decoder128-20260915-v1-256/decision.json`, archived results and browser screenshots. Source archive SHA `a14e6d9a54a8890a1317472e0899fc90f9ca4c89bd1d4eb7ea3ad04a2bbd696a`.
+
+## User-directed continuation to 512
+
+User reports emerging detail and requests another iteration. Resume the saved query256 decoder for256 additional updates, reaching512 total. This supersedes the earlier stop decision for this extension; the original negative measurements remain unchanged. Reuse model, data, native128 target, optimizer state, sampler state and architecture. No code changes or new collection. Compare the same eight validation views and all56 validation windows before and after, with fixed mean/persistence controls. Retrieve artifacts, verify source/resume/world identity and release the T4 at512.
