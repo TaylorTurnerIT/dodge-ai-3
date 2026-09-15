@@ -216,8 +216,8 @@ V50|practice-diverse-v1 opt-in fresh reference CUDA512updates,batch8,seed42, no 
 
 §L — batch-size screen and pixel controls
 L1|accepted|implementation|Batch32 protocol, retained128-step checkpoint, pixel diagnostics and paired runner|K4|Envelope/retention tests; pixel controls analytic fixtures; full Python/Ruff
-L2|active|training|Fresh reference batch32,512updates,seed42 on same frozen corpus|L1|One T4,float32,same objective/optimizer; retain128 and512; no new collection
-L3|unopened|calibration and diagnostic fitting/evaluation|Raw/calibrated128 and512 checkpoints; same256-step decoder each; old batch8 calibrated decoder read-only baseline|L2|All validation windows/persistence/wrong actions; train-mean image and changing-pixel controls; per-episode reporting; square dashboard
+L2|accepted|training|Fresh reference batch32,512updates,seed42 on same frozen corpus|L1|One T4,float32,same objective/optimizer; retain128 and512; no new collection
+L3|accepted|calibration and diagnostic fitting/evaluation|Raw/calibrated128 and512 checkpoints; same256-step decoder each; old batch8 calibrated decoder read-only baseline|L2|All validation windows/persistence/wrong actions; train-mean image and changing-pixel controls; per-episode reporting; square dashboard
 V51|practice-batch32-v1 exact fresh referenceCUDA512updates,batch32,seed42, imported corpus;128-step retained optimizer snapshot immutable.128×32 equals prior512×8 sampled windows;512-step comparison matches updates but sees4× windows. Neither isolates BN causally; reference architecture/SIGReg/optimizer unchanged.
 V52|Pixel diagnostics only:32×32 area targets, train-window current-frame mean baseline; validation-only abs(next-current) meanRGB>1/255 mask. No mask/mean input or loss to LeWM/decoder. Report global/changed-region SSE per channel-pixel, counts/null empty masks, per-episode metrics. Frozen model/decoder/modes/RNG preserved; static HUD recognition alone not entity retention evidence.
 V53|L resource cap:one T4,3000s worker,512 modelupdates,4×256 decoderupdates; baseline checkpoint/decoder read-only,no refit. Fixed old corpusSHA7769398938b2be30934779fc5851e767653df7b31b2e7fad7a2a0adcd80e6a1f. Stop source defect/OOM/nonfinite; no automatic batch fallback/extension/controller promotion.
@@ -289,7 +289,7 @@ T54|x|K2: collect/hash/review bounded diverse practice corpus|V49
 T55|x|K3/K4: T4 screen and original/calibrated diagnostics|V14,V48-V50
 
 T56|x|L1: bounded batch32/checkpoint retention and pixel controls|V48,V51-V53
-T57|~|L2/L3: matched-exposure/update T4 screen and visual review|V48,V51-V53
+T57|x|L2/L3: matched-exposure/update T4 screen and visual review|V48,V51-V53
 
 §B
 id|date|cause|fix
@@ -342,3 +342,5 @@ R.batch|Pinned upstream train/lewm.yaml batch128 and paper AppendixD agree; batc
 B27|2026-09-15|Batch-screen first lint:long comparison string/import grouping|Shorten label and format imports; existing lint invariant sufficient
 
 B28|2026-09-15|Probe integration hung: legacy fake dataset __getitem__ accepted unlimited indices, violating Python sequence iteration boundary|Fixture raises IndexError at len; real dataset already bounded. Existing episode-boundary invariant sufficient; stop duplicate task tests and rerun full suite
+
+L.result|323local/104remote tests; T4 batch32/512 completed565.81s,peak6.591GB. Calibrated128train/val ratios0.79615/0.95307;512ratios0.20840/0.99491.512wrong-action penalty+249.30%train/+9.62%val. Changed-pixel prediction error improved7.45% vspriorcalibrated, all4episodes; still17.93%worse than pixelpersistence. Fixed train-mean beats global reconstruction; no clear entity outlines. Exact128×32 sampling prefix equals prior512×8; all learned tensors/calibration/decoder links verified. Artifacts retrieved,T4 released; no controller promotion.
