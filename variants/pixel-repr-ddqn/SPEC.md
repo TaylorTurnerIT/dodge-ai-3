@@ -429,3 +429,10 @@ B37|2026-09-15|Planner draft mixed permanent obstacles into player-only families
 B38|2026-09-15|Full planner rejected odd-size enemy geometry: rounded half-integer margins expand bounds|Use ceil(low)/floor(high); full-plan construction test before capture
 
 Q.validation|356 full-suite tests pass;5 added boundary/publication cases pass (12 loader tests total); Ruff clean; legacy32 smoke pass. Native48-episode pilot6144 transitions strict validation complete; all9 actions in both splits. Full plan4608 unique semantic recipes; source freeze before bulk collection.
+
+B39|2026-09-14|Full corpus correctly rejected identical train/validation bytes; recipe difference only difficulty, invisible in empty arena|Uniform difficulty1; full semantic uniqueness excludes irrelevant metadata; retain pixel-hash rejection. Original v1 remains unpublished. Reopen Q1; audited import of unchanged train capture plus fresh validation into v2, explicit source chain, no silent resume/source mixing.
+Q.repair|Reuse only training episodes whose exact native config and capture implementation match new protocol; verify original source hash, unchanged capture AST/dependencies/native binary and every receipt. New v2 records imported provenance; recapture all512 validation at difficulty1. Preserve rejected v1.
+
+B40|2026-09-14|Import pilot passed dataset provenance envelope into frozen capture identity guard|Separate import lineage from exact capture provenance; retain original guard and AST equality
+
+Q.repair.validation|365 full-suite tests pass; Ruff clean; real32-import/16-fresh pilot passes strict publication; original v1 has exactly1 cross-split byte duplicate. Uniform difficulty and semantic uniqueness checks pass; source freeze before v2 import/collection.

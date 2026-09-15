@@ -9,6 +9,7 @@ scripts, recipe names, and other provenance live in JSON sidecars.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import math
@@ -470,10 +471,7 @@ def _make_config(
     config = PracticeConfig(
         name=f"large-{split}-{index:06d}",
         max_decisions=decisions,
-        # A split-specific native difficulty is part of the recipe identity;
-        # it prevents coincident coordinates/action cycles from collapsing
-        # train and validation recipes while retaining invulnerability.
-        difficulty=1 if split == "train" else 2,
+        difficulty=1,
         permanent_pattern=permanent_pattern,
         invulnerable=True,
         player_start=player_start,
@@ -1061,6 +1059,48 @@ def _validate_with_sibling_loader(root: Path) -> None:
     validate_dataset(root, require_ready=False)
 
 
+def _import_provenance(
+    origin: Path, source: Path, current: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Admit a prior training capture only under an audited source contract."""
+    old_plan = _read_json(origin / "plan.json", "import plan")
+    old = old_plan["plan"]["provenance"]
+    if _sha256(source) != old["generator_sha256"]:
+        raise LargePracticeError("import source hash mismatch")
+    if old["native_module_sha256"] != current["native_module_sha256"]:
+        raise LargePracticeError("import native binary differs")
+    for name in ("practice", "pixels"):
+        if (
+            old["source_hashes"][name]["sha256"]
+            != current["source_hashes"][name]["sha256"]
+        ):
+            raise LargePracticeError("import capture dependency differs")
+    # Planner and collection orchestration may change; actual episode capture,
+    # serialization, validation, and their helper definitions must be identical.
+    allowed = {"_make_config", "plan_large_practice", "collect_large_practice", "main"}
+    current_nodes = {
+        node.name: ast.dump(node, include_attributes=False)
+        for node in ast.parse(Path(__file__).read_text()).body
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+    }
+    for node in ast.parse(source.read_text()).body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.ClassDef))
+            and node.name not in allowed
+            and ast.dump(node, include_attributes=False) != current_nodes.get(node.name)
+        ):
+            raise LargePracticeError(
+                f"import capture implementation differs: {node.name}"
+            )
+    return {
+        "root": str(origin.resolve()),
+        "plan_sha256": _sha256(origin / "plan.json"),
+        "source_path": str(source.resolve()),
+        "source_sha256": _sha256(source),
+        "provenance": old,
+    }
+
+
 def collect_large_practice(
     output: Path | str,
     *,
@@ -1072,6 +1112,8 @@ def collect_large_practice(
     planner_seed: int = DEFAULT_PLANNER_SEED,
     workers: int = 1,
     native_factory: Callable[..., Any] | None = None,
+    reuse_train_from: Path | None = None,
+    reuse_train_source: Path | None = None,
 ) -> dict[str, Any]:
     """Incrementally collect and atomically publish the large practice set.
 
@@ -1089,6 +1131,14 @@ def collect_large_practice(
     if workers > 1 and native_factory is not None:
         raise ValueError("native_factory injection requires workers=1")
     provenance = _collection_provenance(native_factory)
+    if (reuse_train_from is None) != (reuse_train_source is None):
+        raise ValueError("reuse requires both original corpus and original source")
+    if reuse_train_from is not None:
+        if native_factory is not None:
+            raise ValueError("reuse requires the real native driver")
+        provenance["imported_train"] = _import_provenance(
+            Path(reuse_train_from), Path(reuse_train_source), provenance
+        )
     plan = plan_large_practice(
         train_episodes=train_episodes,
         validation_episodes=validation_episodes,
@@ -1115,6 +1165,27 @@ def collect_large_practice(
         if (root / READY_MARKER).exists():
             raise FileExistsError(f"large-practice output is already complete: {root}")
         _validate_or_write_plan(root, plan, planner_seed, provenance)
+        imported = provenance.get("imported_train")
+        capture_provenance = {
+            key: value for key, value in provenance.items() if key != "imported_train"
+        }
+        if imported is not None:
+            origin = Path(imported["root"])
+            for spec in plan:
+                if spec.split != "train":
+                    continue
+                target_paths = _paths(root, spec)
+                if target_paths["receipt"].exists():
+                    continue
+                _validate_episode(origin, spec, imported["provenance"])
+                original_paths = _paths(origin, spec)
+                for key in ("episode", "config", "provenance", "receipt"):
+                    target_paths[key].parent.mkdir(parents=True, exist_ok=True)
+                    if target_paths[key].exists():
+                        if _sha256(target_paths[key]) != _sha256(original_paths[key]):
+                            raise LargePracticeError("partial import hash mismatch")
+                    else:
+                        shutil.copy2(original_paths[key], target_paths[key])
         pending: list[LargePracticeEpisode] = []
         for spec in plan:
             paths = _paths(root, spec)
@@ -1131,21 +1202,31 @@ def collect_large_practice(
                 _quarantine_partial(root, spec, existing)
                 pending.append(spec)
                 continue
-            _validate_episode(root, spec, provenance)
+            expected = (
+                imported["provenance"]
+                if imported and spec.split == "train"
+                else provenance
+            )
+            _validate_episode(root, spec, expected)
         if workers == 1:
             for spec in pending:
-                _collect_one(spec, root, native_factory, provenance)
+                _collect_one(spec, root, native_factory, capture_provenance)
         else:
             with ProcessPoolExecutor(max_workers=min(workers, MAX_WORKERS)) as pool:
                 futures = [
-                    pool.submit(_collect_one, spec, root, None, provenance)
+                    pool.submit(_collect_one, spec, root, None, capture_provenance)
                     for spec in pending
                 ]
                 for future in as_completed(futures):
                     future.result()
         records: dict[str, list[dict[str, Any]]] = {"train": [], "validation": []}
         for spec in plan:
-            records[spec.split].append(_validate_episode(root, spec, provenance))
+            expected = (
+                imported["provenance"]
+                if imported and spec.split == "train"
+                else provenance
+            )
+            records[spec.split].append(_validate_episode(root, spec, expected))
         seen_hashes: dict[str, str] = {}
         seen_config_identities: dict[str, str] = {}
         for split, rows in records.items():

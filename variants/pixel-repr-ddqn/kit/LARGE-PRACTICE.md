@@ -29,3 +29,5 @@ window = dataset[0]
 ```
 
 The historical training launchers still target the tiny corpus. A future training phase must explicitly use the large loader and freeze its sampling protocol; do not substitute the new directory into an old bounded launcher.
+
+The first full collection was withheld: one validation recording matched a training recording byte for byte. Difficulty differed between splits but did not change that empty-arena recording. The corrected planner uses difficulty 1 throughout. Version 2 imports the unchanged training captures only after checking their configurations, receipts, original source hash, capture-function AST, dependencies and native binary; it records that lineage and collects validation again. Version 1 remains unpublished. The pixel-hash rejection remains enabled.

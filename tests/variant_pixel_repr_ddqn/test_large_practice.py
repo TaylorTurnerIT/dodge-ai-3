@@ -23,6 +23,10 @@ from dodge_native_game.variants.pixel_repr_ddqn.large_practice import (
 def _semantic_config(spec: object) -> str:
     config = spec.config.to_dict()  # type: ignore[attr-defined]
     config["name"] = "<recipe>"
+    # Difficulty is frozen at native difficulty 1 in both splits.  Keep this
+    # normalization explicit so a future split marker cannot masquerade as a
+    # distinct recipe when every authored scene is otherwise identical.
+    config.pop("difficulty")
     return json.dumps(config, sort_keys=True, separators=(",", ":"))
 
 
@@ -64,6 +68,7 @@ def test_planner_keeps_player_only_controls_empty_and_geometry_native_valid(
     for item in plan:
         config = item.config
         assert config.invulnerable is True
+        assert config.difficulty == 1
         assert config.step_frames == 4
         assert config.max_decisions == 128
         assert 4.0 <= config.player_start[0] <= 124.0
@@ -230,3 +235,31 @@ def test_collection_hashes_match_receipt(tmp_path: Path) -> None:
     for record in manifest["episodes"]["train"] + manifest["episodes"]["validation"]:
         path = root / record["path"]
         assert hashlib.sha256(path.read_bytes()).hexdigest() == record["sha256"]
+
+
+@pytest.mark.parametrize("defect", ["source", "native", "dependency", "capture"])
+def test_import_rejects_unmatched_capture_provenance(
+    tmp_path: Path, defect: str
+) -> None:
+    from dodge_native_game.variants.pixel_repr_ddqn import large_practice as module
+
+    current = module._collection_provenance(None)
+    old = json.loads(json.dumps(current))
+    source = tmp_path / "source.py"
+    source.write_bytes(Path(module.__file__).read_bytes())
+    if defect == "source":
+        source.write_text(source.read_text() + "\n# changed\n")
+    elif defect == "native":
+        old["native_module_sha256"] = "0" * 64
+    elif defect == "dependency":
+        old["source_hashes"]["pixels"]["sha256"] = "0" * 64
+    else:
+        source.write_text(
+            source.read_text().replace(
+                "frames.append(_native_rgb", "frames.insert(0, _native_rgb"
+            )
+        )
+        old["generator_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    (tmp_path / "plan.json").write_text(json.dumps({"plan": {"provenance": old}}))
+    with pytest.raises(LargePracticeError):
+        module._import_provenance(tmp_path, source, current)
