@@ -75,3 +75,7 @@ Completed6,144 additional updates from the saved2048 decoder in70.982s on Tesla 
 Some player-like tails and squares are sharper, but often appear at incorrect positions. Training reconstruction continues improving while held-out error worsens. This supports an overfitting concern for the current-frame probe; it does not establish whether the decoder or the learned representation limits generalization. No prediction-specific tuning was performed.
 
 Comparison image: job `lewm-decoder128-20260915-v1-8192/decoder-2048-vs-8192.png`. Paired metrics, fixed-view checks and provenance: `comparison.json`. Dashboard retains all checkpoints;32 exported panel images verified native128×128, with no scrolling at1280×720 or1366×768. This iteration ends at8192.
+
+## Requested continuation to 32,768
+
+User asks32k; continue to32,768 total from8,192, adding24,576 updates. Same decoder, native128 current-frame MSE, optimizer/sampler state, LeWM and corpus. Expand/validate the bounded resume envelope, freeze source, then run on one T4 with3000s worker limit. Compare current-frame train/validation metrics and identical eight views at8192/32768. Prior generalization concerns remain recorded; this request authorizes the longer fit without treating prior results as a pass. Retrieve artifacts and release T4 at32768.

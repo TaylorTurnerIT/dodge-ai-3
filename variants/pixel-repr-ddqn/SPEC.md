@@ -401,3 +401,12 @@ B34|2026-09-15|Standalone artifact image helper used system Python without Pillo
 O.long.validation|338 local tests pass; Ruff clean; previous bounded smoke same task passed. Parent-reviewed Luna max resume extension; source freeze before8192 continuation.
 
 O.long.result|8192 complete;6144 additional updates from2048,70.982s fitting,T4 peak192290816B.338 local/119 remote tests; Ruff clean. Train current MSE0.000763095 (−39.59% vs2048);changed-current−44.51%. Validation current0.00366236 (+7.62%);changed-current0.139783 (+0.87%). Sharper player-like tails/squares in some views, frequently misplaced. Current-frame generalization weak; no prediction tuning. Resume/world/source/optimizer8192/sampler/fixedviews verified;32 native128 PNGs and both dashboard viewports pass. Artifacts retrieved,T4 released. Source4524c5f,archive3c7dd7ba33505d6a5668f79b9d6cdda255c21fccce7dd69a6d9125a9e64b1115. Stop8192; no controller promotion.
+
+
+§O.32k — current reconstruction continuation
+O12|accepted|implementation|Permit32768 total from8192 only; preserve prior envelopes|O11|Resume-step validation; full Python/Ruff; no optimizer/loss/model changes
+O13|active|diagnostic fitting|User32k interpreted32768 total;24576 additional updates|O12|One T4,3000s worker; frozen LeWM/data; saved optimizer/sampler; native128 current-frame MSE
+O14|unopened|evaluation|Compare8192/32768 fixed current views and train/validation errors|O13|Same controls and image resolution; state/hash verification; retrieve/releaseT4
+O.32k.authorization|Explicit user request supersedes8192 cap; stop32768. Hold prediction-specific tuning, collection and controllers.
+
+O.32k.validation|342 local tests pass; Ruff clean; bounded32-step legacy smoke expected warnings. Luna max envelope extension parent-reviewed; freeze before32768 continuation.
