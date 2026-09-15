@@ -405,8 +405,10 @@ O.long.result|8192 complete;6144 additional updates from2048,70.982s fitting,T4 
 
 §O.32k — current reconstruction continuation
 O12|accepted|implementation|Permit32768 total from8192 only; preserve prior envelopes|O11|Resume-step validation; full Python/Ruff; no optimizer/loss/model changes
-O13|active|diagnostic fitting|User32k interpreted32768 total;24576 additional updates|O12|One T4,3000s worker; frozen LeWM/data; saved optimizer/sampler; native128 current-frame MSE
-O14|unopened|evaluation|Compare8192/32768 fixed current views and train/validation errors|O13|Same controls and image resolution; state/hash verification; retrieve/releaseT4
+O13|complete|diagnostic fitting|User32k interpreted32768 total;24576 additional updates|O12|One T4,3000s worker; frozen LeWM/data; saved optimizer/sampler; native128 current-frame MSE
+O14|complete|evaluation|Compare8192/32768 fixed current views and train/validation errors|O13|Same controls and image resolution; state/hash verification; retrieve/releaseT4
 O.32k.authorization|Explicit user request supersedes8192 cap; stop32768. Hold prediction-specific tuning, collection and controllers.
 
 O.32k.validation|342 local tests pass; Ruff clean; bounded32-step legacy smoke expected warnings. Luna max envelope extension parent-reviewed; freeze before32768 continuation.
+
+O.32k.result|32768 complete;24576 new updates from8192,285.788s fitting,T4 peak192290816B.342 local/123 remote tests, Ruff/smoke pass. Train current MSE0.0000503655 (−93.40% vs8192),changed-current0.00231104 (−94.77%). Validation current0.00335008 (−8.53%),changed-current0.140285 (+0.36%); mean baseline0.00268604/0.137958 still better. Cleaner images, some sharper shapes; object placement inaccurate in held-out views. Resume/optimizer32768/sampler/source/world/fixedviews verified;32 native128 PNGs, both dashboard viewports pass. Artifacts retrieved,T4 released. Sourcea904395,archive92860e4d89a2cc3411eb2d52688badb8d48ea28e22ea4daba4d8f401fa4e33d7. Stop32768; no prediction-specific tuning or controller promotion.

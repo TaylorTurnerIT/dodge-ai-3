@@ -79,3 +79,18 @@ Comparison image: job `lewm-decoder128-20260915-v1-8192/decoder-2048-vs-8192.png
 ## Requested continuation to 32,768
 
 User asks32k; continue to32,768 total from8,192, adding24,576 updates. Same decoder, native128 current-frame MSE, optimizer/sampler state, LeWM and corpus. Expand/validate the bounded resume envelope, freeze source, then run on one T4 with3000s worker limit. Compare current-frame train/validation metrics and identical eight views at8192/32768. Prior generalization concerns remain recorded; this request authorizes the longer fit without treating prior results as a pass. Retrieve artifacts and release T4 at32768.
+
+## 32,768 result
+
+Completed24,576 additional updates from8192 in285.788s on Tesla T4. Same decoder, optimizer/sampler state, native128 pixel-MSE, frozen LeWM and corpus. All342 local and123 remote tests passed; Ruff clean and bounded smoke passed with expected warnings. Resume/source/world hashes and optimizer32768/sampler progression verified. Source `a904395`; archive SHA `92860e4d89a2cc3411eb2d52688badb8d48ea28e22ea4daba4d8f401fa4e33d7`. Artifacts retrieved; T4 released.
+
+| Current-frame reconstruction |8,192|32,768|Change|
+|---|---:|---:|---:|
+| Training MSE|0.000763095|0.0000503655|−93.40%|
+| Training changing-region MSE|0.0442144|0.00231104|−94.77%|
+| Held-out MSE|0.00366236|0.00335008|−8.53%|
+| Held-out changing-region MSE|0.139783|0.140285|+0.36%|
+
+Training reconstruction improves substantially. Held-out overall error improves, but remains above the fixed mean baseline0.00268604; changing-region error also remains above mean0.137958. Images look cleaner, with some sharper tails/squares, but object placement is often incorrect. Good training fit does not establish a generalizable representation or resolve whether decoder versus representation limits held-out accuracy.
+
+Job `lewm-decoder128-20260915-v1-32768` contains `decoder-8192-vs-32768.png`, `comparison.json`, source/protocol archive and browser screenshots. All32 panel PNGs verified128×128; both dashboard viewports pass without scrolling. All checkpoints retained. This iteration ends at32768; prediction-specific tuning remains deferred.
