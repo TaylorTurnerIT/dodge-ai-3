@@ -27,10 +27,81 @@ def png(tensor: torch.Tensor) -> str:
     return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
-def make_decoder(dimension: int) -> nn.Module:
+def make_decoder(dimension: int, output_size: int = 32) -> nn.Module:
     return nn.Sequential(
-        nn.Linear(dimension, 256), nn.GELU(), nn.Linear(256, 3 * 32 * 32), nn.Sigmoid()
+        nn.Linear(dimension, 256),
+        nn.GELU(),
+        nn.Linear(256, 3 * output_size * output_size),
+        nn.Sigmoid(),
     )
+
+
+def export_visualizations(
+    model,
+    decoder,
+    validation,
+    payload,
+    checkpoint_hash,
+    *,
+    output_size=32,
+    decoder_steps=256,
+):
+    """Export fixed held-out views at the decoder's actual output resolution."""
+    device = next(model.parameters()).device
+    snapshots = []
+    with torch.no_grad():
+        for index in np.linspace(
+            0, len(validation) - 1, min(8, len(validation)), dtype=int
+        ):
+            sample = validation[int(index)]
+            pixels = sample["pixels"].unsqueeze(0).to(device)
+            actions = sample["actions"].unsqueeze(0).to(device)
+            z, attention = model.encode_with_attention(pixels)
+            predicted = model.predict(z[:, :-1], actions)[:, -1]
+            current = z[:, -2]
+            decoded = decoder(torch.cat([current, predicted], dim=0)).view(
+                2, 3, output_size, output_size
+            )
+            values = current[0].cpu().tolist()
+            snapshots.append(
+                {
+                    "step": payload["step"],
+                    "model_label": payload["model_label"],
+                    "diagnostic_only": True,
+                    "frames": [
+                        {"label": "Observed current", "image": png(pixels[0, -2])},
+                        {"label": "Observed next", "image": png(pixels[0, -1])},
+                        {
+                            "label": "Decoded current (diagnostic)",
+                            "image": png(decoded[0]),
+                        },
+                        {
+                            "label": "Decoded prediction (diagnostic)",
+                            "image": png(decoded[1]),
+                        },
+                    ],
+                    "attention": {
+                        "values": attention[0, -2].cpu().tolist(),
+                        "label": "Current CLS attention; not an object mask",
+                    },
+                    "features": {
+                        "values": [values],
+                        "label": "Latent coordinates; not spatial positions",
+                    },
+                    "latent": {
+                        "actual": z[0, -1].cpu().tolist(),
+                        "predicted": predicted[0].cpu().tolist(),
+                    },
+                    "metadata": {
+                        "checkpoint_sha256": checkpoint_hash,
+                        "validation_window": int(index),
+                        "action": int(actions[0, -1]),
+                        "latent_mse": float(F.mse_loss(predicted, z[:, -1])),
+                        "decoder_steps": decoder_steps,
+                    },
+                }
+            )
+    return snapshots
 
 
 def fit_probe(
@@ -106,57 +177,9 @@ def fit_probe(
             message="Diagnostic fitting; world model frozen",
         )
     decoder.eval()
-    snapshots = []
-    with torch.no_grad():
-        for index in np.linspace(
-            0, len(validation) - 1, min(8, len(validation)), dtype=int
-        ):
-            sample = validation[int(index)]
-            pixels = sample["pixels"].unsqueeze(0).to(device)
-            actions = sample["actions"].unsqueeze(0).to(device)
-            z, attention = model.encode_with_attention(pixels)
-            predicted = model.predict(z[:, :-1], actions)[:, -1]
-            current = z[:, -2]
-            decoded = decoder(torch.cat([current, predicted], dim=0)).view(2, 3, 32, 32)
-            values = current[0].cpu().tolist()
-            snapshots.append(
-                {
-                    "step": payload["step"],
-                    "model_label": payload["model_label"],
-                    "diagnostic_only": True,
-                    "frames": [
-                        {"label": "Observed current", "image": png(pixels[0, -2])},
-                        {"label": "Observed next", "image": png(pixels[0, -1])},
-                        {
-                            "label": "Decoded current (diagnostic)",
-                            "image": png(decoded[0]),
-                        },
-                        {
-                            "label": "Decoded prediction (diagnostic)",
-                            "image": png(decoded[1]),
-                        },
-                    ],
-                    "attention": {
-                        "values": attention[0, -2].cpu().tolist(),
-                        "label": "Current CLS attention; not an object mask",
-                    },
-                    "features": {
-                        "values": [values],
-                        "label": "Latent coordinates; not spatial positions",
-                    },
-                    "latent": {
-                        "actual": z[0, -1].cpu().tolist(),
-                        "predicted": predicted[0].cpu().tolist(),
-                    },
-                    "metadata": {
-                        "checkpoint_sha256": checkpoint_hash,
-                        "validation_window": int(index),
-                        "action": int(actions[0, -1]),
-                        "latent_mse": float(F.mse_loss(predicted, z[:, -1])),
-                        "decoder_steps": steps,
-                    },
-                }
-            )
+    snapshots = export_visualizations(
+        model, decoder, validation, payload, checkpoint_hash, decoder_steps=steps
+    )
     for key, value in model.state_dict().items():
         if not torch.equal(before[key], value.detach().cpu()):
             raise RuntimeError(f"frozen world model changed: {key}")

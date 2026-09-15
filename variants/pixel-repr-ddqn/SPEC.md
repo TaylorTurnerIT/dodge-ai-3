@@ -222,6 +222,15 @@ V51|practice-batch32-v1 exact fresh referenceCUDA512updates,batch32,seed42, impo
 V52|Pixel diagnostics only:32×32 area targets, train-window current-frame mean baseline; validation-only abs(next-current) meanRGB>1/255 mask. No mask/mean input or loss to LeWM/decoder. Report global/changed-region SSE per channel-pixel, counts/null empty masks, per-episode metrics. Frozen model/decoder/modes/RNG preserved; static HUD recognition alone not entity retention evidence.
 V53|L resource cap:one T4,3000s worker,512 modelupdates,4×256 decoderupdates; baseline checkpoint/decoder read-only,no refit. Fixed old corpusSHA7769398938b2be30934779fc5851e767653df7b31b2e7fad7a2a0adcd80e6a1f. Stop source defect/OOM/nonfinite; no automatic batch fallback/extension/controller promotion.
 
+§O — full-resolution frozen decoder study
+O1|accepted|implementation|Native128 query decoder; frozen train cache; resumable optimizer/sampler; resolution-aware diagnostics|L3|Shape/patch order/gradient/cache/resume/native-metric tests; full Python/Ruff
+O2|active|diagnostic fitting|One query decoder256updates; frozen batch32/512 calibrated checkpoint|O1|One T4,3000s worker; seed904,batch8windows; no LeWM/collection updates
+O3|unopened|evaluation|Native128 primary,32 secondary; all56 validation windows and8 fixed views|O2|Verify hashes/tensors; trainmean/persistence/changing pixels; square dashboard. Promising only if changing-region current reconstruction beats trainmean and views recover scene-dependent detail beyond HUD. Then allow same decoder continuation to512 total; otherwise stop256. Validation exploratory, no generalization claim.
+V54|User requests1:1 reconstruction: query decoder target/render native128RGB; prior32 MVP shortcut. Train loss plain native128MSE;32 metrics historical only. Existing historical32runs/defaults unchanged.
+V55|Fixed finalbatch32/512 encoder-calibrated LeWM; projected192latents cached train only. One fresh query decoder hidden128,3blocks,4heads,64queries,patch16,no dropout.256updates,batch8windows×4frames,AdamW1e-3/decay0.01,seeds904init/903sampling(discard2). Optional continuation to512 total only after O3 promising review; resume weights/optimizer/sampler exactly. No validation gradients, new game/transitions/world updates. Earlier two-decoder2048 plan superseded by user.
+V56|Paper decoder absent pinned repository; structure AppendixD, reuse releasedFeedForward. Native128/64queries/projectedlatent input local adaptations; paper224/196queries/preprojectionCLS. No exact reproduction claim. Preserve original world tensors/BN/files; detached train cache; decoder-only gradients. Source/data/resume hashes recorded.
+
+
 §T
 id|status|task|cites
 ---|---|---|---
@@ -291,6 +300,9 @@ T55|x|K3/K4: T4 screen and original/calibrated diagnostics|V14,V48-V50
 T56|x|L1: bounded batch32/checkpoint retention and pixel controls|V48,V51-V53
 T57|x|L2/L3: matched-exposure/update T4 screen and visual review|V48,V51-V53
 
+T58|x|O1: native-resolution frozen decoder implementation|V48,V52,V54-V56
+T59|~|O2/O3: T4 decoder fits and held-out nativepixel review|V48,V52,V54-V56
+
 §B
 id|date|cause|fix
 ---|---|---|---
@@ -344,3 +356,11 @@ B27|2026-09-15|Batch-screen first lint:long comparison string/import grouping|Sh
 B28|2026-09-15|Probe integration hung: legacy fake dataset __getitem__ accepted unlimited indices, violating Python sequence iteration boundary|Fixture raises IndexError at len; real dataset already bounded. Existing episode-boundary invariant sufficient; stop duplicate task tests and rerun full suite
 
 L.result|323local/104remote tests; T4 batch32/512 completed565.81s,peak6.591GB. Calibrated128train/val ratios0.79615/0.95307;512ratios0.20840/0.99491.512wrong-action penalty+249.30%train/+9.62%val. Changed-pixel prediction error improved7.45% vspriorcalibrated, all4episodes; still17.93%worse than pixelpersistence. Fixed train-mean beats global reconstruction; no clear entity outlines. Exact128×32 sampling prefix equals prior512×8; all learned tensors/calibration/decoder links verified. Artifacts retrieved,T4 released; no controller promotion.
+
+B29|2026-09-15|Decoder-launcher first lint:long failure string/import grouping while study module pending|Split string;format imports aftermoduleexists; existinglint invariant sufficient
+
+B30|2026-09-15|Study review:cache lacked explicit train-split guard and draft evaluated first decoder before second fit|Enforce traincache split; finishbothfits beforeevaluation; existingV55 covers; addcache rejectiontest
+
+B31|2026-09-15|Bounded decoder launcher/current-region metrics exceeded Ruff line length|Format authored files; mechanical issue, existing V18 sufficient
+
+O.validation|337 local tests pass; Ruff clean; exact split-fit resume equality; legacy32-step smoke expected bounded warnings. Source freeze before one T4 query256 fit.

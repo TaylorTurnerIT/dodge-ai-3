@@ -13,7 +13,6 @@ import torch.nn.functional as F
 
 __all__ = ["evaluate_pixels"]
 
-_OUTPUT_SIZE = (32, 32)
 _CHANNELS = 3
 _CHANGED_THRESHOLD = 1.0 / 255.0
 
@@ -59,29 +58,26 @@ def _rgb01(pixels: torch.Tensor) -> torch.Tensor:
     return values
 
 
-def _area_targets(pixels: torch.Tensor) -> torch.Tensor:
+def _area_targets(pixels: torch.Tensor, output_size: int = 32) -> torch.Tensor:
     values = _rgb01(pixels)
-    return F.interpolate(values, size=_OUTPUT_SIZE, mode="area")
+    return F.interpolate(values, size=(output_size, output_size), mode="area")
 
 
-def _decode(decoder: torch.nn.Module, latent: torch.Tensor) -> torch.Tensor:
+def _decode(
+    decoder: torch.nn.Module, latent: torch.Tensor, output_size: int = 32
+) -> torch.Tensor:
     decoded = decoder(latent)
     if decoded.ndim == 2:
-        expected = _CHANNELS * _OUTPUT_SIZE[0] * _OUTPUT_SIZE[1]
-        if decoded.shape[1] != expected:
-            raise ValueError(
-                f"decoder output must contain {expected} values per frame, "
-                f"got {decoded.shape[1]}"
-            )
-        decoded = decoded.reshape(-1, _CHANNELS, *_OUTPUT_SIZE)
-    elif decoded.ndim == 4 and decoded.shape[1] == _CHANNELS:
-        if decoded.shape[-2:] != _OUTPUT_SIZE:
-            decoded = F.interpolate(decoded, size=_OUTPUT_SIZE, mode="area")
-    else:
-        raise ValueError(
-            "decoder output must have shape (B,3,32,32) or (B,3072), "
-            f"got {tuple(decoded.shape)}"
-        )
+        side = math.isqrt(decoded.shape[1] // _CHANNELS)
+        if side < 1 or side * side * _CHANNELS != decoded.shape[1]:
+            raise ValueError("decoder output must contain square RGB frames")
+        decoded = decoded.reshape(-1, _CHANNELS, side, side)
+    if decoded.ndim != 4 or decoded.shape[1] != _CHANNELS:
+        raise ValueError("decoder output must contain square RGB frames")
+    if decoded.shape[-2] != decoded.shape[-1]:
+        raise ValueError("decoder output must contain square RGB frames")
+    if decoded.shape[-2:] != (output_size, output_size):
+        decoded = F.interpolate(decoded, size=(output_size, output_size), mode="area")
     decoded = decoded.float()
     if not bool(torch.isfinite(decoded).all()):
         raise RuntimeError("decoder produced nonfinite pixels")
@@ -121,11 +117,7 @@ def _episode_ids(raw: object, batch: int) -> list[str]:
 def _rng_devices(device: torch.device) -> list[int]:
     if device.type != "cuda":
         return []
-    return [
-        device.index
-        if device.index is not None
-        else torch.cuda.current_device()
-    ]
+    return [device.index if device.index is not None else torch.cuda.current_device()]
 
 
 @dataclass
@@ -140,6 +132,8 @@ class _Accumulator:
     next_prediction_sum: float = 0.0
     next_persistence_sum: float = 0.0
     next_mean_image_sum: float = 0.0
+    changed_pixel_current_reconstruction_sum: float = 0.0
+    changed_pixel_current_mean_image_sum: float = 0.0
     changed_pixel_prediction_sum: float = 0.0
     changed_pixel_persistence_sum: float = 0.0
     changed_pixel_mean_image_sum: float = 0.0
@@ -195,6 +189,12 @@ class _Accumulator:
 
         changed_channels = changed.unsqueeze(1)
         self.changed_pixel_count += int(changed.sum())
+        self.changed_pixel_current_reconstruction_sum += float(
+            (current_errors * changed_channels).sum()
+        )
+        self.changed_pixel_current_mean_image_sum += float(
+            (current_mean_errors * changed_channels).sum()
+        )
         changed_sums = (
             (next_errors * changed_channels).sum(),
             (persistence_errors * changed_channels).sum(),
@@ -255,6 +255,13 @@ class _Accumulator:
             "next_prediction_mse": next_prediction,
             "next_persistence_mse": next_persistence,
             "next_mean_image_mse": mean(self.next_mean_image_sum, channel_pixel_count),
+            "changed_pixel_current_reconstruction_mse": mean(
+                self.changed_pixel_current_reconstruction_sum,
+                changed_channel_pixel_count,
+            ),
+            "changed_pixel_current_mean_image_mse": mean(
+                self.changed_pixel_current_mean_image_sum, changed_channel_pixel_count
+            ),
             "changed_pixel_prediction_mse": changed_prediction,
             "changed_pixel_persistence_mse": changed_persistence,
             "changed_pixel_mean_image_mse": mean(
@@ -296,6 +303,8 @@ def evaluate_pixels(
     train_dataset: Iterable[Mapping[str, Any]],
     validation_dataset: Iterable[Mapping[str, Any]],
     device: torch.device | str,
+    *,
+    output_size: int = 32,
 ) -> dict[str, object]:
     """Evaluate frozen latent decoding and pixel controls over all windows.
 
@@ -306,6 +315,12 @@ def evaluate_pixels(
     intentionally changed.
     """
 
+    if (
+        isinstance(output_size, bool)
+        or not isinstance(output_size, int)
+        or output_size < 1
+    ):
+        raise ValueError("output_size must be a positive integer")
     target_device = torch.device(device)
     modules, modes = _module_modes(model, decoder)
     model.eval()
@@ -313,14 +328,15 @@ def evaluate_pixels(
     global_stats = _Accumulator()
     episode_stats: defaultdict[str, _Accumulator] = defaultdict(_Accumulator)
     try:
-        with torch.random.fork_rng(
-            devices=_rng_devices(target_device)
-        ), torch.no_grad():
+        with (
+            torch.random.fork_rng(devices=_rng_devices(target_device)),
+            torch.no_grad(),
+        ):
             mean_sum: torch.Tensor | None = None
             train_count = 0
             for sample in train_dataset:
                 pixels = _as_pixel_batch(sample["pixels"])
-                current = _area_targets(pixels[:, -2])
+                current = _area_targets(pixels[:, -2], output_size)
                 _require_finite(current, "training pixel target")
                 batch_count = int(current.shape[0])
                 batch_sum = current.sum(dim=0)
@@ -346,16 +362,15 @@ def evaluate_pixels(
                 _require_finite(encoded, "encoded latent")
                 predicted = model.predict(encoded[:, :-1], actions)[:, -1]
                 _require_finite(predicted, "predicted latent")
-                current_prediction = _decode(decoder, encoded[:, -2])
-                next_prediction = _decode(decoder, predicted)
+                current_prediction = _decode(decoder, encoded[:, -2], output_size)
+                next_prediction = _decode(decoder, predicted, output_size)
                 current_target, next_target = (
-                    _area_targets(pixels[:, -2]),
-                    _area_targets(pixels[:, -1]),
+                    _area_targets(pixels[:, -2], output_size),
+                    _area_targets(pixels[:, -1], output_size),
                 )
-                changed = (
-                    (next_target - current_target).abs().mean(dim=1)
-                    > _CHANGED_THRESHOLD
-                )
+                changed = (next_target - current_target).abs().mean(
+                    dim=1
+                ) > _CHANGED_THRESHOLD
                 global_stats.add(
                     current_target=current_target,
                     next_target=next_target,
@@ -381,11 +396,10 @@ def evaluate_pixels(
     return {
         **global_stats.as_dict(),
         "train_window_count": train_count,
-        "output_size": _OUTPUT_SIZE[0],
+        "output_size": output_size,
         "changed_threshold": _CHANGED_THRESHOLD,
         "evaluation_only": True,
         "per_episode": {
-            episode_id: stats.as_dict()
-            for episode_id, stats in episode_stats.items()
+            episode_id: stats.as_dict() for episode_id, stats in episode_stats.items()
         },
     }

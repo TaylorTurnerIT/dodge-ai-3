@@ -154,3 +154,36 @@ def test_nonfinite_decoder_fails_and_restores_modes_rng():
         evaluate_pixels(model, decoder, [window], [window], "cpu")
     assert model.training and decoder.training
     assert torch.equal(before, torch.get_rng_state())
+
+
+def test_native_resolution_preserves_small_pixel_targets():
+    class FlatDecoder(nn.Module):
+        def forward(self, latent):
+            return latent
+
+    current = torch.zeros(3, 128, 128, dtype=torch.uint8)
+    following = current.clone()
+    following[:, 40, 60] = 255
+    window = _window(current, following, "native")
+    model, decoder = IdentityToyModel(), FlatDecoder()
+    full = evaluate_pixels(model, decoder, [window], [window], "cpu", output_size=128)
+    reduced = evaluate_pixels(model, decoder, [window], [window], "cpu")
+    assert full["output_size"] == 128
+    assert full["total_pixel_count"] == 128 * 128
+    assert full["changed_pixel_count"] == 1
+    assert full["changed_pixel_persistence_mse"] == 1.0
+    assert reduced["output_size"] == 32
+    assert reduced["changed_pixel_persistence_mse"] == 1 / 256
+    assert full["current_reconstruction_mse"] == 0.0
+
+
+def test_changed_current_reconstruction_uses_current_target():
+    train = [_window(_frame(0), _frame(0), "train")]
+    validation = [_window(_frame(0, moving=(2, 3)), _frame(0), "validation")]
+    result = evaluate_pixels(
+        IdentityToyModel(), IdentityToyDecoder(), train, validation, "cpu"
+    )
+    assert result["changed_pixel_current_reconstruction_mse"] == 0.0
+    assert result["changed_pixel_current_mean_image_mse"] == 1.0
+    assert result["changed_pixel_prediction_mse"] == 1.0
+    assert result["changed_pixel_mean_image_mse"] == 0.0

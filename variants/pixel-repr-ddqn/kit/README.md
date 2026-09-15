@@ -1,3 +1,5 @@
+Current iteration: [native-resolution frozen decoder study](DECODER-STUDY.md), SPEC §O. One query decoder reconstructs128×128:256updates first, conditional continuation to512total; LeWM remains frozen.
+
 Latest iteration: [batch-size screen and pixel controls](BATCH-SCREEN.md), SPEC §L complete. Stronger training action conditioning;7.45% lower changed-region decoder error, but held-out dynamics remain near persistence and global reconstruction loses to a fixed mean image. Both128 and512 checkpoints retained.
 
 Prior result: [calibrated diverse-practice screen](CALIBRATED-PRACTICE.md), SPEC §K. K1-K4 complete. Encoder calibration brings held-out error close to persistence, with a modest wrong-action penalty; decoded entities remain indistinct. Reference architecture unchanged; controllers deferred.
