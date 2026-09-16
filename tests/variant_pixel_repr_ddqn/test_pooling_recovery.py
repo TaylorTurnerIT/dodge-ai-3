@@ -69,3 +69,10 @@ def test_worker_spatial_recovery_matches_extract_patches_signature() -> None:
     assert params[:3] == ["model", "bank", "root"]
     for name in ("model", "getattr(bank, split)", "target"):
         assert name in snippet
+
+
+def test_worker_recovery_scopes_to_absent_targets() -> None:
+    worker = Path("variants/pixel-repr-ddqn/scripts/colab_pooling_worker.py")
+    source = worker.read_text()
+    block = source[source.index("def _recover_missing") :]
+    assert "if not (inputs / key).exists()" in block.split("dataset =")[0]

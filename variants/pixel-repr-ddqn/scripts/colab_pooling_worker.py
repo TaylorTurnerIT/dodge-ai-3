@@ -96,7 +96,13 @@ def _recover_missing(
         extract_patches,
     )
 
-    recovery_targets = dict(protocol.get("recovery_targets", {}))
+    # Scope recovery to files that are actually absent: earlier verified
+    # splits stay untouched and their builders never see existing targets.
+    recovery_targets = {
+        key: value
+        for key, value in protocol.get("recovery_targets", {}).items()
+        if not (inputs / key).exists()
+    }
     dataset = inputs / "dataset"
     checkpoint = inputs / "world.pt"
     if file_hash(checkpoint) != protocol["inputs"]["world.pt"]:
