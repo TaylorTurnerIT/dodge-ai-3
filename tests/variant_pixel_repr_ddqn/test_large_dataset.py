@@ -229,3 +229,72 @@ def test_unpublished_corpus_requires_explicit_validation_mode(tmp_path: Path) ->
     with pytest.raises(DatasetValidationError, match="READY"):
         LargePixelSequenceDataset(tmp_path)
     validate_dataset(tmp_path, require_ready=False)
+
+
+def test_fast_cache_windows_match_compressed_loads(tmp_path: Path) -> None:
+    import torch
+
+    from dodge_native_game.variants.pixel_repr_ddqn.large_dataset import (
+        LargePixelSequenceDataset,
+        materialize_uncompressed,
+    )
+
+    root = tmp_path / "dataset"
+    _make_dataset(root, train_count=2, validation_count=1)
+    fast = tmp_path / "fast"
+    summary = materialize_uncompressed(root, "train", fast)
+    assert summary == {"split": "train", "episodes": 2, "converted": 2}
+    repeat = materialize_uncompressed(root, "train", fast)
+    assert repeat["converted"] == 0
+    plain = LargePixelSequenceDataset(root, split="train", history_size=3)
+    fast_ds = LargePixelSequenceDataset(
+        root, split="train", history_size=3, fast_dir=fast
+    )
+    assert len(fast_ds) == len(plain)
+    for index in (0, 5, len(plain) - 1):
+        slow = plain[index]
+        quick = fast_ds[index]
+        assert torch.equal(slow["pixels"], quick["pixels"])
+        assert torch.equal(slow["actions"], quick["actions"])
+        assert slow["episode_id"] == quick["episode_id"]
+        assert slow["start"] == quick["start"]
+
+
+def test_fast_cache_rejects_tampered_bytes(tmp_path: Path) -> None:
+    from dodge_native_game.variants.pixel_repr_ddqn.large_dataset import (
+        DatasetValidationError,
+        LargePixelSequenceDataset,
+        materialize_uncompressed,
+    )
+
+    root = tmp_path / "dataset"
+    _make_dataset(root, train_count=1, validation_count=1)
+    fast = tmp_path / "fast"
+    materialize_uncompressed(root, "train", fast)
+    tampered = fast / "train-000000.pixels.npy"
+    with tampered.open("r+b") as stream:
+        stream.seek(200)
+        stream.write(b"\x00\x01\x02\x03")
+    poisoned = LargePixelSequenceDataset(
+        root, split="train", history_size=3, fast_dir=fast
+    )
+    with pytest.raises(DatasetValidationError, match="fast cache pixels mismatch"):
+        poisoned[0]
+
+
+def test_fast_cache_rejects_foreign_manifest(tmp_path: Path) -> None:
+    from dodge_native_game.variants.pixel_repr_ddqn.large_dataset import (
+        DatasetValidationError,
+        LargePixelSequenceDataset,
+        materialize_uncompressed,
+    )
+
+    root = tmp_path / "dataset"
+    _make_dataset(root, train_count=2, validation_count=1)
+    fast = tmp_path / "fast"
+    materialize_uncompressed(root, "train", fast)
+    (root / "manifest.json").write_text(
+        (root / "manifest.json").read_text().replace("train-000001", "train-9x9x9x")
+    )
+    with pytest.raises(DatasetValidationError, match="dataset manifest mismatch"):
+        LargePixelSequenceDataset(root, split="train", history_size=3, fast_dir=fast)

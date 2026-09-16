@@ -134,3 +134,28 @@ def test_scale_remote_driver_without_wheel_builds_toolchain() -> None:
     compile(driver, "<scale-remote-driver>", "exec")
     assert "WHEEL_CAPTURED" in driver
     assert "cargo" in driver
+
+
+def test_scale_protocol_records_batch_and_precision(tmp_path: Path) -> None:
+    launcher = _launcher()
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    (dataset / "manifest.json").write_bytes(b"{\"fixture\":true}\n")
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "checkpoint.pt").write_bytes(b"fake-checkpoint")
+    (base / "sample-trace.json").write_bytes(b"[]")
+    (base / "stochastic-trace.json").write_bytes(b"[]")
+    protocol = launcher.build_scale_protocol(
+        run_id="scale-test",
+        dataset=dataset,
+        base_checkpoint=base / "checkpoint.pt",
+        base_step=5120,
+        extra_steps=4096,
+        checkpoint_every=1024,
+        source_commit="c" * 40,
+        batch_size=128,
+        precision="bf16",
+    )
+    assert protocol["world_batch_size"] == 128
+    assert protocol["precision"] == "bf16"

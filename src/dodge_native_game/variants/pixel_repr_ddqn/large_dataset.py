@@ -420,6 +420,7 @@ class LargePixelSequenceDataset(Dataset[dict[str, object]]):
         split: str = "train",
         history_size: int = LARGE_DEFAULT_HISTORY_SIZE,
         cache_size: int = LARGE_DEFAULT_CACHE_SIZE,
+        fast_dir: Path | None = None,
     ) -> None:
         if split not in LARGE_SPLITS:
             raise ValueError("split must be 'train' or 'validation'")
@@ -450,6 +451,15 @@ class LargePixelSequenceDataset(Dataset[dict[str, object]]):
         self._cache: OrderedDict[int, tuple[np.ndarray, np.ndarray]] = OrderedDict()
         self._cache_hits = 0
         self._cache_misses = 0
+        self._fast_dir = Path(fast_dir) if fast_dir is not None else None
+        self._fast_verified: set[int] = set()
+        if self._fast_dir is not None:
+            self._fast_manifest = _read_fast_manifest(
+                self._fast_dir,
+                split,
+                metadata.manifest,
+                _sha256(self.root / "manifest.json"),
+            )
 
     @property
     def episode_count(self) -> int:
@@ -480,14 +490,55 @@ class LargePixelSequenceDataset(Dataset[dict[str, object]]):
             self._cache_hits += 1
             return cached
         self._cache_misses += 1
-        value = _read_episode(self._records[episode_index], verify_hash=True)
-        value[0].setflags(write=False)
-        value[1].setflags(write=False)
+        if self._fast_dir is not None:
+            value = self._load_fast_episode(episode_index)
+        else:
+            value = _read_episode(self._records[episode_index], verify_hash=True)
+            value[0].setflags(write=False)
+            value[1].setflags(write=False)
         self._cache[episode_index] = value
         self._cache.move_to_end(episode_index)
         while len(self._cache) > self.cache_size:
             self._cache.popitem(last=False)
         return value
+
+    def _load_fast_episode(
+        self, episode_index: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Load one episode from the uncompressed cache (mmap, zero-copy).
+
+        Converted bytes are hash-verified against the conversion manifest
+        once per dataset instance; the conversion itself verified the
+        frozen npz sources, so steady-state loads skip decompression and
+        per-load hashing entirely.
+        """
+
+        assert self._fast_dir is not None
+        record = self._records[episode_index]
+        entry = self._fast_manifest[record.episode_id]
+        pixels_path = self._fast_dir / f"{record.episode_id}.pixels.npy"
+        actions_path = self._fast_dir / f"{record.episode_id}.actions.npy"
+        if episode_index not in self._fast_verified:
+            if _sha256(pixels_path) != entry["pixels_sha256"]:
+                raise DatasetValidationError(
+                    f"fast cache pixels mismatch: {record.episode_id}"
+                )
+            if _sha256(actions_path) != entry["actions_sha256"]:
+                raise DatasetValidationError(
+                    f"fast cache actions mismatch: {record.episode_id}"
+                )
+            self._fast_verified.add(episode_index)
+        pixels = np.load(pixels_path, mmap_mode="r")
+        actions = np.load(actions_path, mmap_mode="r")
+        if pixels.dtype != np.uint8 or actions.dtype != np.int64:
+            raise DatasetValidationError(
+                f"fast cache dtype invalid: {record.episode_id}"
+            )
+        if pixels.shape[0] != record.count + 1 or actions.shape[0] != record.count:
+            raise DatasetValidationError(
+                f"fast cache shape invalid: {record.episode_id}"
+            )
+        return pixels, actions
 
     def __getitem__(self, index: int) -> dict[str, object]:
         if isinstance(index, bool) or not isinstance(index, (int, np.integer)):
@@ -509,6 +560,91 @@ class LargePixelSequenceDataset(Dataset[dict[str, object]]):
         }
 
 
+FAST_CACHE_MANIFEST: Final = "fast-manifest.json"
+
+
+def _read_fast_manifest(
+    fast_dir: Path, split: str, manifest: Mapping[str, Any], manifest_sha256: str
+) -> dict[str, dict[str, str]]:
+    """Load and cross-check an uncompressed conversion manifest."""
+
+    path = fast_dir / FAST_CACHE_MANIFEST
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise DatasetValidationError(
+            f"fast cache manifest unreadable: {path}"
+        ) from error
+    if payload.get("split") != split:
+        raise DatasetValidationError("fast cache split mismatch")
+    if payload.get("dataset_manifest_sha256") != manifest_sha256:
+        raise DatasetValidationError("fast cache dataset manifest mismatch")
+    records = manifest.get("episodes", {}).get(split, [])
+    expected_ids = {
+        record["episode_id"] for record in records  # type: ignore[union-attr]
+    }
+    entries = payload.get("episodes", {})
+    if set(entries) != expected_ids:
+        raise DatasetValidationError("fast cache episode set mismatch")
+    return entries
+
+
+def materialize_uncompressed(
+    root: Path, split: str, dest: Path
+) -> dict[str, object]:
+    """Convert one split to uncompressed mmap-able arrays (verified once).
+
+    Each source npz is hash-verified against the frozen manifest during
+    conversion; converted bytes are recorded so training loads verify each
+    file once per dataset instance and then skip decompression entirely.
+    Safe to re-run: completed episodes are skipped by digest comparison.
+    """
+
+    root, dest = Path(root), Path(dest)
+    metadata = read_dataset_metadata(root)
+    records = metadata.records[split]
+    dest.mkdir(parents=True, exist_ok=True)
+    manifest_path = dest / FAST_CACHE_MANIFEST
+    try:
+        existing = json.loads(manifest_path.read_text()).get("episodes", {})
+    except (OSError, json.JSONDecodeError, AttributeError):
+        existing = {}
+    entries: dict[str, dict[str, str]] = {}
+    converted = 0
+    for record in records:
+        pixels_path = dest / f"{record.episode_id}.pixels.npy"
+        actions_path = dest / f"{record.episode_id}.actions.npy"
+        known = existing.get(record.episode_id, {})
+        if (
+            pixels_path.is_file()
+            and actions_path.is_file()
+            and known.get("source_sha256") == record.sha256
+            and _sha256(pixels_path) == known.get("pixels_sha256")
+            and _sha256(actions_path) == known.get("actions_sha256")
+        ):
+            entries[record.episode_id] = known
+            continue
+        pixels, actions = _read_episode(record, verify_hash=True)
+        with pixels_path.open("wb") as stream:
+            np.save(stream, np.ascontiguousarray(pixels))
+        with actions_path.open("wb") as stream:
+            np.save(stream, np.ascontiguousarray(actions))
+        entries[record.episode_id] = {
+            "pixels_sha256": _sha256(pixels_path),
+            "actions_sha256": _sha256(actions_path),
+            "source_sha256": record.sha256,
+        }
+        converted += 1
+    payload = {
+        "split": split,
+        "dataset_format": LARGE_DATASET_FORMAT,
+        "dataset_manifest_sha256": _sha256(root / "manifest.json"),
+        "episodes": entries,
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2) + "\n")
+    return {"split": split, "episodes": len(entries), "converted": converted}
+
+
 def make_large_dataset(
     root: Path,
     *,
@@ -526,6 +662,7 @@ def make_large_dataset(
 __all__ = [
     "CacheInfo",
     "DatasetValidationError",
+    "FAST_CACHE_MANIFEST",
     "LARGE_DATASET_FORMAT",
     "LARGE_DATASET_SCHEMA_VERSION",
     "LARGE_DEFAULT_CACHE_SIZE",
@@ -540,6 +677,7 @@ __all__ = [
     "LargeEpisodeRecord",
     "LargePixelSequenceDataset",
     "make_large_dataset",
+    "materialize_uncompressed",
     "read_dataset_metadata",
     "validate_dataset",
 ]

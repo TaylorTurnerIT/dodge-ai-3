@@ -34,7 +34,6 @@ def main() -> None:
     expected = {
         "experiment": "lewm-scale-continuation-v1",
         "input_arm": "palette",
-        "world_batch_size": 32,
         "world_init_seed": 42,
         "world_sampling_seed": 43,
         "world_stochastic_seed": 44,
@@ -43,6 +42,10 @@ def main() -> None:
     for key, value in expected.items():
         if protocol.get(key) != value:
             raise ValueError(f"Scale protocol mismatch: {key}")
+    if protocol.get("world_batch_size") not in (32, 128):
+        raise ValueError("Scale protocol batch size not supported")
+    if protocol.get("precision", "float32") not in ("float32", "bf16"):
+        raise ValueError("Scale protocol precision not supported")
     extra_steps = int(protocol["extra_steps"])
     base_step = int(protocol["base_step"])
     if extra_steps < 1 or base_step < 1:
@@ -66,6 +69,8 @@ def main() -> None:
         run,
         extra_steps=extra_steps,
         checkpoint_every=int(protocol["checkpoint_every"]),
+        batch_size=int(protocol["world_batch_size"]),
+        precision=str(protocol.get("precision", "float32")),
         device="cuda",
     )
     checkpoint = Path(result["checkpoint"])  # type: ignore[arg-type]

@@ -408,7 +408,7 @@ def test_continue_run_rejects_bad_protocol() -> None:
         input_pretrain._validate_continue_protocol(
             extra_steps=0, batch_size=32, device="cpu", threads=1
         )
-    with pytest.raises(ValueError, match="batch32"):
+    with pytest.raises(ValueError, match=r"batch\(32, 128\)"):
         input_pretrain._validate_continue_protocol(
             extra_steps=8, batch_size=8, device="cpu", threads=1
         )
@@ -449,6 +449,7 @@ def test_continue_run_matches_fresh_prefix_plus_suffix(
         batch_size=input_pretrain.BATCH_SIZE,
         device="cpu",
         threads=1,
+        fetch_workers=2,
     )
     fresh_payload = torch.load(
         fresh["checkpoints"]["palette"], map_location="cpu", weights_only=False
@@ -471,3 +472,99 @@ def test_continue_run_matches_fresh_prefix_plus_suffix(
     manifest = json.loads(resumed["manifest"].read_text())
     assert manifest["base_step"] == 4
     assert manifest["steps"] == 8
+
+
+def test_trace_accumulator_matches_full_rehash_at_every_length() -> None:
+    entries = [
+        {"step": step, "pre_sha256": "a" * 64, "post_sha256": "b" * 64,
+         "arms_equal": True}
+        for step in range(1, 65)
+    ]
+    assert input_pretrain.TraceAccumulator().hexdigest() == (
+        input_pretrain._trace_hash([])
+    )
+    accumulator = input_pretrain.TraceAccumulator()
+    for length, entry in enumerate(entries, start=1):
+        accumulator.add(entry)
+        assert len(accumulator) == length
+        assert accumulator.hexdigest() == (
+            input_pretrain._trace_hash(entries[:length])
+        )
+    seeded = input_pretrain.TraceAccumulator(entries[:17])
+    assert seeded.hexdigest() == input_pretrain._trace_hash(entries[:17])
+    for entry in entries[17:]:
+        seeded.add(entry)
+    assert seeded.hexdigest() == input_pretrain._trace_hash(entries)
+
+
+def test_continue_protocol_accepts_scale_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(input_pretrain.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        input_pretrain.torch.cuda, "get_device_name", lambda index: "Tesla T4"
+    )
+    input_pretrain._validate_continue_protocol(
+        extra_steps=4096,
+        batch_size=128,
+        device="cuda",
+        threads=2,
+        fetch_workers=2,
+        precision="bf16",
+    )
+    with pytest.raises(ValueError, match="batch"):
+        input_pretrain._validate_continue_protocol(
+            extra_steps=8, batch_size=64, device="cpu", threads=1
+        )
+    with pytest.raises(ValueError, match="precision"):
+        input_pretrain._validate_continue_protocol(
+            extra_steps=8, batch_size=32, device="cpu", threads=1,
+            precision="fp16",
+        )
+
+
+def test_continue_run_records_batch_and_precision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    dataset_root = tmp_path / "dataset"
+    dataset_root.mkdir()
+    (dataset_root / "manifest.json").write_bytes(b"{\"fixture\":true}\n")
+    data_hash = input_pretrain.file_hash(dataset_root / "manifest.json")
+    palette = replace(
+        _palette_provenance(), dataset_manifest_sha256=data_hash
+    )
+    _continue_fixture(monkeypatch, palette)
+    monkeypatch.setattr(input_pretrain, "CHECKPOINT_STEPS", (2, 4))
+    monkeypatch.setattr(input_pretrain, "STEPS", 4)
+    input_pretrain.run_pair(
+        dataset_root,
+        tmp_path / "history-fresh",
+        run_id="fixture-batch",
+        steps=4,
+        batch_size=input_pretrain.BATCH_SIZE,
+        device="cpu",
+        threads=1,
+    )
+    half = tmp_path / "history-fresh" / "fixture-batch-palette" / "checkpoint-2.pt"
+    resumed = input_pretrain.continue_run(
+        half,
+        dataset_root,
+        tmp_path / "history-resumed",
+        "fixture-batch-resumed",
+        extra_steps=2,
+        checkpoint_every=2,
+        batch_size=128,
+        device="cpu",
+        threads=1,
+        fetch_workers=1,
+        precision="bf16",
+    )
+    payload = torch.load(
+        resumed["checkpoint"], map_location="cpu", weights_only=False
+    )
+    assert payload["step"] == 4
+    assert payload["batch_size"] == 128
+    assert payload["precision"] == "bf16"
+    manifest = json.loads(resumed["manifest"].read_text())
+    assert manifest["batch_size"] == 128
+    assert manifest["precision"] == "bf16"

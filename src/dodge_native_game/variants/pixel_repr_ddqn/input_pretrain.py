@@ -16,6 +16,8 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from queue import Queue
+from threading import Thread
 from typing import Any, Final
 
 import numpy as np
@@ -79,10 +81,12 @@ WEIGHT_DECAY: Final[float] = 1e-3
 GRADIENT_CLIP: Final[float] = 1.0
 
 
+def _canonical_item(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
 def _canonical_json(value: object) -> bytes:
-    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode(
-        "utf-8"
-    )
+    return _canonical_item(value) + b"\n"
 
 
 def _pretty_json(value: object) -> bytes:
@@ -193,6 +197,40 @@ def _trace_hash(entries: Sequence[Mapping[str, object]]) -> str:
     return _sha256_bytes(_canonical_json(list(entries)))
 
 
+class TraceAccumulator:
+    """O(1)-per-step trace hashing with byte-identical digests.
+
+    ``_trace_hash`` re-serializes the whole list every step (O(n) per
+    step, O(n^2) per run).  Canonical JSON of a list is ``[`` + items
+    joined by ``,`` + ``]``, so a running SHA256 over the same bytes
+    yields the identical digest with O(1) amortized work per append.
+    ``hexdigest()`` must equal ``_trace_hash`` of the accumulated
+    entries at every length; the unit test pins this.
+    """
+
+    def __init__(self, entries: Sequence[Mapping[str, object]] = ()) -> None:
+        self._hasher = hashlib.sha256()
+        self._hasher.update(b"[")
+        self._count = 0
+        for entry in entries:
+            self.add(entry)
+
+    def add(self, entry: Mapping[str, object]) -> None:
+        if self._count:
+            self._hasher.update(b",")
+        self._hasher.update(_canonical_item(entry))
+        self._count += 1
+
+    def hexdigest(self) -> str:
+        # _trace_hash digests dumps(list) plus the canonical trailing newline.
+        final = self._hasher.copy()
+        final.update(b"]\n")
+        return final.hexdigest()
+
+    def __len__(self) -> int:
+        return self._count
+
+
 def _canonical_config(config: LeWMConfig) -> dict[str, object]:
     """Convert tuple-valued palette config into JSON/load_model values."""
 
@@ -271,6 +309,8 @@ def sample_shared_batch(
     dataset: LargePixelSequenceDataset,
     size: int,
     rng: torch.Generator,
+    *,
+    pin: bool = False,
 ) -> SharedBatch:
     """Sample and materialize one native batch for both world-model arms."""
 
@@ -296,6 +336,9 @@ def sample_shared_batch(
         raise ValueError(
             "paired training requires native uint8 pixels and int64 actions"
         )
+    if pin:
+        pixels = pixels.pin_memory()
+        actions = actions.pin_memory()
     return SharedBatch(indices, episode_ids, starts, pixels, actions)
 
 
@@ -358,9 +401,14 @@ def _train_arm_step(
     optimizer: torch.optim.Optimizer,
     pixels: torch.Tensor,
     actions: torch.Tensor,
+    *,
+    precision: str = "float32",
+    device: str = "cpu",
 ) -> dict[str, float]:
     optimizer.zero_grad(set_to_none=True)
-    losses = model.compute_loss(pixels, actions)
+    autocast = precision == "bf16" and device.startswith("cuda")
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=autocast):
+        losses = model.compute_loss(pixels, actions)
     if not torch.isfinite(losses["loss"]):
         raise RuntimeError("nonfinite paired LeWM training loss")
     losses["loss"].backward()
@@ -491,6 +539,7 @@ def _checkpoint_payload(
     post_rng: _RNGState,
     sample_trace_hash: str,
     stochastic_trace_hash: str,
+    batch_size: int = BATCH_SIZE,
 ) -> dict[str, object]:
     return {
         "config": config_payload,
@@ -504,7 +553,8 @@ def _checkpoint_payload(
             "cpu": post_rng.cpu,
             "cuda": list(post_rng.cuda) if post_rng.cuda is not None else None,
         },
-        "batch_size": BATCH_SIZE,
+        "batch_size": batch_size,
+        "precision": metadata.get("precision", "float32"),
         "seed": INIT_SEED,
         "initialization_seed": INIT_SEED,
         "sampling_seed": SAMPLING_SEED,
@@ -773,21 +823,35 @@ def run_pair(
         raise
 
 
+CONTINUE_BATCH_SIZES: Final[tuple[int, ...]] = (32, 128)
+CONTINUE_PRECISIONS: Final[tuple[str, ...]] = ("float32", "bf16")
+
+
 def _validate_continue_protocol(
     *,
     extra_steps: int,
     batch_size: int,
     device: str,
     threads: int,
+    fetch_workers: int = 2,
+    precision: str = "float32",
 ) -> None:
     if extra_steps < 1:
         raise ValueError("continuation requires at least one extra update")
-    if batch_size != BATCH_SIZE:
-        raise ValueError(f"{EXPERIMENT} continuation requires batch{BATCH_SIZE}")
+    if batch_size not in CONTINUE_BATCH_SIZES:
+        raise ValueError(
+            f"{EXPERIMENT} continuation requires batch{CONTINUE_BATCH_SIZES}"
+        )
+    if precision not in CONTINUE_PRECISIONS:
+        raise ValueError(
+            f"{EXPERIMENT} continuation requires precision{CONTINUE_PRECISIONS}"
+        )
     if device != "cuda":
         raise ValueError(f"{EXPERIMENT} continuation requires CUDA T4")
     if threads < 1:
         raise ValueError("threads must be positive")
+    if fetch_workers < 1:
+        raise ValueError("fetch_workers must be positive")
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required: run scaled continuation on a T4")
     if "T4" not in torch.cuda.get_device_name(0):
@@ -801,15 +865,95 @@ def _single_update(
     *,
     stochastic_state: _RNGState,
     device: str,
+    precision: str = "float32",
 ) -> tuple[dict[str, float], _RNGState]:
     """Run one palette-arm update from a pre-step stochastic state."""
 
-    pixels = batch.pixels.to(device)
-    actions = batch.actions.to(device)
+    pixels = batch.pixels.to(device, non_blocking=True)
+    actions = batch.actions.to(device, non_blocking=True)
     _restore_rng(stochastic_state)
     model.train()
-    metrics = _train_arm_step(model, optimizer, pixels, actions)
+    metrics = _train_arm_step(
+        model, optimizer, pixels, actions, precision=precision, device=device
+    )
     return metrics, _capture_rng(device)
+
+
+_PREFETCH_DEPTH: Final[int] = 2
+
+
+def _fetch_window(args: tuple[LargePixelSequenceDataset, int]) -> dict[str, object]:
+    dataset, index = args
+    return dataset[index]
+
+
+def _prefetch_batches(
+    dataset: LargePixelSequenceDataset,
+    size: int,
+    rng: torch.Generator,
+    out: Queue[tuple[str, object]],
+    steps: int,
+    pin: bool,
+    fetch_workers: int,
+    root: Path,
+    split: str,
+    history_size: int,
+) -> None:
+    """Sample ``steps`` batches in order on background threads.
+
+    Index draws stay on one thread in strict step order (the sampling
+    stream is untouched); episode fetch/decompress fans out to
+    ``fetch_workers`` dataset clones and reassembles in order, so batches
+    are bit-identical to serial sampling.  Clones are required because
+    the episode LRU is not thread-safe.
+    """
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    try:
+        workers = [
+            LargePixelSequenceDataset(
+                root, split=split, history_size=history_size
+            )
+            for _ in range(max(1, fetch_workers))
+        ]
+        with ThreadPoolExecutor(max_workers=len(workers)) as pool:
+            for _ in range(steps):
+                indices = tuple(
+                    int(value)
+                    for value in torch.randint(
+                        len(dataset), (size,), generator=rng
+                    ).tolist()
+                )
+                ordered = pool.map(
+                    _fetch_window,
+                    (
+                        (workers[i % len(workers)], index)
+                        for i, index in enumerate(indices)
+                    ),
+                )
+                samples = list(ordered)
+                pixels = torch.stack([sample["pixels"] for sample in samples])
+                actions = torch.stack([sample["actions"] for sample in samples])
+                if pin:
+                    pixels = pixels.pin_memory()
+                    actions = actions.pin_memory()
+                out.put(
+                    (
+                        "batch",
+                        SharedBatch(
+                            indices,
+                            tuple(str(s["episode_id"]) for s in samples),
+                            tuple(int(s["start"]) for s in samples),
+                            pixels,
+                            actions,
+                        ),
+                    )
+                )
+    except BaseException as error:  # propagate to the consuming thread
+        out.put(("error", error))
+    finally:
+        out.put(("done", None))
 
 
 def continue_run(
@@ -823,6 +967,8 @@ def continue_run(
     batch_size: int = BATCH_SIZE,
     device: str = "cuda",
     threads: int = 2,
+    fetch_workers: int = 2,
+    precision: str = "float32",
 ) -> dict[str, object]:
     """Continue palette-arm training from a §Y-style checkpoint (AD1/AD3).
 
@@ -838,6 +984,8 @@ def continue_run(
         batch_size=batch_size,
         device=device,
         threads=threads,
+        fetch_workers=fetch_workers,
+        precision=precision,
     )
     if checkpoint_every < 1:
         raise ValueError("checkpoint_every must be positive")
@@ -875,6 +1023,8 @@ def continue_run(
         "stochastic_trace_sha256"
     ):
         raise ValueError("base trace hashes differ from base checkpoint payload")
+    sample_accumulator = TraceAccumulator(trace)
+    stochastic_accumulator = TraceAccumulator(stochastic_trace)
     base_checkpoint_sha256 = file_hash(checkpoint_path)
     model = LeWorldModel(LeWMConfig(**base_payload["config"]))
     model.load_state_dict(base_payload["model"], strict=True)
@@ -915,6 +1065,8 @@ def continue_run(
         "run_id": run_id,
         "base_checkpoint_sha256": base_checkpoint_sha256,
         "base_step": start_step,
+        "batch_size": batch_size,
+        "precision": precision,
         "data_hash": data_hash,
         "dataset_manifest_sha256": data_hash,
         "optimizer": {
@@ -924,7 +1076,6 @@ def continue_run(
             "clip": GRADIENT_CLIP,
             "schedule": "constant for declared experiment",
         },
-        "precision": "float32",
         "inference_only": False,
     }
     run = create_run(history_root, run_id, metadata)
@@ -939,10 +1090,36 @@ def continue_run(
     )
     began = time.monotonic()
     stochastic_state = _capture_rng(device)
+    use_pin = device.startswith("cuda")
+    prefetched: Queue[tuple[str, object]] = Queue(maxsize=_PREFETCH_DEPTH)
+    sampler = Thread(
+        target=_prefetch_batches,
+        args=(
+            dataset,
+            batch_size,
+            sampling_rng,
+            prefetched,
+            extra_steps,
+            use_pin,
+            fetch_workers,
+            Path(dataset_root),
+            "train",
+            LARGE_DEFAULT_HISTORY_SIZE,
+        ),
+        daemon=True,
+    )
+    sampler.start()
     try:
         for step in range(start_step + 1, total_steps + 1):
-            batch = sample_shared_batch(dataset, BATCH_SIZE, sampling_rng)
+            kind, payload = prefetched.get()
+            if kind == "error":
+                raise RuntimeError("prefetch thread failed") from payload
+            if kind != "batch":
+                raise RuntimeError("prefetch thread starved the training loop")
+            batch = payload
+            assert isinstance(batch, SharedBatch)
             trace.append(batch.trace_entry(step))
+            sample_accumulator.add(trace[-1])
             pre_hash = _rng_digest(stochastic_state)
             metrics, post_state = _single_update(
                 model,
@@ -950,6 +1127,7 @@ def continue_run(
                 batch,
                 stochastic_state=stochastic_state,
                 device=device,
+                precision=precision,
             )
             post_hash = _rng_digest(post_state)
             stochastic_trace.append(
@@ -960,9 +1138,10 @@ def continue_run(
                     "arms_equal": True,
                 }
             )
+            stochastic_accumulator.add(stochastic_trace[-1])
             stochastic_state = post_state
-            sample_hash = _trace_hash(trace)
-            stochastic_hash = _trace_hash(stochastic_trace)
+            sample_hash = sample_accumulator.hexdigest()
+            stochastic_hash = stochastic_accumulator.hexdigest()
             elapsed = time.monotonic() - began
             append_metric(
                 run / "metrics.jsonl",
@@ -997,6 +1176,7 @@ def continue_run(
                     post_rng=post_state,
                     sample_trace_hash=sample_hash,
                     stochastic_trace_hash=stochastic_hash,
+                    batch_size=batch_size,
                 )
                 # Publish running traces alongside every intermediate
                 # checkpoint so an orchestrator can mirror a resumable
@@ -1017,8 +1197,9 @@ def continue_run(
                     ),
                     flush=True,
                 )
-        trace_hash = _trace_hash(trace)
-        stochastic_hash = _trace_hash(stochastic_trace)
+        trace_hash = sample_accumulator.hexdigest()
+        stochastic_hash = stochastic_accumulator.hexdigest()
+        sampler.join()
         atomic_json(run / "sample-trace.json", trace)
         atomic_json(run / "stochastic-trace.json", stochastic_trace)
         atomic_json(

@@ -143,6 +143,8 @@ def build_scale_protocol(
     checkpoint_every: int,
     source_commit: str,
     wheel: dict[str, object] | None = None,
+    batch_size: int = 32,
+    precision: str = "float32",
 ) -> dict[str, object]:
     """Build the frozen chunk protocol plus its file digest map."""
 
@@ -162,10 +164,11 @@ def build_scale_protocol(
         "base_step": base_step,
         "extra_steps": extra_steps,
         "checkpoint_every": checkpoint_every,
-        "world_batch_size": 32,
+        "world_batch_size": batch_size,
         "world_init_seed": 42,
         "world_sampling_seed": 43,
         "world_stochastic_seed": 44,
+        "precision": precision,
         "data_sha256": digest(dataset / "manifest.json"),
         "base_checkpoint_sha256": digest(base_checkpoint),
         "inputs": inputs,
@@ -279,8 +282,14 @@ def main() -> None:
     parser.add_argument("--base-step", type=int, required=True)
     parser.add_argument("--extra-steps", type=int, required=True)
     parser.add_argument("--checkpoint-every", type=int, default=1024)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--precision", default="float32")
     args = parser.parse_args()
     _validate_run_id(args.run_id, "run ID")
+    if args.batch_size not in (32, 128):
+        parser.error("batch size must be 32 or 128")
+    if args.precision not in ("float32", "bf16"):
+        parser.error("precision must be float32 or bf16")
     dataset = args.dataset.resolve()
     base_checkpoint = args.base_checkpoint.resolve()
     base_dir = base_checkpoint.parent
@@ -311,6 +320,8 @@ def main() -> None:
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
         wheel=wheel,
+        batch_size=args.batch_size,
+        precision=args.precision,
     )
     base_files = _base_files(base_checkpoint)
     job = ROOT / "history/dodge/gymnasium/pixel-repr-ddqn-jobs" / args.run_id
