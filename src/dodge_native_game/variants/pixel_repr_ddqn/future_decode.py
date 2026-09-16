@@ -335,7 +335,9 @@ def _decode_cells(
 
     Cells are named ``{head}_on_{input}`` over the actual next, predicted
     next, and current latents.  Images are retained only on request; the
-    broad validation coverage keeps metrics alone.
+    broad validation coverage keeps metrics alone.  Decoded logits and
+    metric math stay on the compute device; only class maps and scalars
+    cross back to the host (V58).
     """
 
     targets = np.asarray(bundle["targets"])
@@ -343,7 +345,7 @@ def _decode_cells(
     target_classes = palette_indices(targets, palette)
     current_classes = palette_indices(currents, palette)
     changed = target_classes != current_classes
-    target01 = torch.from_numpy(targets.astype(np.float32)).div(255.0)
+    target01 = torch.from_numpy(targets.astype(np.float32)).to(device).div(255.0)
     cells: dict[str, Any] = {}
     with (
         torch.random.fork_rng(devices=_rng_devices(device)),
@@ -355,9 +357,7 @@ def _decode_cells(
                 outputs = []
                 for cursor in range(0, len(expanded), DECODE_BATCH):
                     chunk = torch.from_numpy(expanded[cursor : cursor + DECODE_BATCH])
-                    outputs.append(
-                        forward_logits(decoder, chunk.to(device)).detach().cpu()
-                    )
+                    outputs.append(forward_logits(decoder, chunk.to(device)))
                 image01 = torch.cat(outputs).clamp(0.0, 1.0)
                 classes = _nearest_palette_classes(image01, palette)
                 metrics = _palette_metrics(classes, target_classes, current_classes)

@@ -194,17 +194,26 @@ def test_palette_metrics_reports_precision_and_unchanged_errors() -> None:
     assert metrics["unchanged_false_positive_share"] == 1 / 3
 
 
-def test_decode_cells_moves_only_forward_chunks_to_compute_device(
+def test_decode_cells_keeps_metric_math_on_compute_device(
     monkeypatch,
 ) -> None:
-    moved = []
+    cpu_crossings = []
+    device_moves = []
     original_to = torch.Tensor.to
+    original_cpu = torch.Tensor.cpu
 
-    def spy(self: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        moved.append(tuple(self.shape))
+    def spy_to(self: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        if self.ndim == 4:
+            device_moves.append(tuple(self.shape))
         return original_to(self, *args, **kwargs)
 
-    monkeypatch.setattr(torch.Tensor, "to", spy)
+    def spy_cpu(self: torch.Tensor) -> torch.Tensor:
+        if self.ndim == 4:
+            cpu_crossings.append(tuple(self.shape))
+        return original_cpu(self)
+
+    monkeypatch.setattr(torch.Tensor, "to", spy_to)
+    monkeypatch.setattr(torch.Tensor, "cpu", spy_cpu)
     rng = np.random.default_rng(0)
     palette = np.asarray(
         [[0, 0, 0], [255, 255, 0], [255, 255, 255]], dtype=np.uint8
@@ -223,8 +232,8 @@ def test_decode_cells_moves_only_forward_chunks_to_compute_device(
         torch.device("cpu"),
         keep_images=False,
     )
-    image_moves = [shape for shape in moved if len(shape) == 4]
-    assert image_moves == []
+    assert cpu_crossings == []
+    assert device_moves
 
 
 def test_future_decode_actual_readout_trains_matched_head_with_cross_matrix(
