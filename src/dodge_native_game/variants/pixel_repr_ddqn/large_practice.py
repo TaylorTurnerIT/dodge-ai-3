@@ -80,6 +80,21 @@ RECIPE_FAMILIES = (
     "pattern.permanent",
 )
 FAMILY_SLOTS = len(RECIPE_FAMILIES)
+# §AD scale set: the sixteen practice families plus four determined
+# coverage-gap families (near-miss passes, dense crossings, high-speed
+# chases, small swarms).  Twenty slots keep balanced splits at multiples
+# of twenty; the v1 sixteen-family planner below is frozen unchanged.
+SCALE_RECIPE_FAMILIES = RECIPE_FAMILIES + (
+    "enemy.near-miss",
+    "enemy.dense-crossing",
+    "enemy.high-speed",
+    "enemy.small-swarm",
+)
+SCALE_DEFAULT_TRAIN_EPISODES = 6400
+SCALE_DEFAULT_VALIDATION_EPISODES = 800
+SCALE_TRAIN_SEED_START = 9000
+SCALE_VALIDATION_SEED_START = 17000
+SCALE_PLANNER_SEED = 20260916
 _MASK64 = (1 << 64) - 1
 
 
@@ -375,9 +390,10 @@ def _make_config(
     seed: int,
     decisions: int,
     planner_seed: int,
+    families: tuple[str, ...] = RECIPE_FAMILIES,
 ) -> LargePracticeEpisode:
     _validate_split(split)
-    family = RECIPE_FAMILIES[index % FAMILY_SLOTS]
+    family = families[index % len(families)]
     variant = index // FAMILY_SLOTS
     split_offset = 0 if split == "train" else 100_003
     salt = _mix(planner_seed, split_offset, index, seed)
@@ -466,6 +482,73 @@ def _make_config(
                 _mix(salt, 173), axis=variant % 2, span=20 + variant % 40, frames=64
             ),
         )
+    elif family == "enemy.near-miss":
+        # Hazards scripted to pass within a few pixels of the player start:
+        # tight fast loops across the spawn neighborhood.
+        near: list[EnemyScript] = []
+        for enemy_index in range(1 + variant % 2):
+            tag = _mix(salt, 181, enemy_index)
+            offset = 6.0 + (variant + enemy_index) % 6
+            direction = 1.0 if _mix(tag, 5) & 1 else -1.0
+            start = (
+                min(124.0, max(4.0, player_start[0] + direction * offset)),
+                min(124.0, max(4.0, player_start[1] - direction * offset)),
+            )
+            across = (
+                min(124.0, max(4.0, 2 * player_start[0] - start[0])),
+                min(124.0, max(4.0, 2 * player_start[1] - start[1])),
+            )
+            size = 3 + (variant + enemy_index) % 3
+            near.append(
+                EnemyScript(
+                    start=start,
+                    size=size,
+                    loop=True,
+                    segments=(
+                        EnemySegment(across, 16),
+                        EnemySegment(start, 16),
+                    ),
+                )
+            )
+        enemies = tuple(near)
+    elif family == "enemy.dense-crossing":
+        # Four to six hazards crossing the full arena on alternating axes.
+        count = 4 + variant % 3
+        enemies = tuple(
+            _enemy(
+                _mix(salt, 191, enemy_index),
+                size=3 + (variant + enemy_index) % 4,
+                axis=(variant + enemy_index) % 2,
+                span=40 + (variant + enemy_index) % 40,
+                frames=(32, 48, 64)[enemy_index % 3],
+            )
+            for enemy_index in range(count)
+        )
+    elif family == "enemy.high-speed":
+        # Fastest scripted chases: 8-frame segments over long spans.
+        enemies = tuple(
+            _enemy(
+                _mix(salt, 193, enemy_index),
+                size=3 + (variant + enemy_index) % 3,
+                axis=(variant + enemy_index) % 2,
+                span=48 + (variant + enemy_index) % 48,
+                frames=8,
+            )
+            for enemy_index in range(1 + variant % 2)
+        )
+    elif family == "enemy.small-swarm":
+        # Four to six size-2 hazards: the smallest, hardest-to-track targets.
+        count = 4 + variant % 3
+        enemies = tuple(
+            _enemy(
+                _mix(salt, 197, enemy_index),
+                size=2,
+                axis=(variant + enemy_index) % 2,
+                span=24 + (variant + enemy_index) % 32,
+                frames=(24, 32, 48)[enemy_index % 3],
+            )
+            for enemy_index in range(count)
+        )
     else:
         enemies = ()
     config = PracticeConfig(
@@ -497,11 +580,20 @@ def plan_large_practice(
     train_seed_start: int = DEFAULT_TRAIN_SEED_START,
     validation_seed_start: int = DEFAULT_VALIDATION_SEED_START,
     planner_seed: int = DEFAULT_PLANNER_SEED,
+    families: tuple[str, ...] = RECIPE_FAMILIES,
 ) -> list[LargePracticeEpisode]:
     """Build a deterministic, balanced train/validation recipe plan."""
 
     train_count = _validate_count(train_episodes, "train_episodes")
     validation_count = _validate_count(validation_episodes, "validation_episodes")
+    for count, label in (
+        (train_count, "train_episodes"),
+        (validation_count, "validation_episodes"),
+    ):
+        if count >= len(families) and count % len(families):
+            raise ValueError(
+                f"{label} must balance evenly across recipe families"
+            )
     decisions = _validate_count(decisions_per_episode, "decisions_per_episode")
     if decisions != DEFAULT_DECISIONS_PER_EPISODE:
         raise ValueError(
@@ -534,6 +626,7 @@ def plan_large_practice(
                     start + index,
                     decisions,
                     int(planner_seed) + attempt * 1_000_003,
+                    families,
                 )
                 identity = _config_identity(episode.config)
                 if identity not in identities:
@@ -545,8 +638,31 @@ def plan_large_practice(
     return result
 
 
+def plan_large_scale(
+    *,
+    train_episodes: int = SCALE_DEFAULT_TRAIN_EPISODES,
+    validation_episodes: int = SCALE_DEFAULT_VALIDATION_EPISODES,
+    decisions_per_episode: int = DEFAULT_DECISIONS_PER_EPISODE,
+    train_seed_start: int = SCALE_TRAIN_SEED_START,
+    validation_seed_start: int = SCALE_VALIDATION_SEED_START,
+    planner_seed: int = SCALE_PLANNER_SEED,
+) -> list[LargePracticeEpisode]:
+    """Build the §AD twenty-family coverage-gap recipe plan."""
+
+    return plan_large_practice(
+        train_episodes=train_episodes,
+        validation_episodes=validation_episodes,
+        decisions_per_episode=decisions_per_episode,
+        train_seed_start=train_seed_start,
+        validation_seed_start=validation_seed_start,
+        planner_seed=planner_seed,
+        families=SCALE_RECIPE_FAMILIES,
+    )
+
+
 build_large_practice_plan = plan_large_practice
 make_large_practice_plan = plan_large_practice
+build_large_scale_plan = plan_large_scale
 
 
 def _native_binary_info(module: Any) -> tuple[str | None, str | None]:
@@ -993,6 +1109,7 @@ def _plan_metadata(
     plan: Sequence[LargePracticeEpisode],
     planner_seed: int,
     provenance: Mapping[str, Any],
+    families: tuple[str, ...] = RECIPE_FAMILIES,
 ) -> dict[str, Any]:
     by_split: dict[str, list[LargePracticeEpisode]] = {"train": [], "validation": []}
     for spec in plan:
@@ -1002,7 +1119,7 @@ def _plan_metadata(
         "planner_seed": planner_seed,
         "provenance": dict(provenance),
         "decisions_per_episode": plan[0].config.max_decisions,
-        "recipe_families": list(RECIPE_FAMILIES),
+        "recipe_families": list(families),
         "seed_ranges": {
             split: [specs[0].seed, specs[-1].seed] for split, specs in by_split.items()
         },
@@ -1019,12 +1136,13 @@ def _validate_or_write_plan(
     plan: Sequence[LargePracticeEpisode],
     planner_seed: int,
     provenance: Mapping[str, Any],
+    families: tuple[str, ...] = RECIPE_FAMILIES,
 ) -> None:
     expected = {
         "schema_version": LARGE_SCHEMA_VERSION,
         "artifact_format": LARGE_DATASET_FORMAT,
         "variant": VARIANT,
-        "plan": _plan_metadata(plan, planner_seed, provenance),
+        "plan": _plan_metadata(plan, planner_seed, provenance, families),
     }
     path = root / "plan.json"
     if path.exists():
@@ -1114,6 +1232,7 @@ def collect_large_practice(
     native_factory: Callable[..., Any] | None = None,
     reuse_train_from: Path | None = None,
     reuse_train_source: Path | None = None,
+    families: tuple[str, ...] = RECIPE_FAMILIES,
 ) -> dict[str, Any]:
     """Incrementally collect and atomically publish the large practice set.
 
@@ -1146,6 +1265,7 @@ def collect_large_practice(
         train_seed_start=train_seed_start,
         validation_seed_start=validation_seed_start,
         planner_seed=planner_seed,
+        families=families,
     )
     root = Path(output)
     if root.is_symlink():
@@ -1164,7 +1284,7 @@ def collect_large_practice(
         root.mkdir(parents=True, exist_ok=True)
         if (root / READY_MARKER).exists():
             raise FileExistsError(f"large-practice output is already complete: {root}")
-        _validate_or_write_plan(root, plan, planner_seed, provenance)
+        _validate_or_write_plan(root, plan, planner_seed, provenance, families)
         imported = provenance.get("imported_train")
         capture_provenance = {
             key: value for key, value in provenance.items() if key != "imported_train"
@@ -1275,7 +1395,7 @@ def collect_large_practice(
             "history_size_default": HISTORY_SIZE_DEFAULT,
             "episode_action_count": DEFAULT_DECISIONS_PER_EPISODE,
             "decisions_per_episode": decisions_per_episode,
-            "plan": _plan_metadata(plan, planner_seed, provenance),
+            "plan": _plan_metadata(plan, planner_seed, provenance, families),
             "provenance": dict(provenance),
             "collection": {
                 "policy": "deterministic-scripted-native-v1",
@@ -1323,8 +1443,19 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--validation-seed-start", type=int, default=DEFAULT_VALIDATION_SEED_START
     )
     parser.add_argument("--planner-seed", type=int, default=DEFAULT_PLANNER_SEED)
+    parser.add_argument(
+        "--recipe-set",
+        choices=("practice", "scale"),
+        default="practice",
+        help="practice keeps the frozen sixteen-family planner; scale uses the "
+        "§AD twenty-family coverage-gap set (requires balanced counts and "
+        "disjoint seeds passed explicitly)",
+    )
     parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args(argv)
+    families = (
+        SCALE_RECIPE_FAMILIES if args.recipe_set == "scale" else RECIPE_FAMILIES
+    )
     manifest = collect_large_practice(
         args.output,
         train_episodes=args.train_episodes,
@@ -1334,6 +1465,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         validation_seed_start=args.validation_seed_start,
         planner_seed=args.planner_seed,
         workers=args.workers,
+        families=families,
     )
     print(
         json.dumps(
@@ -1369,12 +1501,20 @@ __all__ = [
     "LargePracticeEpisode",
     "LargePracticeError",
     "RECIPE_FAMILIES",
+    "SCALE_DEFAULT_TRAIN_EPISODES",
+    "SCALE_DEFAULT_VALIDATION_EPISODES",
+    "SCALE_PLANNER_SEED",
+    "SCALE_RECIPE_FAMILIES",
+    "SCALE_TRAIN_SEED_START",
+    "SCALE_VALIDATION_SEED_START",
     "build_large_practice_plan",
+    "build_large_scale_plan",
     "collect_large_practice",
     "collect_large_practice_episode",
     "main",
     "make_large_practice_plan",
     "plan_large_practice",
+    "plan_large_scale",
 ]
 
 

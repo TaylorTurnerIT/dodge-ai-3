@@ -263,3 +263,84 @@ def test_import_rejects_unmatched_capture_provenance(
     (tmp_path / "plan.json").write_text(json.dumps({"plan": {"provenance": old}}))
     with pytest.raises(LargePracticeError):
         module._import_provenance(tmp_path, source, current)
+
+
+def test_scale_plan_balances_twenty_families_with_disjoint_seeds() -> None:
+    from dodge_native_game.variants.pixel_repr_ddqn.large_practice import (
+        SCALE_PLANNER_SEED,
+        SCALE_RECIPE_FAMILIES,
+        SCALE_TRAIN_SEED_START,
+        SCALE_VALIDATION_SEED_START,
+        plan_large_scale,
+    )
+
+    plan = plan_large_scale(train_episodes=40, validation_episodes=20)
+    assert len(plan) == 60
+    for split, count in (("train", 40), ("validation", 20)):
+        specs = [spec for spec in plan if spec.split == split]
+        families = [spec.recipe_family for spec in specs]
+        assert set(families) == set(SCALE_RECIPE_FAMILIES)
+        assert len(families) == len(set(families)) * (count // 20)
+    train_seeds = [spec.seed for spec in plan if spec.split == "train"]
+    validation_seeds = [spec.seed for spec in plan if spec.split == "validation"]
+    assert train_seeds == list(
+        range(SCALE_TRAIN_SEED_START, SCALE_TRAIN_SEED_START + 40)
+    )
+    assert validation_seeds == list(
+        range(SCALE_VALIDATION_SEED_START, SCALE_VALIDATION_SEED_START + 20)
+    )
+    assert not set(train_seeds).intersection(validation_seeds)
+    # v1 seed ranges stay disjoint from the scale ranges.
+    assert SCALE_TRAIN_SEED_START >= 8096
+    assert SCALE_VALIDATION_SEED_START >= 16512
+    again = plan_large_scale(train_episodes=40, validation_episodes=20)
+    assert [spec.recipe_id for spec in again] == [
+        spec.recipe_id for spec in plan
+    ]
+    assert SCALE_PLANNER_SEED != 20260914
+
+
+def test_scale_plan_rejects_unbalanced_counts() -> None:
+    from dodge_native_game.variants.pixel_repr_ddqn.large_practice import (
+        SCALE_RECIPE_FAMILIES,
+        plan_large_practice,
+    )
+
+    with pytest.raises(ValueError, match="balance evenly"):
+        plan_large_practice(
+            train_episodes=21,
+            validation_episodes=20,
+            families=SCALE_RECIPE_FAMILIES,
+        )
+
+
+def test_scale_near_miss_enemies_start_adjacent_to_player() -> None:
+    from dodge_native_game.variants.pixel_repr_ddqn.large_practice import (
+        SCALE_PLANNER_SEED,
+        _make_config,
+    )
+
+    spec = _make_config(
+        "train", 16, 9000, 128, SCALE_PLANNER_SEED,
+        ("enemy.near-miss",),
+    )
+    assert spec.recipe_family == "enemy.near-miss"
+    px, py = spec.config.player_start
+    for enemy in spec.config.enemies:
+        sx, sy = enemy.start
+        assert abs(sx - px) + abs(sy - py) <= 24.0
+        assert enemy.size <= 5
+
+
+def test_scale_small_swarm_uses_size_two_hazards() -> None:
+    from dodge_native_game.variants.pixel_repr_ddqn.large_practice import (
+        SCALE_PLANNER_SEED,
+        _make_config,
+    )
+
+    spec = _make_config(
+        "train", 19, 9000, 128, SCALE_PLANNER_SEED,
+        ("enemy.small-swarm",),
+    )
+    assert len(spec.config.enemies) >= 4
+    assert all(enemy.size == 2 for enemy in spec.config.enemies)
