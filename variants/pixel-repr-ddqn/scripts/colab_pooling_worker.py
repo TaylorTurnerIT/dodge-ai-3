@@ -160,6 +160,7 @@ def _recover_missing(
             if target.exists():
                 raise FileExistsError(f"recovery target already exists: {target}")
             extract_patches(
+                model,
                 getattr(bank, split),
                 target,
                 device=device,

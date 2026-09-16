@@ -52,3 +52,20 @@ def test_recovery_extractor_map_covers_planned_targets() -> None:
         relpath.removeprefix("spatial-banks/") for relpath in planned
     }
     assert bank_relative <= set(RECOVERY_EXTRACTORS)
+
+
+def test_worker_spatial_recovery_matches_extract_patches_signature() -> None:
+    import inspect
+
+    from dodge_native_game.variants.pixel_repr_ddqn.spatial_bank import (
+        extract_patches,
+    )
+
+    worker = Path("variants/pixel-repr-ddqn/scripts/colab_pooling_worker.py")
+    source = worker.read_text()
+    call = source.index("extract_patches(")
+    snippet = source[call : call + 220]
+    params = list(inspect.signature(extract_patches).parameters)
+    assert params[:3] == ["model", "bank", "root"]
+    for name in ("model", "getattr(bank, split)", "target"):
+        assert name in snippet
