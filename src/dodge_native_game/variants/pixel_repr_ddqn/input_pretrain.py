@@ -16,7 +16,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import numpy as np
 import torch
@@ -58,6 +58,7 @@ __all__ = [
     "SAMPLING_SEED",
     "PaletteProvenance",
     "SharedBatch",
+    "continue_run",
     "discover_palette",
     "run_pair",
     "sample_shared_batch",
@@ -769,4 +770,301 @@ def run_pair(
                 total_steps=STEPS,
                 message=str(error),
             )
+        raise
+
+
+def _validate_continue_protocol(
+    *,
+    extra_steps: int,
+    batch_size: int,
+    device: str,
+    threads: int,
+) -> None:
+    if extra_steps < 1:
+        raise ValueError("continuation requires at least one extra update")
+    if batch_size != BATCH_SIZE:
+        raise ValueError(f"{EXPERIMENT} continuation requires batch{BATCH_SIZE}")
+    if device != "cuda":
+        raise ValueError(f"{EXPERIMENT} continuation requires CUDA T4")
+    if threads < 1:
+        raise ValueError("threads must be positive")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA required: run scaled continuation on a T4")
+    if "T4" not in torch.cuda.get_device_name(0):
+        raise RuntimeError("scaled continuation requires an NVIDIA T4")
+
+
+def _single_update(
+    model: LeWorldModel,
+    optimizer: torch.optim.Optimizer,
+    batch: SharedBatch,
+    *,
+    stochastic_state: _RNGState,
+    device: str,
+) -> tuple[dict[str, float], _RNGState]:
+    """Run one palette-arm update from a pre-step stochastic state."""
+
+    pixels = batch.pixels.to(device)
+    actions = batch.actions.to(device)
+    _restore_rng(stochastic_state)
+    model.train()
+    metrics = _train_arm_step(model, optimizer, pixels, actions)
+    return metrics, _capture_rng(device)
+
+
+def continue_run(
+    checkpoint_path: Path,
+    dataset_root: Path,
+    history_root: Path,
+    run_id: str,
+    *,
+    extra_steps: int,
+    checkpoint_every: int = 1024,
+    batch_size: int = BATCH_SIZE,
+    device: str = "cuda",
+    threads: int = 2,
+) -> dict[str, object]:
+    """Continue palette-arm training from a §Y-style checkpoint (AD1/AD3).
+
+    Restores model, optimizer, sampling generator, stochastic RNG and both
+    traces, then runs ``extra_steps`` more updates with the identical step
+    body.  Same dataset (manifest hash must match), same hyperparameters,
+    no validation reads, no decoder feedback.  Returns the new checkpoint
+    path and continuation manifest path.
+    """
+
+    _validate_continue_protocol(
+        extra_steps=extra_steps,
+        batch_size=batch_size,
+        device=device,
+        threads=threads,
+    )
+    if checkpoint_every < 1:
+        raise ValueError("checkpoint_every must be positive")
+    torch.set_num_threads(threads)
+    checkpoint_path = Path(checkpoint_path)
+    base_payload: dict[str, Any] = torch.load(
+        checkpoint_path, map_location="cpu", weights_only=False
+    )
+    if base_payload.get("experiment") != EXPERIMENT:
+        raise ValueError("continuation requires a lewm-input-encoding-v1 payload")
+    if base_payload.get("input_arm") != "palette":
+        raise ValueError("scaled continuation resumes the palette arm only")
+    dataset = LargePixelSequenceDataset(
+        Path(dataset_root),
+        split="train",
+        history_size=LARGE_DEFAULT_HISTORY_SIZE,
+        cache_size=LARGE_DEFAULT_CACHE_SIZE,
+    )
+    data_hash = file_hash(Path(dataset_root) / "manifest.json")
+    if data_hash != base_payload.get("data_hash"):
+        raise ValueError("continuation dataset manifest differs from base run")
+    base_dir = checkpoint_path.parent
+    trace = json.loads((base_dir / "sample-trace.json").read_text())
+    stochastic_trace = json.loads(
+        (base_dir / "stochastic-trace.json").read_text()
+    )
+    start_step = int(base_payload["step"])
+    if len(trace) < start_step or len(stochastic_trace) < start_step:
+        raise ValueError("base traces do not cover the base checkpoint step")
+    trace = trace[:start_step]
+    stochastic_trace = stochastic_trace[:start_step]
+    if _trace_hash(trace) != base_payload.get(
+        "sample_trace_sha256"
+    ) or _trace_hash(stochastic_trace) != base_payload.get(
+        "stochastic_trace_sha256"
+    ):
+        raise ValueError("base trace hashes differ from base checkpoint payload")
+    base_checkpoint_sha256 = file_hash(checkpoint_path)
+    model = LeWorldModel(LeWMConfig(**base_payload["config"]))
+    model.load_state_dict(base_payload["model"], strict=True)
+    model = model.to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
+    )
+    optimizer.load_state_dict(base_payload["optimizer"])
+    sampling_rng = torch.Generator(device="cpu")
+    sampling_rng.set_state(base_payload["sampling_rng"])
+    base_cuda = base_payload.get("cuda_rng")
+    _restore_rng(
+        _RNGState(
+            cpu=base_payload["torch_rng"],
+            cuda=tuple(base_cuda) if base_cuda is not None else None,
+        )
+    )
+    metadata = {
+        key: base_payload[key]
+        for key in (
+            "model_label",
+            "input_arm",
+            "input_encoding",
+            "palette",
+            "palette_rgb",
+            "palette_sha256",
+            "palette_source_split",
+            "initial_state_sha256",
+            "parameter_count",
+            "palette_frame_index_sha256",
+            "palette_selected_pixels_sha256",
+        )
+    }
+    metadata = {
+        **metadata,
+        "variant": "pixel-repr-ddqn",
+        "experiment": EXPERIMENT,
+        "run_id": run_id,
+        "base_checkpoint_sha256": base_checkpoint_sha256,
+        "base_step": start_step,
+        "data_hash": data_hash,
+        "dataset_manifest_sha256": data_hash,
+        "optimizer": {
+            "name": "AdamW",
+            "lr": LEARNING_RATE,
+            "weight_decay": WEIGHT_DECAY,
+            "clip": GRADIENT_CLIP,
+            "schedule": "constant for declared experiment",
+        },
+        "precision": "float32",
+        "inference_only": False,
+    }
+    run = create_run(history_root, run_id, metadata)
+    total_steps = start_step + extra_steps
+    write_status(
+        run,
+        state="running",
+        phase="scaled continuation training",
+        step=start_step,
+        total_steps=total_steps,
+        message="Palette continuation restored from base checkpoint",
+    )
+    began = time.monotonic()
+    stochastic_state = _capture_rng(device)
+    try:
+        for step in range(start_step + 1, total_steps + 1):
+            batch = sample_shared_batch(dataset, BATCH_SIZE, sampling_rng)
+            trace.append(batch.trace_entry(step))
+            pre_hash = _rng_digest(stochastic_state)
+            metrics, post_state = _single_update(
+                model,
+                optimizer,
+                batch,
+                stochastic_state=stochastic_state,
+                device=device,
+            )
+            post_hash = _rng_digest(post_state)
+            stochastic_trace.append(
+                {
+                    "step": step,
+                    "pre_sha256": pre_hash,
+                    "post_sha256": post_hash,
+                    "arms_equal": True,
+                }
+            )
+            stochastic_state = post_state
+            sample_hash = _trace_hash(trace)
+            stochastic_hash = _trace_hash(stochastic_trace)
+            elapsed = time.monotonic() - began
+            append_metric(
+                run / "metrics.jsonl",
+                {
+                    "step": step,
+                    **metrics,
+                    "sample_trace_sha256": sample_hash,
+                    "stochastic_trace_sha256": stochastic_hash,
+                    "updates_per_second": (step - start_step)
+                    / max(elapsed, 1e-9),
+                    "elapsed_seconds": elapsed,
+                    "phase": "scaled continuation training",
+                    "input_arm": "palette",
+                },
+            )
+            write_status(
+                run,
+                state="running",
+                phase="scaled continuation training",
+                step=step,
+                total_steps=total_steps,
+                message="Continuation batch and stochastic state consumed",
+            )
+            if step % checkpoint_every == 0 or step == total_steps:
+                payload = _checkpoint_payload(
+                    model=model,
+                    optimizer=optimizer,
+                    config_payload=base_payload["config"],
+                    metadata=metadata,
+                    step=step,
+                    sampling_rng=sampling_rng,
+                    post_rng=post_state,
+                    sample_trace_hash=sample_hash,
+                    stochastic_trace_hash=stochastic_hash,
+                )
+                save_checkpoint(run / f"checkpoint-{step}.pt", payload)
+                if step == total_steps:
+                    save_checkpoint(run / "checkpoint.pt", payload)
+            if (step - start_step) % 32 == 0 or step == total_steps:
+                print(
+                    json.dumps(
+                        {
+                            "step": step,
+                            "palette_loss": metrics["loss"],
+                            "sample_trace_sha256": sample_hash,
+                        }
+                    ),
+                    flush=True,
+                )
+        trace_hash = _trace_hash(trace)
+        stochastic_hash = _trace_hash(stochastic_trace)
+        atomic_json(run / "sample-trace.json", trace)
+        atomic_json(run / "stochastic-trace.json", stochastic_trace)
+        atomic_json(
+            run / "report.json",
+            {
+                **metadata,
+                "quality_gate": "scaled continuation diagnostic",
+                "steps": total_steps,
+                "global_step": total_steps,
+                "extra_steps": extra_steps,
+                "checkpoint_sha256": file_hash(run / "checkpoint.pt"),
+                "sample_trace_sha256": trace_hash,
+                "stochastic_trace_sha256": stochastic_hash,
+                "elapsed_seconds": time.monotonic() - began,
+                "limitations": [
+                    "scaled palette continuation, same frozen objective",
+                    "no validation tuning or controller claim",
+                    "raw checkpoint retained; frozen probes run separately",
+                ],
+            },
+        )
+        write_status(
+            run,
+            state="completed",
+            phase="scaled continuation training",
+            step=total_steps,
+            total_steps=total_steps,
+            message="Continuation checkpoint ready for frozen probes",
+        )
+        manifest = {
+            **metadata,
+            "steps": total_steps,
+            "extra_steps": extra_steps,
+            "checkpoint": str(run / "checkpoint.pt"),
+            "checkpoint_sha256": file_hash(run / "checkpoint.pt"),
+            "sample_trace_sha256": trace_hash,
+            "stochastic_trace_sha256": stochastic_hash,
+            "world_model_fits": True,
+            "validation_used_for_training": False,
+            "decoder_feedback": False,
+        }
+        manifest_path = Path(history_root) / f"{run_id}-continuation.json"
+        atomic_json(manifest_path, manifest)
+        return {"checkpoint": run / "checkpoint.pt", "manifest": manifest_path}
+    except BaseException as error:
+        write_status(
+            run,
+            state="failed",
+            phase="scaled continuation training",
+            step=start_step,
+            total_steps=total_steps,
+            message=str(error),
+        )
         raise

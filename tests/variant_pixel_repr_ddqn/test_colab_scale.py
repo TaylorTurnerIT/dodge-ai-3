@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+
+def _launcher(monkeypatch=None):
+    scripts = (
+        Path(__file__).resolve().parents[2]
+        / "variants/pixel-repr-ddqn/scripts"
+    )
+    if monkeypatch is not None:
+        monkeypatch.syspath_prepend(str(scripts))
+    elif str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    path = scripts / "colab_scale_study.py"
+    spec = importlib.util.spec_from_file_location("scale_launcher_fixture", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_scale_remote_driver_sets_up_before_fitting() -> None:
+    launcher = _launcher()
+    driver = launcher.build_remote_driver(
+        source_hash="ab" * 32,
+        run_id="scale-test",
+        site_packages=["pytest"],
+    )
+    compile(driver, "<scale-remote-driver>", "exec")
+    setup = driver.index("uv_ok=False")
+    native = driver.index("dodge-python")
+    worker = driver.index("colab_scale_worker.py")
+    complete = driver.index("SCALE_DRIVER_COMPLETE")
+    assert setup < native < worker < complete
+    assert "pytest" in driver
+    assert "UV_SETUP_FALLBACK" in driver
+    assert "WHEEL_CAPTURED" in driver
+    assert "SCALE_RETURNCODE" in driver
+    assert "uv_binary" not in driver
+
+
+def test_scale_protocol_pins_frozen_inputs(tmp_path: Path) -> None:
+    launcher = _launcher()
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    (dataset / "manifest.json").write_bytes(b"{\"fixture\":true}\n")
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "checkpoint.pt").write_bytes(b"fake-checkpoint")
+    (base / "sample-trace.json").write_bytes(b"[]")
+    (base / "stochastic-trace.json").write_bytes(b"[]")
+    protocol = launcher.build_scale_protocol(
+        run_id="scale-test",
+        dataset=dataset,
+        base_checkpoint=base / "checkpoint.pt",
+        base_step=1024,
+        extra_steps=4096,
+        checkpoint_every=1024,
+        source_commit="c" * 40,
+    )
+    assert protocol["experiment"] == "lewm-scale-continuation-v1"
+    assert protocol["input_arm"] == "palette"
+    assert protocol["world_batch_size"] == 32
+    assert set(protocol["inputs"]) == {
+        "dataset/manifest.json",
+        "base/checkpoint.pt",
+        "base/sample-trace.json",
+        "base/stochastic-trace.json",
+    }
+    assert (
+        protocol["base_checkpoint_sha256"]
+        == protocol["inputs"]["base/checkpoint.pt"]
+    )

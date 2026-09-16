@@ -349,3 +349,125 @@ def test_run_pair_writes_checkpoints_accepted_by_input_probe(
             / "checkpoint-512.pt"
         )
         assert checkpoint_512.exists()
+
+
+def _continue_fixture(monkeypatch: pytest.MonkeyPatch, palette) -> None:
+    from torch import nn
+
+    class FakeDataset:
+        split = "train"
+
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def __len__(self) -> int:
+            return 4
+
+        def __getitem__(self, index: int) -> dict[str, object]:
+            return {
+                "pixels": torch.full(
+                    (3, 3, 8, 8), index % 3, dtype=torch.uint8
+                ),
+                "actions": torch.zeros((3, 9), dtype=torch.int64),
+                "episode_id": f"episode-{index}",
+                "start": index,
+            }
+
+    class FakeModel(nn.Module):
+        def __init__(self, config: LeWMConfig) -> None:
+            super().__init__()
+            self.config = config
+            self.weight = nn.Parameter(torch.tensor(0.25))
+
+        def compute_loss(
+            self, pixels: torch.Tensor, actions: torch.Tensor
+        ) -> dict[str, torch.Tensor]:
+            del actions
+            prediction = self.weight * pixels.float().mean() + torch.randn(())
+            loss = prediction.square()
+            return {"loss": loss, "pred_loss": loss, "sigreg_loss": loss * 0}
+
+    monkeypatch.setattr(input_pretrain, "discover_palette", lambda root: palette)
+    monkeypatch.setattr(
+        input_pretrain, "LargePixelSequenceDataset", FakeDataset
+    )
+    monkeypatch.setattr(input_pretrain, "LeWorldModel", FakeModel)
+    monkeypatch.setattr(input_pretrain, "append_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(input_pretrain, "write_status", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        input_pretrain, "_validate_run_protocol", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        input_pretrain, "_validate_continue_protocol", lambda **kwargs: None
+    )
+    monkeypatch.setattr(input_pretrain.torch.cuda, "manual_seed_all", lambda seed: None)
+
+
+def test_continue_run_rejects_bad_protocol() -> None:
+    with pytest.raises(ValueError, match="at least one extra"):
+        input_pretrain._validate_continue_protocol(
+            extra_steps=0, batch_size=32, device="cpu", threads=1
+        )
+    with pytest.raises(ValueError, match="batch32"):
+        input_pretrain._validate_continue_protocol(
+            extra_steps=8, batch_size=8, device="cpu", threads=1
+        )
+
+
+def test_continue_run_matches_fresh_prefix_plus_suffix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    dataset_root = tmp_path / "dataset"
+    dataset_root.mkdir()
+    (dataset_root / "manifest.json").write_bytes(b"{\"fixture\":true}\n")
+    data_hash = input_pretrain.file_hash(dataset_root / "manifest.json")
+    palette = replace(
+        _palette_provenance(), dataset_manifest_sha256=data_hash
+    )
+    _continue_fixture(monkeypatch, palette)
+    monkeypatch.setattr(input_pretrain, "CHECKPOINT_STEPS", (4, 8))
+    monkeypatch.setattr(input_pretrain, "STEPS", 8)
+
+    fresh = input_pretrain.run_pair(
+        dataset_root,
+        tmp_path / "history-fresh",
+        run_id="fixture-fresh",
+        steps=8,
+        batch_size=input_pretrain.BATCH_SIZE,
+        device="cpu",
+        threads=1,
+    )
+    half = tmp_path / "history-fresh" / "fixture-fresh-palette" / "checkpoint-4.pt"
+    assert half.is_file()
+    resumed = input_pretrain.continue_run(
+        half,
+        dataset_root,
+        tmp_path / "history-resumed",
+        "fixture-resumed",
+        extra_steps=4,
+        checkpoint_every=4,
+        batch_size=input_pretrain.BATCH_SIZE,
+        device="cpu",
+        threads=1,
+    )
+    fresh_payload = torch.load(
+        fresh["checkpoints"]["palette"], map_location="cpu", weights_only=False
+    )
+    resumed_payload = torch.load(
+        resumed["checkpoint"], map_location="cpu", weights_only=False
+    )
+    assert resumed_payload["step"] == 8
+    assert resumed_payload["sample_trace_sha256"] == (
+        fresh_payload["sample_trace_sha256"]
+    )
+    assert resumed_payload["stochastic_trace_sha256"] == (
+        fresh_payload["stochastic_trace_sha256"]
+    )
+    for key, fresh_value in fresh_payload["model"].items():
+        assert torch.equal(fresh_value, resumed_payload["model"][key])
+    assert torch.equal(
+        fresh_payload["sampling_rng"], resumed_payload["sampling_rng"]
+    )
+    manifest = json.loads(resumed["manifest"].read_text())
+    assert manifest["base_step"] == 4
+    assert manifest["steps"] == 8
