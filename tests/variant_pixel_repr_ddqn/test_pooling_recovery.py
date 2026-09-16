@@ -8,7 +8,6 @@ import pytest
 from dodge_native_game.variants.pixel_repr_ddqn.pooling_recovery import (
     RECOVERY_EXTRACTORS,
     missing_files,
-    promote_verified,
     verify_files,
 )
 
@@ -36,26 +35,6 @@ def test_verify_files_rejects_missing_and_mismatch(tmp_path: Path) -> None:
         verify_files(tmp_path, {"a.bin": "0" * 64})
     with pytest.raises(ValueError, match="missing: gone.bin"):
         verify_files(tmp_path, {"gone.bin": "1" * 64})
-
-
-def test_promote_verified_copies_and_reverifies(tmp_path: Path) -> None:
-    staging, dest = tmp_path / "staging", tmp_path / "inputs"
-    digest = _write(staging / "standard/train/pixels.npy", b"pixels")
-    promoted = promote_verified(staging, dest, {"standard/train/pixels.npy": digest})
-    assert promoted == ["standard/train/pixels.npy"]
-    assert (dest / "standard/train/pixels.npy").read_bytes() == b"pixels"
-
-
-def test_promote_verified_refuses_mismatch_and_overwrite(tmp_path: Path) -> None:
-    staging, dest = tmp_path / "staging", tmp_path / "inputs"
-    _write(staging / "a.bin", b"bytes")
-    with pytest.raises(ValueError, match="digest mismatch: a.bin"):
-        promote_verified(staging, dest, {"a.bin": "0" * 64})
-    assert not (dest / "a.bin").exists()
-    digest = _write(staging / "b.bin", b"one")
-    _write(dest / "b.bin", b"other")
-    with pytest.raises(FileExistsError, match="immutable input"):
-        promote_verified(staging, dest, {"b.bin": digest})
 
 
 def test_recovery_extractor_map_covers_planned_targets() -> None:

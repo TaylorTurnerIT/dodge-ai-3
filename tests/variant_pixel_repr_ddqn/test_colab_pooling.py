@@ -101,10 +101,11 @@ def test_pooling_remote_driver_sets_up_before_scoring(monkeypatch) -> None:
     compile(driver, "<remote-driver>", "exec")
     setup = driver.index("pip','install'")
     native = driver.index("dodge-python")
-    smoke = driver.index("'--mode','smoke'")
-    scored = driver.index("'--mode','scored'")
+    smoke = driver.index("run_phase('smoke','smoke.log'")
+    scored = driver.index("run_phase('scored','scored.log'")
     assert setup < native < smoke < scored
     assert "pytest" in driver
+    assert "LOG_TAIL" in driver
     assert "POOLING_DRIVER_COMPLETE" in driver
 
 

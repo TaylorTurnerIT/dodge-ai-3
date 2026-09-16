@@ -2,16 +2,20 @@
 
 The pooling study consumes the exact §Z standard/spatial banks as read-only
 inputs.  When Phase-0 verification confirms specific array files are missing
-locally, this module re-creates ONLY those files with the frozen extraction
-code, verifies every byte against the full recorded SHA-256 digests in a
-staging directory, and promotes them into the immutable input root solely on
-exact match.  Any mismatch stops the run before fitting: no tolerance, no
+locally, the worker re-creates ONLY those files with the frozen extraction
+code and verifies every byte against the full recorded SHA-256 digests in
+place.  Any mismatch stops the run before fitting: no tolerance, no
 replacement hashes, no silent substitution.
+
+The builders publish via ``os.replace``, which fails on FUSE mounts when
+the destination exists, so recovery relocates a split's recorded
+scaffolding (metadata/index/READY) into a staging mirror first; the
+regenerated scaffolding must then be byte-identical to the relocated
+originals before the recovered arrays verify.
 """
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -20,7 +24,6 @@ from .run_artifacts import file_hash
 __all__ = [
     "missing_files",
     "verify_files",
-    "promote_verified",
     "RECOVERY_EXTRACTORS",
 ]
 
@@ -71,28 +74,3 @@ def verify_files(root: Path, expectations: Mapping[str, str]) -> None:
         raise ValueError(
             "frozen input verification failed: " + "; ".join(problems)
         )
-
-
-def promote_verified(
-    staging: Path, dest: Path, expectations: Mapping[str, str]
-) -> list[str]:
-    """Verify staged files, then copy them into the immutable input root.
-
-    Every staged file must match its full recorded digest.  Destination paths
-    must not exist yet: recovered bytes are appended once, never overwritten.
-    Returns the promoted relpaths in sorted order.
-    """
-
-    staging, dest = Path(staging), Path(dest)
-    verify_files(staging, expectations)
-    promoted = []
-    for relpath in sorted(expectations):
-        target = dest / relpath
-        if target.exists() or target.is_symlink():
-            raise FileExistsError(f"refusing to overwrite immutable input: {relpath}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(staging / relpath, target)
-        if file_hash(target) != expectations[relpath]:
-            raise ValueError(f"promoted file failed re-verification: {relpath}")
-        promoted.append(relpath)
-    return promoted

@@ -3,10 +3,11 @@
 Two modes run as separate fresh processes from the remote driver:
 
 ``smoke`` restores and hash-verifies every input (recovering Phase-0-missing
-files into a staging directory, verifying exact digests, then promoting),
-checks the shared decoder-core initialization, and fits a tiny unscored run
-to scratch outputs proving milestone evaluation, checkpoint writing, and
-result serialization work on this device.
+files with the frozen extractors, verifying exact digests, then
+re-verifying the promoted bytes in place), checks the shared decoder-core
+initialization, and fits a tiny unscored run to scratch outputs proving
+milestone evaluation, checkpoint writing, and result serialization work on
+this device.
 
 ``scored`` re-verifies the complete immutable inputs without any recovery,
 re-checks initialization, and fits the four pooling arms at the protocol
@@ -86,7 +87,6 @@ def _recover_missing(
         EXTRACT_BATCH_SIZE,
         FRAMES_PER_EPISODE,
         SAMPLING_SEED,
-        promote_verified,
         verify_files,
     )
     from dodge_native_game.variants.pixel_repr_ddqn.pretrain import load_model
@@ -107,12 +107,15 @@ def _recover_missing(
     world_hash = protocol["inputs"]["world.pt"]
 
     banks = inputs / "spatial-banks"
-    staged_banks = staging / "spatial-banks"
     recovered: list[str] = []
     for split in _standard_splits_needed(recovery_targets):
-        target = staged_banks / "standard" / split
+        # ensure_inputs relocated this split's recorded scaffolding into the
+        # staging mirror, so the target is absent and the builders can
+        # publish.  Regenerated scaffolding must be byte-identical to the
+        # relocated originals before the recovered arrays verify in place.
+        target = banks / "standard" / split
         if target.exists():
-            raise FileExistsError(f"staging split already exists: {target}")
+            raise FileExistsError(f"recovery target already exists: {target}")
         build_bank(
             model,
             dataset,
@@ -126,7 +129,7 @@ def _recover_missing(
         )
         staged_metadata = (target / "metadata.json").read_bytes()
         original_metadata = (
-            banks / "standard" / split / "metadata.json"
+            staging / f"spatial-banks/standard/{split}/metadata.json"
         ).read_bytes()
         if staged_metadata != original_metadata:
             raise ValueError(
@@ -137,7 +140,8 @@ def _recover_missing(
             for key, value in recovery_targets.items()
             if key.startswith(f"spatial-banks/standard/{split}/")
         }
-        recovered.extend(promote_verified(staged_banks, banks, wanted))
+        verify_files(inputs, wanted)
+        recovered.extend(sorted(wanted))
 
     spatial_needed = _spatial_splits_needed(recovery_targets)
     if spatial_needed:
@@ -145,9 +149,9 @@ def _recover_missing(
             dataset, banks / "standard", checkpoint_sha256=world_hash
         )
         for split in spatial_needed:
-            target = staged_banks / "spatial" / split
+            target = banks / "spatial" / split
             if target.exists():
-                raise FileExistsError(f"staging split already exists: {target}")
+                raise FileExistsError(f"recovery target already exists: {target}")
             extract_patches(
                 getattr(bank, split),
                 target,
@@ -156,7 +160,7 @@ def _recover_missing(
             )
             staged_metadata = (target / "metadata.json").read_bytes()
             original_metadata = (
-                banks / "spatial" / split / "metadata.json"
+                staging / f"spatial-banks/spatial/{split}/metadata.json"
             ).read_bytes()
             if staged_metadata != original_metadata:
                 raise ValueError(
@@ -167,7 +171,8 @@ def _recover_missing(
                 for key, value in recovery_targets.items()
                 if key.startswith(f"spatial-banks/spatial/{split}/")
             }
-            recovered.extend(promote_verified(staged_banks, banks, wanted))
+            verify_files(inputs, wanted)
+            recovered.extend(sorted(wanted))
 
     del model
     if torch.cuda.is_available():
@@ -213,9 +218,40 @@ def ensure_inputs(
         )
     provenance: dict[str, Any] = {"recovered_files": []}
     if planned:
-        if staging.exists():
-            raise FileExistsError(f"staging directory already exists: {staging}")
-        staging.mkdir(parents=True)
+        # ``build_bank``/``extract_patches`` refuse existing output paths and
+        # publish via ``os.replace``, which fails on FUSE mounts when the
+        # destination exists.  Relocate the recorded scaffolding
+        # (metadata/index/READY) for splits being recovered into the staging
+        # mirror after digest verification, so the builders see an absent
+        # target; the regenerated scaffolding must then be byte-identical
+        # (gated in _recover_missing) before array promotion is verified.
+        import shutil
+
+        from dodge_native_game.variants.pixel_repr_ddqn.run_artifacts import (
+            file_hash,
+        )
+
+        kinds_splits = set()
+        for relpath in planned:
+            parts = relpath.split("/")
+            kinds_splits.add((parts[1], parts[2]))
+        for kind, split in sorted(kinds_splits):
+            for name in ("metadata.json", "index.json", "READY"):
+                relpath = f"spatial-banks/{kind}/{split}/{name}"
+                if relpath not in expectations:
+                    continue
+                source = inputs / relpath
+                if not source.is_file():
+                    raise ValueError(
+                        f"recovery scaffolding missing, stopping: {relpath}"
+                    )
+                if file_hash(source) != expectations[relpath]:
+                    raise ValueError(
+                        f"recovery scaffolding digest mismatch: {relpath}"
+                    )
+                staged = staging / relpath
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), str(staged))
         provenance = _recover_missing(protocol, inputs, staging, "cuda")
     verify_files(inputs, expectations)
     return provenance
