@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from dodge_native_game.variants.pixel_repr_ddqn import pooling_probe
@@ -37,6 +38,99 @@ def _pooling_worker_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_pooling_study_rejects_unknown_eval_scope(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="eval_scope"):
+        pooling_probe.run_study(
+            tmp_path / "dataset",
+            tmp_path / "world.pt",
+            tmp_path / "history",
+            tmp_path / "spatial-banks",
+            "pooling-test",
+            device="cpu",
+            milestones=(1,),
+            eval_scope="train-only",
+        )
+
+
+def _eval_scope_fixture(tmp_path: Path, monkeypatch):
+    fixture = _fixture_module()
+    bank, palette = fixture.fixture_module()._fake_palette_frame_bank()
+    bank.train.metadata = {"index_sha256": "f" * 64}
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    (dataset / "manifest.json").write_text("{}")
+    payload = _fixture_module()._world_payloads(palette, bank.data_hash)["palette"]
+    payload["palette_selected_pixels_sha256"] = pooling_probe._pixel_bytes_sha256(
+        bank.train.pixels
+    )
+    checkpoint = tmp_path / "world.pt"
+    torch.save(payload, checkpoint)
+    rng = np.random.default_rng(17)
+    sidecars = {
+        "train": rng.normal(size=(len(bank.train.pixels), 256, 192)).astype(np.float32),
+        "validation": rng.normal(
+            size=(len(bank.validation.pixels), 256, 192)
+        ).astype(np.float32),
+    }
+    real_file_hash = pooling_probe.file_hash
+
+    def file_hash(path: Path) -> str:
+        path = Path(path)
+        if path == dataset / "manifest.json":
+            return bank.data_hash
+        if path == checkpoint:
+            return "w" * 64
+        if path.name == "metadata.json":
+            return "m" * 64
+        if path.name == "patches.npy":
+            return "p" * 64
+        return real_file_hash(path)
+
+    monkeypatch.setattr(pooling_probe, "file_hash", file_hash)
+    monkeypatch.setattr(
+        pooling_probe.probe, "open_frame_bank", lambda *args, **kwargs: bank
+    )
+    monkeypatch.setattr(
+        pooling_probe, "open_patches", lambda _bank, root: sidecars[Path(root).name]
+    )
+    return bank, dataset, checkpoint
+
+
+def test_pooling_study_validation_eval_scope_stays_scoped(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bank, dataset, checkpoint = _eval_scope_fixture(tmp_path, monkeypatch)
+    seen: list[tuple[int, int]] = []
+    original = pooling_probe.probe.evaluate_decoder_stream
+
+    def spy(decoder, features, pixels, changed, records, ranges, *args, **kwargs):
+        seen.append((len(features), len(records)))
+        return original(
+            decoder, features, pixels, changed, records, ranges, *args, **kwargs
+        )
+
+    monkeypatch.setattr(pooling_probe.probe, "evaluate_decoder_stream", spy)
+    result = pooling_probe.run_study(
+        dataset,
+        checkpoint,
+        tmp_path / "history",
+        tmp_path / "spatial-banks",
+        "pooling-scope",
+        device="cpu",
+        milestones=(1,),
+        eval_scope="validation",
+    )
+    assert result["eval_scope"] == "validation"
+    assert seen
+    validation_rows = len(bank.validation.pixels)
+    assert all(pair == (validation_rows, validation_rows) for pair in seen)
+    report = json.loads(
+        (tmp_path / "history/pooling-scope-mean/report.json").read_text()
+    )
+    assert report["eval_scope"] == "validation"
+    assert report["step"] == 1
 
 
 def test_pooling_study_reuses_frozen_banks_and_worker_contract(

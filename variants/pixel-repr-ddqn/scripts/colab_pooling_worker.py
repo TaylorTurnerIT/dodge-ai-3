@@ -305,6 +305,7 @@ def run_smoke(protocol: dict) -> None:
         smoke_id,
         device="cuda",
         milestones=SMOKE_MILESTONES,
+        eval_scope="validation",
     )
     for mode in protocol["arms"]:
         run = scratch / f"{smoke_id}-{mode}"
@@ -382,6 +383,9 @@ def run_scored(protocol: dict) -> None:
             "source_sha256": os.environ["LEWM_SOURCE_HASH"],
             "protocol": protocol,
             "recovery": recovery_provenance,
+            "wheel_source": (
+                "cache-hit" if protocol.get("wheel") else "fresh-build"
+            ),
             "peak_allocated_bytes": torch.cuda.max_memory_allocated(),
         },
     )

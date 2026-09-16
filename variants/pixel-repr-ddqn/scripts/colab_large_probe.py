@@ -59,28 +59,64 @@ def cli(*args: str, timeout: int = 180):
     return result
 
 
-def upload(archive: Path, session: str, job: Path):
-    count = 0
+def split_archive(
+    archive: Path, job: Path, *, part_size: int = 8 * 1024**2
+) -> list[Path]:
+    """Split an archive into fixed-size parts; returns part paths in order."""
+
+    archive, job = Path(archive), Path(job)
+    if part_size < 1024**2:
+        raise ValueError("part size must be at least 1 MiB")
+    parts = []
     with archive.open("rb") as stream:
-        while block := stream.read(8 * 1024**2):
-            part = job / f"upload-{count:03d}"
+        while block := stream.read(part_size):
+            part = job / f"upload-{len(parts):03d}"
             part.write_bytes(block)
-            cli(
-                "upload",
-                str(part),
-                f"/content/large-probe.part-{count:03d}",
-                "--session",
-                session,
-            )
-            part.unlink()
-            count += 1
+            parts.append(part)
+    if not parts:
+        raise ValueError("archive is empty")
+    return parts
+
+
+def _upload_part(args: tuple[str, str, str]) -> None:
+    local, remote, session = args
+    cli("upload", local, remote, "--session", session)
+    Path(local).unlink()
+
+
+def upload(
+    archive: Path,
+    session: str,
+    job: Path,
+    *,
+    workers: int = 1,
+    part_size: int = 8 * 1024**2,
+    remote_prefix: str = "large-probe",
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    parts = split_archive(archive, job, part_size=part_size)
+    remotes = [
+        f"/content/{remote_prefix}.part-{index:03d}"
+        for index in range(len(parts))
+    ]
+    payloads = [
+        (str(part), remote, session)
+        for part, remote in zip(parts, remotes, strict=True)
+    ]
+    if workers < 2:
+        for payload in payloads:
+            _upload_part(payload)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(_upload_part, payloads))
     assembly = job / "assemble.py"
     assembly.write_text(
         "from pathlib import Path\nimport hashlib\n"
         "target=Path('/content/lewm-source.tar.gz')\n"
         "with target.open('wb') as output:\n"
-        f" for i in range({count}):\n"
-        "  part=Path(f'/content/large-probe.part-{i:03d}')\n"
+        f" for i in range({len(parts)}):\n"
+        f"  part=Path(f'/content/{remote_prefix}.part-{{i:03d}}')\n"
         "  output.write(part.read_bytes())\n  part.unlink()\n"
         f"assert hashlib.sha256(target.read_bytes()).hexdigest()=={digest(archive)!r}\n"
         "print('SOURCE_ARCHIVE_VERIFIED')\n"

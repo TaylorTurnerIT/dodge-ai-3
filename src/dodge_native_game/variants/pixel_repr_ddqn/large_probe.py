@@ -846,6 +846,21 @@ def evaluate_decoder_stream(
         ):
             for split in ("train", "validation"):
                 start, stop = split_ranges[split]
+                if stop <= start:
+                    empty = _stats(0, 0.0, 0.0, 0, 0.0, 0.0)
+                    if palette_size is not None:
+                        empty.update(
+                            _palette_metrics(
+                                np.zeros(
+                                    (palette_size, palette_size), dtype=np.int64
+                                ),
+                                np.zeros(
+                                    (palette_size, palette_size), dtype=np.int64
+                                ),
+                            )
+                        )
+                    result["splits"][split] = empty
+                    continue
                 wanted = _fixed_examples(records, range(start, stop))
                 examples: dict[int, dict[str, Any]] = {}
                 total = baseline = changed_total = changed_baseline = 0.0

@@ -102,8 +102,17 @@ def run_pooling_study(
     *,
     device: str = "cuda",
     milestones: tuple[int, ...] = MILESTONES,
+    eval_scope: str = "all",
 ) -> dict[str, Any]:
-    """Fit matched mean/max/attention/grid4 readouts from frozen patch tokens."""
+    """Fit matched mean/max/attention/grid4 readouts from frozen patch tokens.
+
+    ``eval_scope="validation"`` restricts milestone evaluation streams to
+    the validation split.  It exists for unscored smoke verification only;
+    scored runs always evaluate the full bank.
+    """
+
+    if eval_scope not in ("all", "validation"):
+        raise ValueError("eval_scope must be 'all' or 'validation'")
 
     dataset_root = Path(dataset_root)
     checkpoint = Path(checkpoint)
@@ -122,7 +131,18 @@ def run_pooling_study(
     # substitute pre-pooled or validation-derived features.
     train_features = {mode: sidecars["train"] for mode in CONDITIONS}
     all_features = probe._Concat((sidecars["train"], sidecars["validation"]))
-    evaluation_features = {mode: all_features for mode in CONDITIONS}
+    validation_span = bank.split_ranges["validation"]
+    if eval_scope == "validation":
+        evaluation_features = {mode: sidecars["validation"] for mode in CONDITIONS}
+        val_start, val_stop = validation_span
+        eval_pixels = bank.pixels[val_start:val_stop]
+        eval_changed = bank.changed[val_start:val_stop]
+        eval_records = bank.records[val_start:val_stop]
+        eval_ranges = {"train": (0, 0), "validation": (0, val_stop - val_start)}
+    else:
+        evaluation_features = {mode: all_features for mode in CONDITIONS}
+        eval_pixels, eval_changed = bank.pixels, bank.changed
+        eval_records, eval_ranges = bank.records, bank.split_ranges
     training_mean = probe.stream_train_mean(bank.pixels, bank.indices("train"))
 
     decoders = make_pooling_decoders(device=device, seed=904)
@@ -162,6 +182,7 @@ def run_pooling_study(
         "sampling_seed": 903,
         "batch_size": BATCH_SIZE,
         "milestones": list(milestones),
+        "eval_scope": eval_scope,
         "diagnostic_only": True,
         "current_frame_only": True,
         "loss_kind": "palette-ce",
@@ -254,10 +275,10 @@ def run_pooling_study(
             normal = probe.evaluate_decoder_stream(
                 decoder,
                 evaluation_features[mode],
-                bank.pixels,
-                bank.changed,
-                bank.records,
-                bank.split_ranges,
+                eval_pixels,
+                eval_changed,
+                eval_records,
+                eval_ranges,
                 training_mean,
                 device=device,
                 palette=palette,
@@ -265,10 +286,10 @@ def run_pooling_study(
             wrong = probe.evaluate_decoder_stream(
                 decoder,
                 evaluation_features[mode],
-                bank.pixels,
-                bank.changed,
-                bank.records,
-                bank.split_ranges,
+                eval_pixels,
+                eval_changed,
+                eval_records,
+                eval_ranges,
                 training_mean,
                 device=device,
                 wrong_permutation=True,

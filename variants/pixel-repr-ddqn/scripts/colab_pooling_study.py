@@ -10,6 +10,7 @@ Any mismatch stops the run before fitting.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import shutil
 import subprocess
@@ -22,6 +23,17 @@ EXPERIMENT = "lewm-pooling-readout-v1"
 MILESTONES = (512, 2048)
 ARMS = ["mean", "max", "attention", "grid4"]
 SMOKE_MILESTONES = [4]
+UPLOAD_WORKERS = 6
+UPLOAD_PART_SIZE = 32 * 1024**2
+SITE_PACKAGES = [
+    "gymnasium>=1",
+    "numpy>=2.4.6",
+    "transformers==4.57.6",
+    "einops==0.8.2",
+    "Pillow",
+    "pytest",
+]
+WHEEL_CACHE_ROOT = ROOT / "history/dodge/gymnasium/pixel-repr-ddqn-cache/wheels"
 SOURCE_NAMES = [
     "src",
     "native/Cargo.toml",
@@ -127,6 +139,8 @@ def build_protocol(
         "world_model_updates": 0,
         "inputs": inputs,
         "recovery_targets": recovery_targets,
+        "wheel": None,
+        "inputs_archive_sha256": None,
         "smoke_milestones": list(SMOKE_MILESTONES),
         "core_initial_state_sha256": comparison["initial_state_sha256"],
         "frame_index_sha256": comparison["frame_index_sha256"],
@@ -137,42 +151,106 @@ def build_protocol(
     return protocol, bundle
 
 
-def build_remote_driver(*, source_hash: str, run_id: str) -> str:
+def build_remote_driver(
+    *,
+    source_hash: str,
+    run_id: str,
+    wheel: dict | None,
+    inputs_url: str | None,
+    inputs_archive_sha256: str | None,
+    site_packages: list[str],
+) -> str:
     """Generate the remote driver: setup, restore inputs, smoke, then score.
 
-    Environment setup (pip packages, Rust toolchain, native extension)
-    mirrors the proven spatial/future remote runner: a fresh T4 ships
-    without pytest or the compiled ``dodge_native`` module the frozen test
-    suite requires.  Smoke and scored phases run as separate fresh worker
-    processes after setup completes.
+    Environment setup uses uv (falling back to pip) for site packages; the
+    native extension comes from a content-keyed cached abi3 wheel when the
+    protocol carries one, otherwise it is built with the Rust toolchain and
+    captured back into a wheel for the local cache.  Inputs arrive either
+    bundled in the source archive or via a hash-verified URL fetch when the
+    protocol records an inputs archive digest.  Smoke and scored phases run
+    as separate fresh worker processes after setup completes.
     """
 
-    return (
+    wheel_name = wheel["filename"] if wheel else None
+    fetch_inputs = bool(inputs_url and inputs_archive_sha256)
+    driver = (
         "import os,sys,hashlib,tarfile,subprocess,pathlib\n"
         "from pathlib import Path\n"
+    )
+    if fetch_inputs:
+        driver += f"os.environ['LEWM_INPUTS_URL']={inputs_url!r}\n"
+    driver += (
         "archive=Path('/content/lewm-source.tar.gz')\n"
         f"assert hashlib.sha256(archive.read_bytes()).hexdigest()=={source_hash!r}\n"
         "print('SOURCE_ARCHIVE_VERIFIED',flush=True)\n"
         "stage=Path('/content/lewm-pooling-stage');stage.mkdir(exist_ok=False)\n"
         "with tarfile.open(archive) as bundle: bundle.extractall(stage,filter='data')\n"
         "code=Path('/content/lewm-pooling-code');(stage/'code').rename(code)\n"
-        "inputs=Path('/content/lewm-pooling-inputs');(stage/'inputs').rename(inputs)\n"
+    )
+    if fetch_inputs:
+        driver += (
+            "import urllib.request\n"
+            "inputs_archive=Path('/content/lewm-pooling-inputs.tar.gz')\n"
+            "print('INPUTS_FETCH_START',flush=True)\n"
+            "urllib.request.urlretrieve("
+            "os.environ['LEWM_INPUTS_URL'],inputs_archive)\n"
+            "inputs_digest=hashlib.sha256(inputs_archive.read_bytes()).hexdigest()\n"
+            f"assert inputs_digest=={inputs_archive_sha256!r}\n"
+            "print('INPUTS_ARCHIVE_VERIFIED',flush=True)\n"
+            "with tarfile.open(inputs_archive) as bundle:\n"
+            " bundle.extractall(stage,filter='data')\n"
+            "inputs_archive.unlink()\n"
+            "inputs=Path('/content/lewm-pooling-inputs');(stage/'inputs').rename(inputs)\n"
+        )
+    else:
+        driver += (
+            "inputs=Path('/content/lewm-pooling-inputs');(stage/'inputs').rename(inputs)\n"
+        )
+    driver += (
         "stage.rmdir()\n"
         "def run_command(command):\n"
         " process=subprocess.Popen(command,stdout=subprocess.PIPE,"
         "stderr=subprocess.STDOUT,text=True)\n"
         " [print(line,end='',flush=True) for line in process.stdout]\n"
         " if process.wait(): raise RuntimeError(f'Setup failed: {command[0]}')\n"
-        "run_command([sys.executable,'-m','pip','install','-q','gymnasium>=1',"
-        "'numpy>=2.4.6','transformers==4.57.6','einops==0.8.2','Pillow','pytest'])\n"
-        "import shutil\n"
-        "if not shutil.which('cargo'):\n"
-        " import urllib.request\n"
-        " urllib.request.urlretrieve('https://sh.rustup.rs','/content/rustup-init.sh')\n"
-        " run_command(['sh','/content/rustup-init.sh','-y','--profile','minimal'])\n"
-        "os.environ['PATH']=str(pathlib.Path.home()/'.cargo/bin')+':'+os.environ['PATH']\n"
-        "run_command([sys.executable,'-m','pip','install','-q',"
-        "str(code/'native/crates/dodge-python')])\n"
+        "run_command([sys.executable,'-m','pip','install','-q','uv'])\n"
+        f"packages={site_packages!r}\n"
+        "uv_binary=pathlib.Path(sys.executable).parent/'uv'\n"
+        "uv_ok=subprocess.run([str(uv_binary),'pip','install','--system','-q',*packages]"
+        + (f"+[str(code/'wheel'/{wheel_name!r})]" if wheel_name else "")
+        + ",capture_output=True).returncode==0\n"
+        "print('UV_SETUP_OK' if uv_ok else 'UV_SETUP_FALLBACK',flush=True)\n"
+        "if not uv_ok:\n"
+        " run_command([sys.executable,'-m','pip','install','-q',*packages])\n"
+    )
+    if wheel_name:
+        driver += (
+            "print('WHEEL_CACHE_HIT',"
+            f"{wheel_name!r},flush=True)\n"
+        )
+    else:
+        driver += (
+            "import shutil\n"
+            "if not shutil.which('cargo'):\n"
+            " import urllib.request\n"
+            " urllib.request.urlretrieve("
+            "'https://sh.rustup.rs','/content/rustup-init.sh')\n"
+            " run_command(['sh','/content/rustup-init.sh','-y',"
+            "'--profile','minimal'])\n"
+            "os.environ['PATH']=str(pathlib.Path.home()/'.cargo/bin')+':'+os.environ['PATH']\n"
+            "crate=str(code/'native/crates/dodge-python')\n"
+            "if uv_ok:\n"
+            " run_command([str(uv_binary),'pip','install','--system','-q',crate])\n"
+            "else:\n"
+            " run_command([sys.executable,'-m','pip','install','-q',crate])\n"
+            "wheelhouse=Path('/content/lewm-pooling-wheelhouse');wheelhouse.mkdir(exist_ok=False)\n"
+            "run_command([sys.executable,'-m','pip','wheel','--no-deps','-q','-w',str(wheelhouse),crate])\n"
+            "wheels=list(wheelhouse.glob('dodge_native-*.whl'))\n"
+            "assert len(wheels)==1, f'expected one captured wheel: {wheels}'\n"
+            "shutil.copy2(wheels[0],Path('/content/lewm-pooling-wheel.whl'))\n"
+            "print('WHEEL_CAPTURED',wheels[0].name,flush=True)\n"
+        )
+    driver += (
         "worker=str(code/'variants/pixel-repr-ddqn/scripts/colab_pooling_worker.py')\n"
         "base=dict(os.environ,PYTHONPATH=str(code/'src'),"
         f"LEWM_SOURCE_HASH={source_hash!r},LEWM_RUN_ID={run_id!r},"
@@ -193,6 +271,22 @@ def build_remote_driver(*, source_hash: str, run_id: str) -> str:
         "run_phase('scored','scored.log',4600)\n"
         "print('POOLING_DRIVER_COMPLETE',flush=True)\n"
     )
+    return driver
+
+
+def native_tree_key() -> str:
+    """Content key for the native extension sources (abi3: python-agnostic)."""
+
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD:native/crates"], cwd=ROOT, text=True
+    ).strip()
+
+
+def cached_wheel(key: str) -> Path | None:
+    """Return a cached abi3 wheel for this native tree, if one was stored."""
+
+    candidates = sorted((WHEEL_CACHE_ROOT / key).glob("dodge_native-*.whl"))
+    return candidates[0] if candidates else None
 
 
 def _write_refresh_script(job: Path, session: str) -> Path:
@@ -271,9 +365,20 @@ def main() -> None:
         type=Path,
         default=Path("history/dodge/gymnasium/pixel-repr-ddqn/large-practice-20260914-v2"),
     )
+    parser.add_argument(
+        "--inputs-url",
+        default=None,
+        help="Optional URL of a provisioned inputs.tar.gz (inputs/ layout); "
+        "when set, --inputs-sha256 is required and inputs travel outside "
+        "the source archive. Provisioning the cache needs bucket "
+        "credentials this host does not hold yet.",
+    )
+    parser.add_argument("--inputs-sha256", default=None)
     args = parser.parse_args()
     _validate_run_id(args.run_id, "run ID")
     _validate_run_id(args.spatial_run, "spatial run ID")
+    if bool(args.inputs_url) != bool(args.inputs_sha256):
+        parser.error("--inputs-url and --inputs-sha256 are required together")
     dataset = args.dataset.expanduser()
     if not dataset.is_absolute():
         dataset = ROOT / dataset
@@ -302,9 +407,20 @@ def main() -> None:
     )
     job = ROOT / "history/dodge/gymnasium/pixel-repr-ddqn-jobs" / args.run_id
     job.mkdir(parents=True, exist_ok=False)
+    wheel: dict | None = None
+    if args.inputs_url is None:
+        wheel_path = cached_wheel(native_tree_key())
+        if wheel_path is not None:
+            wheel = {
+                "key": native_tree_key(),
+                "filename": wheel_path.name,
+                "sha256": digest(wheel_path),
+            }
+    protocol["wheel"] = wheel
+    protocol["inputs_archive_sha256"] = args.inputs_sha256
     (job / "pooling_protocol.json").write_text(json.dumps(protocol, indent=2) + "\n")
-    archive = job / "source.tar.gz"
-    with tarfile.open(archive, "w:gz") as output:
+    raw = job / "source.tar"
+    with tarfile.open(raw, "w") as output:
         for name in SOURCE_NAMES:
             output.add(
                 ROOT / name,
@@ -314,23 +430,57 @@ def main() -> None:
         output.add(
             job / "pooling_protocol.json", arcname="code/pooling_protocol.json"
         )
-        output.add(dataset, arcname="inputs/dataset")
-        for relpath, local in sorted(bundle.items()):
-            if relpath == "dataset/manifest.json":
-                continue
-            output.add(local, arcname=f"inputs/{relpath}")
+        if wheel is not None:
+            cached = cached_wheel(wheel["key"])
+            assert cached is not None and cached.name == wheel["filename"]
+            output.add(cached, arcname=f"code/wheel/{cached.name}")
+        if args.inputs_url is None:
+            output.add(dataset, arcname="inputs/dataset")
+            for relpath, local in sorted(bundle.items()):
+                if relpath == "dataset/manifest.json":
+                    continue
+                output.add(local, arcname=f"inputs/{relpath}")
+    archive = job / "source.tar.gz"
+    with raw.open("rb") as stream, gzip.open(
+        archive, "wb", compresslevel=6
+    ) as compressed:
+        shutil.copyfileobj(stream, compressed, length=8 * 1024**2)
+    raw.unlink()
     if archive.stat().st_size > 1024**3:
         raise ValueError("source archive exceeds 1 GiB")
     source_hash = digest(archive)
     (job / "source.sha256").write_text(source_hash + "\n")
+    if args.inputs_url is None:
+        inputs_archive = job / "inputs.tar.gz"
+        with tarfile.open(inputs_archive, "w:gz") as output:
+            output.add(dataset, arcname="inputs/dataset")
+            for relpath, local in sorted(bundle.items()):
+                if relpath == "dataset/manifest.json":
+                    continue
+                output.add(local, arcname=f"inputs/{relpath}")
+        print(f"inputs side artifact for future provisioning: {inputs_archive}")
     remote = job / "remote.py"
     remote.write_text(
-        build_remote_driver(source_hash=source_hash, run_id=args.run_id)
+        build_remote_driver(
+            source_hash=source_hash,
+            run_id=args.run_id,
+            wheel=wheel,
+            inputs_url=args.inputs_url,
+            inputs_archive_sha256=args.inputs_sha256,
+            site_packages=list(SITE_PACKAGES),
+        )
     )
     session = f"dodge-{args.run_id}"
     cli("new", "--session", session, "--gpu", "T4")
     (job / "session.json").write_text(json.dumps({"session": session}) + "\n")
-    upload(archive, session, job)
+    upload(
+        archive,
+        session,
+        job,
+        workers=UPLOAD_WORKERS,
+        part_size=UPLOAD_PART_SIZE,
+        remote_prefix="lewm-pooling",
+    )
     with (job / "remote.log").open("w") as log:
         result = subprocess.run(
             [
@@ -394,6 +544,17 @@ def main() -> None:
     gallery = history / f"{args.run_id}-comparison.html"
     if not gallery.is_file() or gallery.stat().st_size == 0:
         raise RuntimeError("pooling comparison gallery is missing; session retained")
+    if wheel is None:
+        _download(session, job, "lewm-pooling-wheel.whl", "wheel.whl")
+        wheel_dir = WHEEL_CACHE_ROOT / native_tree_key()
+        wheel_dir.mkdir(parents=True, exist_ok=True)
+        target = wheel_dir / "dodge_native-0.1.0-cp311-abi3-linux_x86_64.whl"
+        shutil.copy2(job / "wheel.whl", target)
+        print(f"native wheel cached for reuse: {target}")
+    else:
+        recovered = environment.get("recovery", {})
+        wheel_record = recovered.get("wheel_source") or environment.get("wheel_source")
+        print(f"native wheel reused from cache: {wheel['filename']} ({wheel_record})")
     print(
         "Pooling artifacts retrieved; verify checkpoints before releasing T4: "
         f"{job}"

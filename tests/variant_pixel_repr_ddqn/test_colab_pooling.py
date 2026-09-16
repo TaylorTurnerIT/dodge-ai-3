@@ -86,7 +86,7 @@ def test_pooling_worker_rejects_contract_drift(key: str, value) -> None:
         worker.validate_result(result, protocol)
 
 
-def test_pooling_remote_driver_sets_up_before_scoring(monkeypatch) -> None:
+def _launcher(monkeypatch):
     monkeypatch.syspath_prepend(
         str(
             Path(__file__).resolve().parents[2]
@@ -95,18 +95,109 @@ def test_pooling_remote_driver_sets_up_before_scoring(monkeypatch) -> None:
     )
     import colab_pooling_study as launcher
 
-    driver = launcher.build_remote_driver(
-        source_hash="ab" * 32, run_id="pooling-test"
-    )
+    return launcher
+
+
+def _driver_kwargs(**overrides):
+    params = {
+        "source_hash": "ab" * 32,
+        "run_id": "pooling-test",
+        "wheel": None,
+        "inputs_url": None,
+        "inputs_archive_sha256": None,
+        "site_packages": ["pytest"],
+    }
+    params.update(overrides)
+    return params
+
+
+def test_pooling_remote_driver_sets_up_before_scoring(monkeypatch) -> None:
+    launcher = _launcher(monkeypatch)
+    driver = launcher.build_remote_driver(**_driver_kwargs())
     compile(driver, "<remote-driver>", "exec")
-    setup = driver.index("pip','install'")
+    setup = driver.index("uv_binary")
     native = driver.index("dodge-python")
     smoke = driver.index("run_phase('smoke','smoke.log'")
     scored = driver.index("run_phase('scored','scored.log'")
     assert setup < native < smoke < scored
     assert "pytest" in driver
+    assert "UV_SETUP_FALLBACK" in driver
     assert "LOG_TAIL" in driver
+    assert "WHEEL_CAPTURED" in driver
     assert "POOLING_DRIVER_COMPLETE" in driver
+
+
+def test_pooling_remote_driver_wheel_hit_skips_toolchain(monkeypatch) -> None:
+    launcher = _launcher(monkeypatch)
+    wheel = {"key": "k" * 40, "filename": "dodge_native-0.1.0.whl", "sha256": "c" * 64}
+    driver = launcher.build_remote_driver(**_driver_kwargs(wheel=wheel))
+    compile(driver, "<remote-driver>", "exec")
+    assert "WHEEL_CACHE_HIT" in driver
+    assert "cargo" not in driver
+    assert "WHEEL_CAPTURED" not in driver
+    assert "code/'wheel'" in driver
+
+
+def test_pooling_remote_driver_inputs_url_fetch(monkeypatch) -> None:
+    launcher = _launcher(monkeypatch)
+    driver = launcher.build_remote_driver(
+        **_driver_kwargs(
+            inputs_url="https://example.invalid/inputs.tar.gz",
+            inputs_archive_sha256="d" * 64,
+        )
+    )
+    compile(driver, "<remote-driver>", "exec")
+    assert "LEWM_INPUTS_URL" in driver
+    assert "INPUTS_ARCHIVE_VERIFIED" in driver
+    fetch = driver.index("INPUTS_FETCH_START")
+    smoke = driver.index("run_phase('smoke','smoke.log'")
+    assert fetch < smoke
+
+
+def test_pooling_split_archive_roundtrip(tmp_path: Path, monkeypatch) -> None:
+    _launcher(monkeypatch)
+    import colab_large_probe as probe
+
+    archive = tmp_path / "archive.bin"
+    archive.write_bytes(b"x" * (3 * 1024**2 + 7))
+    parts = probe.split_archive(archive, tmp_path, part_size=1024**2)
+    assert len(parts) == 4
+    assert b"".join(p.read_bytes() for p in parts) == archive.read_bytes()
+    with pytest.raises(ValueError, match="at least 1 MiB"):
+        probe.split_archive(archive, tmp_path, part_size=512)
+
+
+def test_pooling_upload_fans_out_and_assembles(tmp_path: Path, monkeypatch) -> None:
+    _launcher(monkeypatch)
+    import colab_large_probe as probe
+
+    calls: list[tuple] = []
+
+    def fake_cli(*args, **kwargs):
+        calls.append(args)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(probe, "cli", fake_cli)
+    archive = tmp_path / "archive.bin"
+    archive.write_bytes(b"y" * (2 * 1024**2 + 1))
+    probe.upload(
+        archive,
+        "test-session",
+        tmp_path,
+        workers=2,
+        part_size=1024**2,
+        remote_prefix="lewm-pooling",
+    )
+    uploads = [c for c in calls if c[0] == "upload"]
+    execs = [c for c in calls if c[0] == "exec"]
+    assert len(uploads) == 3
+    assert len(execs) == 1
+    assert not list(tmp_path.glob("upload-*"))
+    assembly = (tmp_path / "assemble.py").read_text()
+    assert "lewm-pooling.part" in assembly
+    assert "range(3)" in assembly
 
 
 def test_pooling_worker_split_helpers() -> None:
