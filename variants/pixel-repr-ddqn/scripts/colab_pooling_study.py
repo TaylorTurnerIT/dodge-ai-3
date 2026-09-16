@@ -1,4 +1,11 @@
-"""Reuse the spatial study T4 for a separately frozen pooling experiment."""
+"""Run the frozen pooling comparison on a fresh T4 and retrieve it.
+
+Restores the retained §Z inputs (dataset, world checkpoint, available bank
+bytes) onto a new machine into an immutable input root.  Files Phase 0
+confirmed missing are re-created on the T4 by hash-gated recovery only:
+staged, byte-verified against the full recorded digests, then promoted.
+Any mismatch stops the run before fitting.
+"""
 
 from __future__ import annotations
 
@@ -9,131 +16,284 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from colab_large_probe import ROOT, _validate_run_id, cli, digest
+from colab_large_probe import ROOT, _validate_run_id, cli, digest, upload
+
+EXPERIMENT = "lewm-pooling-readout-v1"
+MILESTONES = (512, 2048)
+ARMS = ["mean", "max", "attention", "grid4"]
+SMOKE_MILESTONES = [4]
+SOURCE_NAMES = [
+    "src",
+    "native/Cargo.toml",
+    "native/Cargo.lock",
+    "native/crates",
+    "third_party",
+    "variants/pixel-repr-ddqn",
+    "tests/variant_pixel_repr_ddqn",
+    "references/manifest.json",
+    "references/le-wm/module.py",
+    "references/paper/lewm-v3.md",
+    "references/pooling",
+]
 
 
-def refresh(session: str, endpoint: str):
+def _recorded_hashes(provenance: Path) -> dict[str, str]:
+    """Collect the full recorded digests for every expected input file."""
+
+    recorded: dict[str, str] = {}
+    for kind in ("standard", "spatial"):
+        for split in ("train", "validation"):
+            metadata = json.loads(
+                (provenance / kind / split / "metadata.json").read_text()
+            )
+            if kind == "standard":
+                for name, entry in metadata["files"].items():
+                    recorded[f"spatial-banks/{kind}/{split}/{name}.npy"] = entry[
+                        "sha256"
+                    ]
+            else:
+                recorded[f"spatial-banks/{kind}/{split}/patches.npy"] = metadata[
+                    "patches_sha256"
+                ]
+    return recorded
+
+
+def build_protocol(
+    *,
+    provenance: Path,
+    dataset: Path,
+    run_id: str,
+    spatial_run: str,
+    source_commit: str,
+    comparison: dict,
+) -> tuple[dict, dict[str, Path]]:
+    """Build the protocol and map bundled relpaths to local files.
+
+    Files present locally are digested from bytes and must agree with the
+    recorded digests.  Missing files enter ``recovery_targets`` with their
+    full recorded digests and are excluded from the upload bundle.
+    Returns (protocol, bundle) where bundle maps archive inputs/ relpaths to
+    local paths.
+    """
+
+    recorded = _recorded_hashes(provenance)
+    inputs: dict[str, str] = {
+        "world.pt": comparison["world_model_sha256"],
+        "dataset/manifest.json": comparison["data_sha256"],
+    }
+    bundle: dict[str, Path] = {
+        "world.pt": provenance / "world.pt",
+        "dataset/manifest.json": dataset / "manifest.json",
+    }
+    recovery_targets: dict[str, str] = {}
+    for kind in ("standard", "spatial"):
+        for split in ("train", "validation"):
+            names = (
+                ["metadata.json", "index.json", "READY"]
+                if kind == "standard"
+                else ["metadata.json", "READY"]
+            )
+            for name in names:
+                relpath = f"spatial-banks/{kind}/{split}/{name}"
+                local = provenance / kind / split / name
+                inputs[relpath] = digest(local)
+                bundle[relpath] = local
+            for relpath, recorded_digest in sorted(recorded.items()):
+                prefix = f"spatial-banks/{kind}/{split}/"
+                if not relpath.startswith(prefix):
+                    continue
+                local = provenance / relpath.removeprefix("spatial-banks/")
+                if local.is_file():
+                    actual = digest(local)
+                    if actual != recorded_digest:
+                        raise ValueError(
+                            f"local bytes disagree with recorded digest: {relpath}"
+                        )
+                    inputs[relpath] = actual
+                    bundle[relpath] = local
+                else:
+                    inputs[relpath] = recorded_digest
+                    recovery_targets[relpath] = recorded_digest
+    if digest(provenance / "world.pt") != inputs["world.pt"]:
+        raise ValueError("local world checkpoint disagrees with recorded digest")
+    if digest(dataset / "manifest.json") != inputs["dataset/manifest.json"]:
+        raise ValueError("local dataset manifest disagrees with recorded digest")
+    protocol = {
+        "experiment": EXPERIMENT,
+        "run_id": run_id,
+        "source_spatial_run": spatial_run,
+        "source_commit": source_commit,
+        "milestones": list(MILESTONES),
+        "world_model_updates": 0,
+        "inputs": inputs,
+        "recovery_targets": recovery_targets,
+        "smoke_milestones": list(SMOKE_MILESTONES),
+        "core_initial_state_sha256": comparison["initial_state_sha256"],
+        "frame_index_sha256": comparison["frame_index_sha256"],
+        "palette_sha256": comparison["palette_sha256"],
+        "arms": list(ARMS),
+        "worker_timeout_seconds": 7200,
+    }
+    return protocol, bundle
+
+
+def _write_refresh_script(job: Path, session: str) -> Path:
+    script = job / "refresh_session.py"
+    script.write_text(
+        "from colab_cli.auth import AuthProvider\n"
+        "from colab_cli.common import state\n"
+        "state.auth_provider = AuthProvider.ADC\n"
+        f"session = state.store.get({session!r})\n"
+        "if session is None:\n"
+        "    raise RuntimeError('local session entry is missing')\n"
+        "matches = [\n"
+        "    a for a in state.client.list_assignments()\n"
+        "    if a.endpoint == session.endpoint\n"
+        "]\n"
+        "if len(matches) != 1:\n"
+        "    raise RuntimeError('expected Colab assignment is unavailable')\n"
+        "proxy = matches[0].runtime_proxy_info\n"
+        "session.token = proxy.token\n"
+        "session.url = proxy.url\n"
+        "state.store.add(session)\n"
+        "lifetime = proxy.token_expires_in_seconds\n"
+        "print(f'Runtime proxy refreshed; lifetime {lifetime}s')\n"
+    )
+    return script
+
+
+def _refresh(session: str, job: Path) -> None:
     executable = (
         Path(shutil.which("colab")).read_text().splitlines()[0].removeprefix("#!")
     )
     subprocess.run(
-        [
-            executable,
-            str(Path(__file__).with_name("colab_refresh.py")),
-            "--session",
-            session,
-            "--endpoint",
-            endpoint,
-        ],
+        [executable, str(_write_refresh_script(job, session))],
         check=True,
     )
 
 
-def main():
+def _download(session: str, job: Path, remote_name: str, local_name: str) -> None:
+    try:
+        cli(
+            "download",
+            f"/content/{remote_name}",
+            str(job / local_name),
+            "--session",
+            session,
+            timeout=600,
+        )
+    except (RuntimeError, subprocess.TimeoutExpired):
+        _refresh(session, job)
+        cli(
+            "download",
+            f"/content/{remote_name}",
+            str(job / local_name),
+            "--session",
+            session,
+            timeout=600,
+        )
+
+
+def _read_json(path: Path, label: str) -> dict:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"{label} is not valid JSON") from error
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{label} must contain a JSON object")
+    return value
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--session", required=True)
-    parser.add_argument("--endpoint", required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--spatial-run", required=True)
+    parser.add_argument("--spatial-run", default="lewm-spatial-study-20260915-v1")
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=Path("history/dodge/gymnasium/pixel-repr-ddqn/large-practice-20260914-v2"),
+    )
     args = parser.parse_args()
-    for value in [args.run_id, args.spatial_run]:
-        _validate_run_id(value, "run ID")
+    _validate_run_id(args.run_id, "run ID")
+    _validate_run_id(args.spatial_run, "spatial run ID")
+    dataset = args.dataset.expanduser()
+    if not dataset.is_absolute():
+        dataset = ROOT / dataset
+    dataset = dataset.resolve()
+    if not (dataset / "manifest.json").is_file():
+        parser.error(f"dataset manifest does not exist: {dataset / 'manifest.json'}")
     if subprocess.check_output(
         ["git", "status", "--porcelain"], cwd=ROOT, text=True
     ).strip():
         raise RuntimeError("Freeze and commit source before fitting")
     history = ROOT / "history/dodge/gymnasium/pixel-repr-ddqn"
     provenance = history / f"{args.spatial_run}-bank-provenance"
-    comparison = json.loads(
-        (history / f"{args.spatial_run}-spatial-comparison.json").read_text()
+    comparison = _read_json(
+        history / f"{args.spatial_run}-spatial-comparison.json",
+        "spatial comparison",
     )
-    inputs = {
-        "world.pt": comparison["world_model_sha256"],
-        "dataset/manifest.json": comparison["data_sha256"],
-    }
-    for kind in ["standard", "spatial"]:
-        for split in ["train", "validation"]:
-            path = provenance / kind / split
-            for name in (
-                ["metadata.json", "index.json", "READY"]
-                if kind == "standard"
-                else ["metadata.json", "READY"]
-            ):
-                inputs[f"spatial-banks/{kind}/{split}/{name}"] = digest(path / name)
-            if kind == "spatial":
-                inputs[f"spatial-banks/{kind}/{split}/patches.npy"] = json.loads(
-                    (path / "metadata.json").read_text()
-                )["patches_sha256"]
-    protocol = {
-        "run_id": args.run_id,
-        "source_spatial_run": args.spatial_run,
-        "source_commit": subprocess.check_output(
+    protocol, bundle = build_protocol(
+        provenance=provenance,
+        dataset=dataset,
+        run_id=args.run_id,
+        spatial_run=args.spatial_run,
+        source_commit=subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
-        "milestones": [512, 2048],
-        "world_model_updates": 0,
-        "inputs": inputs,
-        "core_initial_state_sha256": comparison["initial_state_sha256"],
-        "frame_index_sha256": comparison["frame_index_sha256"],
-        "palette_sha256": comparison["palette_sha256"],
-        "arms": ["mean", "max", "attention", "grid4"],
-        "worker_timeout_seconds": 7200,
-    }
+        comparison=comparison,
+    )
     job = ROOT / "history/dodge/gymnasium/pixel-repr-ddqn-jobs" / args.run_id
-    job.mkdir(exist_ok=False)
-    (job / "pooling_protocol.json").write_text(json.dumps(protocol, indent=2))
+    job.mkdir(parents=True, exist_ok=False)
+    (job / "pooling_protocol.json").write_text(json.dumps(protocol, indent=2) + "\n")
     archive = job / "source.tar.gz"
-    with tarfile.open(archive, "w:gz") as out:
-        for name in [
-            "src",
-            "native/Cargo.toml",
-            "native/Cargo.lock",
-            "native/crates",
-            "third_party",
-            "variants/pixel-repr-ddqn",
-            "tests/variant_pixel_repr_ddqn",
-            "references/manifest.json",
-            "references/le-wm/module.py",
-            "references/paper/lewm-v3.md",
-            "references/pooling",
-        ]:
-            out.add(
+    with tarfile.open(archive, "w:gz") as output:
+        for name in SOURCE_NAMES:
+            output.add(
                 ROOT / name,
-                arcname=name,
-                filter=lambda m: None if "__pycache__" in m.name else m,
+                arcname=f"code/{name}",
+                filter=lambda item: None if "__pycache__" in item.name else item,
             )
-        out.add(job / "pooling_protocol.json", arcname="pooling_protocol.json")
+        output.add(
+            job / "pooling_protocol.json", arcname="code/pooling_protocol.json"
+        )
+        output.add(dataset, arcname="inputs/dataset")
+        for relpath, local in sorted(bundle.items()):
+            if relpath == "dataset/manifest.json":
+                continue
+            output.add(local, arcname=f"inputs/{relpath}")
+    if archive.stat().st_size > 1024**3:
+        raise ValueError("source archive exceeds 1 GiB")
     source_hash = digest(archive)
     (job / "source.sha256").write_text(source_hash + "\n")
-    refresh(args.session, args.endpoint)
-    # Unique upload paths preserve the previous experiment's archive.
-    count = 0
-    with archive.open("rb") as stream:
-        while block := stream.read(8 * 1024**2):
-            part = job / f"part-{count:03d}"
-            part.write_bytes(block)
-            cli(
-                "upload",
-                str(part),
-                f"/content/lewm-pooling.part-{count:03d}",
-                "--session",
-                args.session,
-            )
-            count += 1
     remote = job / "remote.py"
-    remote.write_text(f"""import os,sys,hashlib,tarfile,subprocess
-from pathlib import Path
-archive=Path('/content/lewm-pooling-source.tar.gz')
-with archive.open('wb') as output:
- for i in range({count}):
-  part=Path(f'/content/lewm-pooling.part-{{i:03d}}')
-  output.write(part.read_bytes())
-assert hashlib.sha256(archive.read_bytes()).hexdigest()=={source_hash!r}
-root=Path('/content/lewm-pooling-code');root.mkdir(exist_ok=False)
-with tarfile.open(archive) as bundle: bundle.extractall(root,filter='data')
-env=dict(os.environ,PYTHONPATH=str(root/'src'),LEWM_SOURCE_HASH={source_hash!r})
-subprocess.run([sys.executable,str(root/'variants/pixel-repr-ddqn/scripts/colab_pooling_worker.py')],cwd=root,env=env,check=True,timeout=7100)
-""")
+    remote.write_text(
+        "import os,sys,hashlib,tarfile,subprocess\n"
+        "from pathlib import Path\n"
+        "archive=Path('/content/lewm-source.tar.gz')\n"
+        f"assert hashlib.sha256(archive.read_bytes()).hexdigest()=={source_hash!r}\n"
+        "print('SOURCE_ARCHIVE_VERIFIED',flush=True)\n"
+        "stage=Path('/content/lewm-pooling-stage');stage.mkdir(exist_ok=False)\n"
+        "with tarfile.open(archive) as bundle: bundle.extractall(stage,filter='data')\n"
+        "code=Path('/content/lewm-pooling-code');(stage/'code').rename(code)\n"
+        "inputs=Path('/content/lewm-pooling-inputs');(stage/'inputs').rename(inputs)\n"
+        "stage.rmdir()\n"
+        "worker=str(code/'variants/pixel-repr-ddqn/scripts/colab_pooling_worker.py')\n"
+        "base=dict(os.environ,PYTHONPATH=str(code/'src'),"
+        f"LEWM_SOURCE_HASH={source_hash!r},LEWM_RUN_ID={args.run_id!r})\n"
+        "smoke=subprocess.run([sys.executable,worker,'--mode','smoke'],"
+        "env=base,check=False,timeout=2400)\n"
+        "print('SMOKE_RETURNCODE',smoke.returncode,flush=True)\n"
+        "if smoke.returncode: raise RuntimeError('pooling smoke verification failed')\n"
+        "scored=subprocess.run([sys.executable,worker,'--mode','scored'],"
+        "env=base,check=False,timeout=4600)\n"
+        "print('SCORED_RETURNCODE',scored.returncode,flush=True)\n"
+        "if scored.returncode: raise RuntimeError('pooling scored run failed')\n"
+        "print('POOLING_DRIVER_COMPLETE',flush=True)\n"
+    )
+    session = f"dodge-{args.run_id}"
+    cli("new", "--session", session, "--gpu", "T4")
+    (job / "session.json").write_text(json.dumps({"session": session}) + "\n")
+    upload(archive, session, job)
     with (job / "remote.log").open("w") as log:
         result = subprocess.run(
             [
@@ -142,7 +302,7 @@ subprocess.run([sys.executable,str(root/'variants/pixel-repr-ddqn/scripts/colab_
                 "adc",
                 "exec",
                 "--session",
-                args.session,
+                session,
                 "--file",
                 str(remote),
                 "--timeout",
@@ -152,40 +312,55 @@ subprocess.run([sys.executable,str(root/'variants/pixel-repr-ddqn/scripts/colab_
             stdout=log,
             stderr=subprocess.STDOUT,
         )
-    if result.returncode:
-        raise RuntimeError(
-            "Pooling worker failed; original T4 retained, inspect remote.log"
-        )
-    refresh(args.session, args.endpoint)
-    for remote_name, local_name in [
-        ("lewm-pooling-results.sha256", "results.sha256"),
-        ("lewm-pooling-results.tar.gz", "results.tar.gz"),
-    ]:
-        try:
-            cli(
-                "download",
-                f"/content/{remote_name}",
-                str(job / local_name),
-                "--session",
-                args.session,
-                timeout=600,
-            )
-        except RuntimeError:
-            refresh(args.session, args.endpoint)
-            cli(
-                "download",
-                f"/content/{remote_name}",
-                str(job / local_name),
-                "--session",
-                args.session,
-                timeout=600,
-            )
+    remote_log = (job / "remote.log").read_text()
+    if result.returncode or "POOLING_DRIVER_COMPLETE" not in remote_log:
+        raise RuntimeError(f"Pooling run failed; session retained: {session}")
+    _refresh(session, job)
+    _download(session, job, "lewm-pooling-results.sha256", "results.sha256")
+    _download(session, job, "lewm-pooling-results.tar.gz", "results.tar.gz")
     if digest(job / "results.tar.gz") != (job / "results.sha256").read_text().strip():
-        raise RuntimeError("Result archive checksum mismatch")
-    with tarfile.open(job / "results.tar.gz") as bundle:
-        bundle.extractall(job / "results", filter="data")
+        raise RuntimeError("retrieved archive checksum mismatch; session retained")
+    with tarfile.open(job / "results.tar.gz") as results:
+        results.extractall(job / "results", filter="data")
     shutil.copytree(job / "results/history", history, dirs_exist_ok=True)
-    print("Pooling archive verified and retrieved; T4 retained for parent audit")
+    environment = _read_json(
+        history / f"{args.run_id}-environment.json",
+        f"{args.run_id}-environment.json",
+    )
+    if (
+        environment.get("source_sha256") != source_hash
+        or environment.get("protocol") != protocol
+    ):
+        raise RuntimeError("retrieved provenance mismatch; session retained")
+    for mode in ARMS:
+        report = _read_json(
+            history / f"{args.run_id}-{mode}/report.json",
+            f"{mode} report",
+        )
+        if (
+            report.get("experiment") != EXPERIMENT
+            or report.get("step") != 2048
+            or report.get("world_model_updates") != 0
+        ):
+            raise RuntimeError(f"{mode} report contract mismatch; session retained")
+    comparison_out = _read_json(
+        history / f"{args.run_id}-pooling-comparison.json",
+        "pooling comparison",
+    )
+    if (
+        comparison_out.get("arms") != ARMS
+        or comparison_out.get("world_model_updates") != 0
+    ):
+        raise RuntimeError("pooling comparison contract mismatch; session retained")
+    if not (history / f"{args.run_id}-pooling-initial.pt").is_file():
+        raise RuntimeError("pooling initial state missing; session retained")
+    gallery = history / f"{args.run_id}-comparison.html"
+    if not gallery.is_file() or gallery.stat().st_size == 0:
+        raise RuntimeError("pooling comparison gallery is missing; session retained")
+    print(
+        "Pooling artifacts retrieved; verify checkpoints before releasing T4: "
+        f"{job}"
+    )
 
 
 if __name__ == "__main__":
