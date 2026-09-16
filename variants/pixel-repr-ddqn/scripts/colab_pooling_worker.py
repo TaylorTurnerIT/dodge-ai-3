@@ -190,6 +190,49 @@ def _recover_missing(
     }
 
 
+def _relocate_scaffolding(
+    inputs: Path,
+    staging: Path,
+    kinds_splits: set[tuple[str, str]],
+    expectations: dict[str, str],
+) -> None:
+    """Move recorded split scaffolding aside so builders see absent targets.
+
+    ``build_bank``/``extract_patches`` refuse existing output paths and
+    publish via ``os.replace``, which fails on FUSE mounts when the
+    destination exists.  After digest verification, the recorded
+    metadata/index/READY bytes move into the staging mirror; the split
+    directory must then be empty (removed here) — anything left over is
+    unplanned content and stops the run.  The regenerated scaffolding must
+    be byte-identical to the relocated originals (gated in _recover_missing).
+    """
+
+    import shutil
+
+    from dodge_native_game.variants.pixel_repr_ddqn.run_artifacts import file_hash
+
+    for kind, split in sorted(kinds_splits):
+        for name in ("metadata.json", "index.json", "READY"):
+            relpath = f"spatial-banks/{kind}/{split}/{name}"
+            if relpath not in expectations:
+                continue
+            source = inputs / relpath
+            if not source.is_file():
+                raise ValueError(f"recovery scaffolding missing, stopping: {relpath}")
+            if file_hash(source) != expectations[relpath]:
+                raise ValueError(f"recovery scaffolding digest mismatch: {relpath}")
+            staged = staging / relpath
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(staged))
+        try:
+            (inputs / "spatial-banks" / kind / split).rmdir()
+        except OSError as error:
+            raise ValueError(
+                "recovery target holds unexpected files: "
+                f"spatial-banks/{kind}/{split}"
+            ) from error
+
+
 def ensure_inputs(
     protocol: dict,
     inputs: Path,
@@ -218,40 +261,11 @@ def ensure_inputs(
         )
     provenance: dict[str, Any] = {"recovered_files": []}
     if planned:
-        # ``build_bank``/``extract_patches`` refuse existing output paths and
-        # publish via ``os.replace``, which fails on FUSE mounts when the
-        # destination exists.  Relocate the recorded scaffolding
-        # (metadata/index/READY) for splits being recovered into the staging
-        # mirror after digest verification, so the builders see an absent
-        # target; the regenerated scaffolding must then be byte-identical
-        # (gated in _recover_missing) before array promotion is verified.
-        import shutil
-
-        from dodge_native_game.variants.pixel_repr_ddqn.run_artifacts import (
-            file_hash,
-        )
-
         kinds_splits = set()
         for relpath in planned:
             parts = relpath.split("/")
             kinds_splits.add((parts[1], parts[2]))
-        for kind, split in sorted(kinds_splits):
-            for name in ("metadata.json", "index.json", "READY"):
-                relpath = f"spatial-banks/{kind}/{split}/{name}"
-                if relpath not in expectations:
-                    continue
-                source = inputs / relpath
-                if not source.is_file():
-                    raise ValueError(
-                        f"recovery scaffolding missing, stopping: {relpath}"
-                    )
-                if file_hash(source) != expectations[relpath]:
-                    raise ValueError(
-                        f"recovery scaffolding digest mismatch: {relpath}"
-                    )
-                staged = staging / relpath
-                staged.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(source), str(staged))
+        _relocate_scaffolding(inputs, staging, kinds_splits, expectations)
         provenance = _recover_missing(protocol, inputs, staging, "cuda")
     verify_files(inputs, expectations)
     return provenance

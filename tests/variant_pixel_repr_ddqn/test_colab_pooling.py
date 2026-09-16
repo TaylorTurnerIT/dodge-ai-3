@@ -200,6 +200,58 @@ def test_pooling_upload_fans_out_and_assembles(tmp_path: Path, monkeypatch) -> N
     assert "range(3)" in assembly
 
 
+def test_pooling_relocate_scaffolding_empties_target(tmp_path: Path) -> None:
+    import hashlib
+
+    worker = _worker()
+    inputs, staging = tmp_path / "inputs", tmp_path / "staging"
+    split = inputs / "spatial-banks/standard/train"
+    split.mkdir(parents=True)
+    expectations = {}
+    for name, data in (
+        ("metadata.json", b'{"recorded": true}'),
+        ("index.json", b"[]"),
+        ("READY", b"ready\n"),
+    ):
+        (split / name).write_bytes(data)
+        expectations[f"spatial-banks/standard/train/{name}"] = hashlib.sha256(
+            data
+        ).hexdigest()
+    worker._relocate_scaffolding(
+        inputs, staging, {("standard", "train")}, expectations
+    )
+    assert not (inputs / "spatial-banks/standard/train").exists()
+    assert (staging / "spatial-banks/standard/train/metadata.json").read_bytes() == (
+        b'{"recorded": true}'
+    )
+    assert (staging / "spatial-banks/standard/train/index.json").read_bytes() == (
+        b"[]"
+    )
+    assert (staging / "spatial-banks/standard/train/READY").read_bytes() == (
+        b"ready\n"
+    )
+
+
+def test_pooling_relocate_scaffolding_stops_on_leftovers(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+
+    worker = _worker()
+    inputs, staging = tmp_path / "inputs", tmp_path / "staging"
+    split = inputs / "spatial-banks/standard/train"
+    split.mkdir(parents=True)
+    (split / "metadata.json").write_bytes(b"{}")
+    (split / "stray.npy").write_bytes(b"unplanned")
+    expectations = {
+        "spatial-banks/standard/train/metadata.json": hashlib.sha256(b"{}").hexdigest()
+    }
+    with pytest.raises(ValueError, match="unexpected files"):
+        worker._relocate_scaffolding(
+            inputs, staging, {("standard", "train")}, expectations
+        )
+
+
 def test_pooling_worker_split_helpers() -> None:
     worker = _worker()
     targets = {
