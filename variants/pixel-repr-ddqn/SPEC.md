@@ -36,6 +36,7 @@ R3|Model reference|CLS frame representation, causal action-conditioned predictor
 R4|SIGReg reference|Random direction projections; statistic averages across batch at each time position, then over projections/time|https://github.com/lucas-maes/le-wm/blob/main/module.py
 R5|Control boundary|Paper uses goal-image MPC with continuous actions; Dodge survival and nine discrete actions require later explicit cost/controller design|https://arxiv.org/html/2603.19312v3#S3.SS2
 R6|Uncertainty|No novelty claim for LeWM+DDQN/PPO without separate prior-art review. Noncollapse does not establish small-hazard retention or survival usefulness.
+R7|Paper training hyperparameters|Released config: AdamW lr5e-5, decay1e-3, clip1.0, batch128, bf16, sub-trajectories of 4 frames; ours matches lr/decay/clip/SIGReg0.09 but runs batch32/float32 on T4 memory. LR needs no tinkering; batch/precision gaps are throughput, not dynamics|references/le-wm/config/train/lewm.yaml:33 + paper App.D
 
 §I
 pixels: `native_adapter.py` → owned native RGB/action whitelist; preprocess explicit, no privileged features.
@@ -231,6 +232,7 @@ V55|Fixed finalbatch32/512 encoder-calibrated LeWM; projected192latents cached t
 V56|Paper decoder absent pinned repository; structure AppendixD, reuse releasedFeedForward. Native128/64queries/projectedlatent input local adaptations; paper224/196queries/preprojectionCLS. No exact reproduction claim. Preserve original world tensors/BN/files; detached train cache; decoder-only gradients. Source/data/resume hashes recorded.
 V57|Decode evaluation metric math placement must keep operands co-located; CPU-only tests cannot see cross-device crashes, so a device-crossing spy guards _decode_cells. Superseded by V58.
 V58|Decode metric math runs on the compute device with operands co-located: decoded logits and targets both on device through classification/MSE; only class maps and scalar numpy results cross to host. Supersedes V57 CPU-only placement after measured CPU cost; spy test asserts no image-rank tensor crosses to CPU mid-cell and that targets move onto the device.
+V59|Standing productivity rule: while any training run is active, parallel effort goes to optimization wins (throughput, batch/precision headroom, upload/setup time, mirror coverage) and recorded candidates; never idle on wall-clock. Protocol-breaking changes (precision, batch, objective) never land mid-run; they queue as controlled next-stage comparisons.
 
 
 §T
@@ -610,6 +612,7 @@ AD1|active|implementation|Resume-capable continuation trainer + determinism test
 AD2|complete|collection|Expanded determined-scenario corpus, hashed+frozen|AD.authorization|history/dodge/gymnasium/pixel-repr-ddqn/large-scale-20260916-v1: 6400train/800val (819200/102400 transitions), 20 families x320/x40 incl. near-miss/dense-crossing/high-speed/small-swarm; seeds 9000-15399/17000-17799 disjoint from v1; loader smoke 806400 train windows; no learner updates.
 AD3|pending|training|Stage-1 scaled training 1024→20000 with chunk resume|AD1|Same envelope as Y2; chunk checkpoints verified; preemption resumes from last chunk.
 AD4|pending|diagnostic fitting/evaluation|AC1/AC2 probes at 5k/10k/20k; advance/stop decision|AD3|Common frozen readout; prediction:persistence + oracle gap reported; stop rule per AD.stages.
+AD.compute|deferred note, no action|User can facilitate multiple A100s; multi-GPU planning (distribution strategy, batch/precision re-baselining per R7, chunk protocol) queued after stage-1 evidence. Single-T4 chunking continues meanwhile.|AD.authorization
 
 B71|2026-09-15|AC2 T4 run crashed at step-512 milestone: _decode_cells moved targets to the compute device while decoder outputs detach to CPU; cross-device MSE arithmetic is CUDA-only failure invisible to CPU-only tests|Keep decode metric math CPU (V57); add device-move spy test asserting no image-rank tensor moves to the compute device in _decode_cells; relaunch AC2 on retained T4.
 

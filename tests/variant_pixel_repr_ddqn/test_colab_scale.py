@@ -29,6 +29,7 @@ def test_scale_remote_driver_sets_up_before_fitting() -> None:
         source_hash="ab" * 32,
         run_id="scale-test",
         site_packages=["pytest"],
+        wheel_name=None,
     )
     compile(driver, "<scale-remote-driver>", "exec")
     setup = driver.index("uv_ok=False")
@@ -85,6 +86,7 @@ def test_scale_remote_driver_creates_work_before_renames() -> None:
         source_hash="ab" * 32,
         run_id="scale-test",
         site_packages=["pytest"],
+        wheel_name=None,
     )
     compile(driver, "<scale-remote-driver>", "exec")
     mkdir = driver.index("lewm-scale-work');work.mkdir(")
@@ -104,3 +106,31 @@ def test_newest_mirrored_step_requires_complete_triple(tmp_path: Path) -> None:
     (mirror / "sample-trace-2048.json").write_bytes(b"[]")
     (mirror / "stochastic-trace-2048.json").write_bytes(b"[]")
     assert launcher._newest_mirrored_step(job) == 2048
+
+
+def test_scale_remote_driver_wheel_hit_skips_toolchain() -> None:
+    launcher = _launcher()
+    driver = launcher.build_remote_driver(
+        source_hash="ab" * 32,
+        run_id="scale-test",
+        site_packages=["pytest"],
+        wheel_name="dodge_native-0.1.0-cp311-abi3-linux_x86_64.whl",
+    )
+    compile(driver, "<scale-remote-driver>", "exec")
+    assert "WHEEL_CACHE_HIT" in driver
+    assert "cargo" not in driver
+    assert "WHEEL_CAPTURED" not in driver
+    assert "code/'wheel'" in driver
+
+
+def test_scale_remote_driver_without_wheel_builds_toolchain() -> None:
+    launcher = _launcher()
+    driver = launcher.build_remote_driver(
+        source_hash="ab" * 32,
+        run_id="scale-test",
+        site_packages=["pytest"],
+        wheel_name=None,
+    )
+    compile(driver, "<scale-remote-driver>", "exec")
+    assert "WHEEL_CAPTURED" in driver
+    assert "cargo" in driver

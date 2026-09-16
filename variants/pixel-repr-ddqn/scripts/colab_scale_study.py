@@ -16,6 +16,11 @@ import time
 from pathlib import Path
 
 from colab_large_probe import ROOT, _validate_run_id, cli, digest, upload
+from colab_pooling_study import (
+    WHEEL_CACHE_ROOT,
+    cached_wheel,
+    native_tree_key,
+)
 
 SITE_PACKAGES = [
     "gymnasium>=1",
@@ -44,6 +49,7 @@ def build_remote_driver(
     source_hash: str,
     run_id: str,
     site_packages: list[str],
+    wheel_name: str | None,
 ) -> str:
     """Generate the remote driver: setup, verify, fit one chunk."""
 
@@ -79,26 +85,36 @@ def build_remote_driver(
         "if not uv_ok:\n"
         " run_command([sys.executable,'-m','pip','install','-q',*packages])\n"
         "import shutil\n"
-        "if not shutil.which('cargo'):\n"
-        " import urllib.request\n"
-        " urllib.request.urlretrieve("
-        "'https://sh.rustup.rs','/content/rustup-init.sh')\n"
-        " run_command(['sh','/content/rustup-init.sh','-y',"
-        "'--profile','minimal'])\n"
-        "os.environ['PATH']=str(pathlib.Path.home()/'.cargo/bin')+':'+os.environ['PATH']\n"
-        "crate=str(code/'native/crates/dodge-python')\n"
-        "if uv_ok:\n"
-        " run_command([sys.executable,'-m','uv','pip','install',\n"
-        " '--system','-q',crate])\n"
-        "else:\n"
-        " run_command([sys.executable,'-m','pip','install','-q',crate])\n"
-        "wheelhouse=Path('/content/lewm-scale-wheelhouse');wheelhouse.mkdir(exist_ok=False)\n"
-        "run_command([sys.executable,'-m','pip','wheel','--no-deps','-q','-w',str(wheelhouse),crate])\n"
-        "wheels=list(wheelhouse.glob('dodge_native-*.whl'))\n"
-        "assert len(wheels)==1, f'expected one captured wheel: {wheels}'\n"
-        "shutil.copy2(wheels[0],Path('/content/lewm-scale-wheel.whl'))\n"
-        "print('WHEEL_CAPTURED',wheels[0].name,flush=True)\n"
-        "worker=str(code/'variants/pixel-repr-ddqn/scripts/colab_scale_worker.py')\n"
+        + (
+            f"print('WHEEL_CACHE_HIT',{wheel_name!r},flush=True)\n"
+            f"wheel_file=str(code/'wheel'/{wheel_name!r})\n"
+            "if uv_ok:\n"
+            " run_command([sys.executable,'-m','uv','pip','install',\n"
+            " '--system','-q',wheel_file])\n"
+            "else:\n"
+            " run_command([sys.executable,'-m','pip','install','-q',wheel_file])\n"
+            if wheel_name is not None
+            else "if not shutil.which('cargo'):\n"
+            " import urllib.request\n"
+            " urllib.request.urlretrieve("
+            "'https://sh.rustup.rs','/content/rustup-init.sh')\n"
+            " run_command(['sh','/content/rustup-init.sh','-y',"
+            "'--profile','minimal'])\n"
+            "os.environ['PATH']=str(pathlib.Path.home()/'.cargo/bin')+':'+os.environ['PATH']\n"
+            "crate=str(code/'native/crates/dodge-python')\n"
+            "if uv_ok:\n"
+            " run_command([sys.executable,'-m','uv','pip','install',\n"
+            " '--system','-q',crate])\n"
+            "else:\n"
+            " run_command([sys.executable,'-m','pip','install','-q',crate])\n"
+            "wheelhouse=Path('/content/lewm-scale-wheelhouse');wheelhouse.mkdir(exist_ok=False)\n"
+            "run_command([sys.executable,'-m','pip','wheel','--no-deps','-q','-w',str(wheelhouse),crate])\n"
+            "wheels=list(wheelhouse.glob('dodge_native-*.whl'))\n"
+            "assert len(wheels)==1, f'expected one captured wheel: {wheels}'\n"
+            "shutil.copy2(wheels[0],Path('/content/lewm-scale-wheel.whl'))\n"
+            "print('WHEEL_CAPTURED',wheels[0].name,flush=True)\n"
+        )
+        + "worker=str(code/'variants/pixel-repr-ddqn/scripts/colab_scale_worker.py')\n"
         "base_env=dict(os.environ,PYTHONPATH=str(code/'src'),"
         f"LEWM_SOURCE_HASH={source_hash!r},LEWM_RUN_ID={run_id!r},"
         "OMP_NUM_THREADS='2',MKL_NUM_THREADS='2')\n"
@@ -126,6 +142,7 @@ def build_scale_protocol(
     extra_steps: int,
     checkpoint_every: int,
     source_commit: str,
+    wheel: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build the frozen chunk protocol plus its file digest map."""
 
@@ -154,6 +171,7 @@ def build_scale_protocol(
         "inputs": inputs,
         "worker_timeout_seconds": 7200,
         "source_commit": source_commit,
+        "wheel": wheel,
     }
 
 
@@ -274,6 +292,14 @@ def main() -> None:
     ).strip():
         raise RuntimeError("Freeze and commit source before fitting")
     history = ROOT / "history/dodge/gymnasium/pixel-repr-ddqn"
+    wheel: dict[str, object] | None = None
+    wheel_path = cached_wheel(native_tree_key())
+    if wheel_path is not None:
+        wheel = {
+            "key": native_tree_key(),
+            "filename": wheel_path.name,
+            "sha256": digest(wheel_path),
+        }
     protocol = build_scale_protocol(
         run_id=args.run_id,
         dataset=dataset,
@@ -284,6 +310,7 @@ def main() -> None:
         source_commit=subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
+        wheel=wheel,
     )
     base_files = _base_files(base_checkpoint)
     job = ROOT / "history/dodge/gymnasium/pixel-repr-ddqn-jobs" / args.run_id
@@ -300,6 +327,12 @@ def main() -> None:
         output.add(dataset, arcname="dataset")
         for relpath, local in base_files.items():
             output.add(local, arcname=relpath)
+        if wheel is not None:
+            cached = cached_wheel(str(wheel["key"]))
+            assert cached is not None and cached.name == wheel["filename"]
+            if digest(cached) != wheel["sha256"]:
+                raise ValueError("cached wheel digest mismatch")
+            output.add(cached, arcname=f"code/wheel/{cached.name}")
         output.add(job / "scale_protocol.json", arcname="scale_protocol.json")
     if archive.stat().st_size > 1024**3:
         raise ValueError("source archive exceeds 1 GiB")
@@ -311,6 +344,7 @@ def main() -> None:
             source_hash=source_hash,
             run_id=args.run_id,
             site_packages=list(SITE_PACKAGES),
+            wheel_name=str(wheel["filename"]) if wheel is not None else None,
         )
     )
     session = f"dodge-{args.run_id}"
@@ -356,10 +390,21 @@ def main() -> None:
     for remote_name, local_name in (
         ("lewm-scale-results.sha256", "results.sha256"),
         ("lewm-scale-results.tar.gz", "results.tar.gz"),
-        ("lewm-scale-wheel.whl", "wheel.whl"),
     ):
         cli("download", f"/content/{remote_name}", str(job / local_name),
             "--session", session, timeout=600)
+    if wheel is None:
+        cli("download", "/content/lewm-scale-wheel.whl", str(job / "wheel.whl"),
+            "--session", session, timeout=600)
+        captured = "dodge_native-0.1.0-cp311-abi3-linux_x86_64.whl"
+        for line in (job / "remote.log").read_text().splitlines():
+            if "WHEEL_CAPTURED" in line:
+                captured = line.split("WHEEL_CAPTURED", 1)[1].strip().split()[-1]
+        wheel_dir = WHEEL_CACHE_ROOT / native_tree_key()
+        wheel_dir.mkdir(parents=True, exist_ok=True)
+        cached_target = wheel_dir / Path(captured).name
+        shutil.copy2(job / "wheel.whl", cached_target)
+        print(f"native wheel cached for reuse: {cached_target}")
     if digest(job / "results.tar.gz") != (job / "results.sha256").read_text().strip():
         raise RuntimeError("retrieved archive checksum mismatch; session retained")
     with tarfile.open(job / "results.tar.gz") as results:
