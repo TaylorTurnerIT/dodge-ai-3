@@ -394,7 +394,7 @@ def _make_config(
 ) -> LargePracticeEpisode:
     _validate_split(split)
     family = families[index % len(families)]
-    variant = index // FAMILY_SLOTS
+    variant = index // len(families)
     split_offset = 0 if split == "train" else 100_003
     salt = _mix(planner_seed, split_offset, index, seed)
     # Player-only recipes remain clean motion controls.  The permanent family
