@@ -55,7 +55,7 @@ def build_remote_driver(
         "print('SOURCE_ARCHIVE_VERIFIED',flush=True)\n"
         "stage=Path('/content/lewm-scale-stage');stage.mkdir(exist_ok=False)\n"
         "with tarfile.open(archive) as bundle: bundle.extractall(stage,filter='data')\n"
-        "work=Path('/content/lewm-scale-work')\n"
+        "work=Path('/content/lewm-scale-work');work.mkdir(exist_ok=False)\n"
         "code=work/'code';(stage/'code').rename(code)\n"
         "dataset=work/'dataset';(stage/'dataset').rename(dataset)\n"
         "base=work/'base';(stage/'base').rename(base)\n"

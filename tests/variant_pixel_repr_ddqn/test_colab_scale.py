@@ -75,3 +75,19 @@ def test_scale_protocol_pins_frozen_inputs(tmp_path: Path) -> None:
         protocol["base_checkpoint_sha256"]
         == protocol["inputs"]["base/checkpoint.pt"]
     )
+
+
+def test_scale_remote_driver_creates_work_before_renames() -> None:
+    import re
+
+    launcher = _launcher()
+    driver = launcher.build_remote_driver(
+        source_hash="ab" * 32,
+        run_id="scale-test",
+        site_packages=["pytest"],
+    )
+    compile(driver, "<scale-remote-driver>", "exec")
+    mkdir = driver.index("lewm-scale-work');work.mkdir(")
+    first_rename = driver.index(".rename(code)")
+    assert mkdir < first_rename
+    assert len(re.findall(r"rename\(code\)", driver)) == 1
