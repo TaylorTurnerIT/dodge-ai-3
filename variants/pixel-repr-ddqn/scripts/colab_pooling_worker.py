@@ -224,6 +224,9 @@ def _relocate_scaffolding(
             staged = staging / relpath
             staged.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(staged))
+        # The builders refuse existing output paths, so the emptied split
+        # directory itself must go.  rmdir only succeeds when nothing but
+        # the relocated scaffolding was inside; leftovers stop the run.
         try:
             (inputs / "spatial-banks" / kind / split).rmdir()
         except OSError as error:
