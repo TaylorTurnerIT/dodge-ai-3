@@ -85,6 +85,8 @@ def test_http_assets_and_missing_run_data_are_safe(tmp_path: Path) -> None:
         assert response.status == 200
         assert "LeWM" in html
         assert "overflow: hidden" in html
+        assert "overflow-y: auto" in html
+        assert "displayState" in html
         with urlopen(base_url + "/dashboard.html", timeout=2) as response:
             assert response.status == 200
 

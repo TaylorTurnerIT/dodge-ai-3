@@ -66,9 +66,10 @@
     }
     .eyebrow { color: var(--muted); font-size: 10px; letter-spacing: .11em; font-weight: 700; }
     .count { color: var(--dim); font-size: 11px; }
-    .run-list { min-height: 0; flex: 1; overflow: hidden; padding: 6px; }
+    .run-list { min-height: 0; flex: 1; overflow-y: auto; padding: 6px; }
+    .sidebar .panel { display: flex; flex-direction: column; min-height: 0; }
     .run-item {
-      width: 100%; display: block; text-align: left; border: 1px solid transparent;
+      width: 100%; display: block; flex-shrink: 0; text-align: left; border: 1px solid transparent;
       border-radius: 6px; background: transparent; padding: 8px; margin-bottom: 4px;
       cursor: pointer; overflow: hidden;
     }
@@ -79,7 +80,7 @@
     .run-state { color: var(--green); }
     .run-state.warn { color: var(--amber); }
     .run-empty { color: var(--muted); padding: 18px 10px; text-align: center; }
-    .side-note { color: var(--dim); font-size: 11px; padding: 8px 10px 2px; }
+    .side-note { flex-shrink: 0; color: var(--dim); font-size: 11px; padding: 8px 10px 2px; }
     .workspace { display: grid; grid-template-rows: 38px minmax(0, 1fr); gap: 8px; }
     .toolbar { min-width: 0; display: flex; align-items: center; gap: 8px; }
     .tabs { display: flex; gap: 5px; }
@@ -292,6 +293,18 @@
         $("connection").classList.toggle("live", live);
       }
 
+      function displayState(run) {
+        const state = safeText(run.state, "");
+        if (state && state !== "unknown") return state;
+        const phase = safeText(run.phase, "");
+        if (phase) return phase;
+        if (run.step !== undefined && run.step !== null) {
+          const total = run.total_steps === undefined || run.total_steps === null ? "" : ` / ${run.total_steps}`;
+          return `step ${run.step}${total}`;
+        }
+        return safeText(run.message, "—");
+      }
+
       function renderRuns() {
         const list = $("run-list");
         $("run-count").textContent = String(state.runs.length);
@@ -304,7 +317,7 @@
           const button = document.createElement("button");
           button.className = "run-item" + (run.run_id === state.runId ? " active" : "");
           button.dataset.runId = run.run_id;
-          const stateName = safeText(run.state, "unknown");
+          const stateName = displayState(run);
           const warn = /smoke|untrained|warn|error/i.test(stateName + " " + safeText(run.profile, ""));
           button.innerHTML = `<span class="run-name"></span><span class="run-sub"><span class="run-state${warn ? " warn" : ""}"></span><span class="run-step"></span></span>`;
           button.querySelector(".run-name").textContent = run.run_id;
