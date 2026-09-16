@@ -86,6 +86,28 @@ def test_pooling_worker_rejects_contract_drift(key: str, value) -> None:
         worker.validate_result(result, protocol)
 
 
+def test_pooling_remote_driver_sets_up_before_scoring(monkeypatch) -> None:
+    monkeypatch.syspath_prepend(
+        str(
+            Path(__file__).resolve().parents[2]
+            / "variants/pixel-repr-ddqn/scripts"
+        )
+    )
+    import colab_pooling_study as launcher
+
+    driver = launcher.build_remote_driver(
+        source_hash="ab" * 32, run_id="pooling-test"
+    )
+    compile(driver, "<remote-driver>", "exec")
+    setup = driver.index("pip','install'")
+    native = driver.index("dodge-python")
+    smoke = driver.index("'--mode','smoke'")
+    scored = driver.index("'--mode','scored'")
+    assert setup < native < smoke < scored
+    assert "pytest" in driver
+    assert "POOLING_DRIVER_COMPLETE" in driver
+
+
 def test_pooling_worker_split_helpers() -> None:
     worker = _worker()
     targets = {

@@ -137,6 +137,58 @@ def build_protocol(
     return protocol, bundle
 
 
+def build_remote_driver(*, source_hash: str, run_id: str) -> str:
+    """Generate the remote driver: setup, restore inputs, smoke, then score.
+
+    Environment setup (pip packages, Rust toolchain, native extension)
+    mirrors the proven spatial/future remote runner: a fresh T4 ships
+    without pytest or the compiled ``dodge_native`` module the frozen test
+    suite requires.  Smoke and scored phases run as separate fresh worker
+    processes after setup completes.
+    """
+
+    return (
+        "import os,sys,hashlib,tarfile,subprocess,pathlib\n"
+        "from pathlib import Path\n"
+        "archive=Path('/content/lewm-source.tar.gz')\n"
+        f"assert hashlib.sha256(archive.read_bytes()).hexdigest()=={source_hash!r}\n"
+        "print('SOURCE_ARCHIVE_VERIFIED',flush=True)\n"
+        "stage=Path('/content/lewm-pooling-stage');stage.mkdir(exist_ok=False)\n"
+        "with tarfile.open(archive) as bundle: bundle.extractall(stage,filter='data')\n"
+        "code=Path('/content/lewm-pooling-code');(stage/'code').rename(code)\n"
+        "inputs=Path('/content/lewm-pooling-inputs');(stage/'inputs').rename(inputs)\n"
+        "stage.rmdir()\n"
+        "def run_command(command):\n"
+        " process=subprocess.Popen(command,stdout=subprocess.PIPE,"
+        "stderr=subprocess.STDOUT,text=True)\n"
+        " [print(line,end='',flush=True) for line in process.stdout]\n"
+        " if process.wait(): raise RuntimeError(f'Setup failed: {command[0]}')\n"
+        "run_command([sys.executable,'-m','pip','install','-q','gymnasium>=1',"
+        "'numpy>=2.4.6','transformers==4.57.6','einops==0.8.2','Pillow','pytest'])\n"
+        "import shutil\n"
+        "if not shutil.which('cargo'):\n"
+        " import urllib.request\n"
+        " urllib.request.urlretrieve('https://sh.rustup.rs','/content/rustup-init.sh')\n"
+        " run_command(['sh','/content/rustup-init.sh','-y','--profile','minimal'])\n"
+        "os.environ['PATH']=str(pathlib.Path.home()/'.cargo/bin')+':'+os.environ['PATH']\n"
+        "run_command([sys.executable,'-m','pip','install','-q',"
+        "str(code/'native/crates/dodge-python')])\n"
+        "worker=str(code/'variants/pixel-repr-ddqn/scripts/colab_pooling_worker.py')\n"
+        "base=dict(os.environ,PYTHONPATH=str(code/'src'),"
+        f"LEWM_SOURCE_HASH={source_hash!r},LEWM_RUN_ID={run_id!r},"
+        "OMP_NUM_THREADS='2',MKL_NUM_THREADS='2')\n"
+        "smoke=subprocess.run([sys.executable,worker,'--mode','smoke'],"
+        "env=base,check=False,timeout=2400)\n"
+        "print('SMOKE_RETURNCODE',smoke.returncode,flush=True)\n"
+        "if smoke.returncode: raise RuntimeError('pooling smoke verification failed')\n"
+        "scored=subprocess.run([sys.executable,worker,'--mode','scored'],"
+        "env=base,check=False,timeout=4600)\n"
+        "print('SCORED_RETURNCODE',scored.returncode,flush=True)\n"
+        "if scored.returncode: raise RuntimeError('pooling scored run failed')\n"
+        "print('POOLING_DRIVER_COMPLETE',flush=True)\n"
+    )
+
+
 def _write_refresh_script(job: Path, session: str) -> Path:
     script = job / "refresh_session.py"
     script.write_text(
@@ -267,28 +319,7 @@ def main() -> None:
     (job / "source.sha256").write_text(source_hash + "\n")
     remote = job / "remote.py"
     remote.write_text(
-        "import os,sys,hashlib,tarfile,subprocess\n"
-        "from pathlib import Path\n"
-        "archive=Path('/content/lewm-source.tar.gz')\n"
-        f"assert hashlib.sha256(archive.read_bytes()).hexdigest()=={source_hash!r}\n"
-        "print('SOURCE_ARCHIVE_VERIFIED',flush=True)\n"
-        "stage=Path('/content/lewm-pooling-stage');stage.mkdir(exist_ok=False)\n"
-        "with tarfile.open(archive) as bundle: bundle.extractall(stage,filter='data')\n"
-        "code=Path('/content/lewm-pooling-code');(stage/'code').rename(code)\n"
-        "inputs=Path('/content/lewm-pooling-inputs');(stage/'inputs').rename(inputs)\n"
-        "stage.rmdir()\n"
-        "worker=str(code/'variants/pixel-repr-ddqn/scripts/colab_pooling_worker.py')\n"
-        "base=dict(os.environ,PYTHONPATH=str(code/'src'),"
-        f"LEWM_SOURCE_HASH={source_hash!r},LEWM_RUN_ID={args.run_id!r})\n"
-        "smoke=subprocess.run([sys.executable,worker,'--mode','smoke'],"
-        "env=base,check=False,timeout=2400)\n"
-        "print('SMOKE_RETURNCODE',smoke.returncode,flush=True)\n"
-        "if smoke.returncode: raise RuntimeError('pooling smoke verification failed')\n"
-        "scored=subprocess.run([sys.executable,worker,'--mode','scored'],"
-        "env=base,check=False,timeout=4600)\n"
-        "print('SCORED_RETURNCODE',scored.returncode,flush=True)\n"
-        "if scored.returncode: raise RuntimeError('pooling scored run failed')\n"
-        "print('POOLING_DRIVER_COMPLETE',flush=True)\n"
+        build_remote_driver(source_hash=source_hash, run_id=args.run_id)
     )
     session = f"dodge-{args.run_id}"
     cli("new", "--session", session, "--gpu", "T4")
