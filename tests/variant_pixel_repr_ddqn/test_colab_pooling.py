@@ -115,7 +115,7 @@ def test_pooling_remote_driver_sets_up_before_scoring(monkeypatch) -> None:
     launcher = _launcher(monkeypatch)
     driver = launcher.build_remote_driver(**_driver_kwargs())
     compile(driver, "<remote-driver>", "exec")
-    setup = driver.index("uv_binary")
+    setup = driver.index("uv_ok=False")
     native = driver.index("dodge-python")
     smoke = driver.index("run_phase('smoke','smoke.log'")
     scored = driver.index("run_phase('scored','scored.log'")
