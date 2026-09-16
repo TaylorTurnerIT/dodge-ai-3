@@ -108,6 +108,7 @@ def _recover_missing(
 
     banks = inputs / "spatial-banks"
     recovered: list[str] = []
+    regenerated_identical: list[str] = []
     for split in _standard_splits_needed(recovery_targets):
         # ensure_inputs relocated this split's recorded scaffolding into the
         # staging mirror, so the target is absent and the builders can
@@ -127,21 +128,27 @@ def _recover_missing(
             encode_batch_size=ENCODE_BATCH_SIZE,
             checkpoint_sha256=world_hash,
         )
-        staged_metadata = (target / "metadata.json").read_bytes()
-        original_metadata = (
-            staging / f"spatial-banks/standard/{split}/metadata.json"
-        ).read_bytes()
-        if staged_metadata != original_metadata:
-            raise ValueError(
-                f"recovered {split} bank metadata differs from recorded metadata"
-            )
-        wanted = {
+        for name in ("metadata.json", "index.json", "READY"):
+            staged_original = staging / f"spatial-banks/standard/{split}/{name}"
+            if not staged_original.is_file():
+                continue
+            if (target / name).read_bytes() != staged_original.read_bytes():
+                raise ValueError(
+                    f"recovered {split} bank {name} differs from recorded bytes"
+                )
+        arrays = {
             key: value
-            for key, value in recovery_targets.items()
+            for key, value in protocol["inputs"].items()
             if key.startswith(f"spatial-banks/standard/{split}/")
+            and key.endswith(".npy")
         }
-        verify_files(inputs, wanted)
-        recovered.extend(sorted(wanted))
+        verify_files(inputs, arrays)
+        recovered.extend(
+            sorted(key for key in arrays if key in recovery_targets)
+        )
+        regenerated_identical.extend(
+            sorted(key for key in arrays if key not in recovery_targets)
+        )
 
     spatial_needed = _spatial_splits_needed(recovery_targets)
     if spatial_needed:
@@ -158,21 +165,27 @@ def _recover_missing(
                 device=device,
                 batch_size=EXTRACT_BATCH_SIZE,
             )
-            staged_metadata = (target / "metadata.json").read_bytes()
-            original_metadata = (
-                staging / f"spatial-banks/spatial/{split}/metadata.json"
-            ).read_bytes()
-            if staged_metadata != original_metadata:
-                raise ValueError(
-                    f"recovered {split} sidecar metadata differs from recorded metadata"
-                )
-            wanted = {
+            for name in ("metadata.json", "READY"):
+                staged_original = staging / f"spatial-banks/spatial/{split}/{name}"
+                if not staged_original.is_file():
+                    continue
+                if (target / name).read_bytes() != staged_original.read_bytes():
+                    raise ValueError(
+                        f"recovered {split} sidecar {name} differs from recorded bytes"
+                    )
+            arrays = {
                 key: value
-                for key, value in recovery_targets.items()
+                for key, value in protocol["inputs"].items()
                 if key.startswith(f"spatial-banks/spatial/{split}/")
+                and key.endswith(".npy")
             }
-            verify_files(inputs, wanted)
-            recovered.extend(sorted(wanted))
+            verify_files(inputs, arrays)
+            recovered.extend(
+                sorted(key for key in arrays if key in recovery_targets)
+            )
+            regenerated_identical.extend(
+                sorted(key for key in arrays if key not in recovery_targets)
+            )
 
     del model
     if torch.cuda.is_available():
@@ -180,6 +193,7 @@ def _recover_missing(
     verify_files(inputs, protocol["inputs"])
     return {
         "recovered_files": sorted(recovered),
+        "regenerated_identical": sorted(regenerated_identical),
         "torch_version": str(torch.__version__),
         "device_name": torch.cuda.get_device_name(0),
         "frames_per_episode": FRAMES_PER_EPISODE,
@@ -190,21 +204,23 @@ def _recover_missing(
     }
 
 
-def _relocate_scaffolding(
+def _relocate_split_files(
     inputs: Path,
     staging: Path,
     kinds_splits: set[tuple[str, str]],
     expectations: dict[str, str],
 ) -> None:
-    """Move recorded split scaffolding aside so builders see absent targets.
+    """Move recorded split files aside so builders see absent targets.
 
     ``build_bank``/``extract_patches`` refuse existing output paths and
     publish via ``os.replace``, which fails on FUSE mounts when the
-    destination exists.  After digest verification, the recorded
-    metadata/index/READY bytes move into the staging mirror; the split
-    directory must then be empty (removed here) — anything left over is
-    unplanned content and stops the run.  The regenerated scaffolding must
-    be byte-identical to the relocated originals (gated in _recover_missing).
+    destination exists.  After digest verification, every recorded file the
+    split holds (scaffolding plus already-restored arrays such as the
+    validation cls sidecar) moves into the staging mirror; the split
+    directory must then be empty (removed here).  Files absent from the
+    protocol or left over afterwards are unplanned content and stop the
+    run.  Regenerated bytes must be identical to the relocated originals
+    (gated in _recover_missing).
     """
 
     import shutil
@@ -212,23 +228,23 @@ def _relocate_scaffolding(
     from dodge_native_game.variants.pixel_repr_ddqn.run_artifacts import file_hash
 
     for kind, split in sorted(kinds_splits):
-        for name in ("metadata.json", "index.json", "READY"):
-            relpath = f"spatial-banks/{kind}/{split}/{name}"
-            if relpath not in expectations:
-                continue
-            source = inputs / relpath
+        split_dir = inputs / "spatial-banks" / kind / split
+        for source in sorted(split_dir.iterdir()):
             if not source.is_file():
-                raise ValueError(f"recovery scaffolding missing, stopping: {relpath}")
+                raise ValueError(
+                    "recovery target holds unexpected content: "
+                    f"spatial-banks/{kind}/{split}/{source.name}"
+                )
+            relpath = f"spatial-banks/{kind}/{split}/{source.name}"
+            if relpath not in expectations:
+                raise ValueError(f"unplanned input file, stopping: {relpath}")
             if file_hash(source) != expectations[relpath]:
-                raise ValueError(f"recovery scaffolding digest mismatch: {relpath}")
+                raise ValueError(f"relocated file digest mismatch: {relpath}")
             staged = staging / relpath
             staged.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(staged))
-        # The builders refuse existing output paths, so the emptied split
-        # directory itself must go.  rmdir only succeeds when nothing but
-        # the relocated scaffolding was inside; leftovers stop the run.
         try:
-            (inputs / "spatial-banks" / kind / split).rmdir()
+            split_dir.rmdir()
         except OSError as error:
             raise ValueError(
                 "recovery target holds unexpected files: "
@@ -268,7 +284,7 @@ def ensure_inputs(
         for relpath in planned:
             parts = relpath.split("/")
             kinds_splits.add((parts[1], parts[2]))
-        _relocate_scaffolding(inputs, staging, kinds_splits, expectations)
+        _relocate_split_files(inputs, staging, kinds_splits, expectations)
         provenance = _recover_missing(protocol, inputs, staging, "cuda")
     verify_files(inputs, expectations)
     return provenance
