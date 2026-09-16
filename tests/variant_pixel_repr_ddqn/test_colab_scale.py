@@ -91,3 +91,16 @@ def test_scale_remote_driver_creates_work_before_renames() -> None:
     first_rename = driver.index(".rename(code)")
     assert mkdir < first_rename
     assert len(re.findall(r"rename\(code\)", driver)) == 1
+
+
+def test_newest_mirrored_step_requires_complete_triple(tmp_path: Path) -> None:
+    launcher = _launcher()
+    job = tmp_path / "job"
+    assert launcher._newest_mirrored_step(job) == 0
+    mirror = job / "mirror-checkpoints"
+    mirror.mkdir(parents=True)
+    (mirror / "checkpoint-2048.pt").write_bytes(b"ckpt")
+    assert launcher._newest_mirrored_step(job) == 0
+    (mirror / "sample-trace-2048.json").write_bytes(b"[]")
+    (mirror / "stochastic-trace-2048.json").write_bytes(b"[]")
+    assert launcher._newest_mirrored_step(job) == 2048

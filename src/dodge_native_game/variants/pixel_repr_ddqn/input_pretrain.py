@@ -998,6 +998,11 @@ def continue_run(
                     sample_trace_hash=sample_hash,
                     stochastic_trace_hash=stochastic_hash,
                 )
+                # Publish running traces alongside every intermediate
+                # checkpoint so an orchestrator can mirror a resumable
+                # (checkpoint, traces) triple mid-chunk (B77).
+                atomic_json(run / "sample-trace.json", trace)
+                atomic_json(run / "stochastic-trace.json", stochastic_trace)
                 save_checkpoint(run / f"checkpoint-{step}.pt", payload)
                 if step == total_steps:
                     save_checkpoint(run / "checkpoint.pt", payload)

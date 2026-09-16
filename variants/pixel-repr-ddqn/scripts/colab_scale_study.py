@@ -166,6 +166,64 @@ def _base_files(base_checkpoint: Path) -> dict[str, Path]:
     }
 
 
+def _mirror_checkpoint(
+    session: str, job: Path, run_id: str, step: int
+) -> bool:
+    """Mirror one resumable (checkpoint, traces) triple; True when complete."""
+
+    target_dir = job / "mirror-checkpoints"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    remotes = (
+        (f"history/{run_id}/checkpoint-{step}.pt", f"checkpoint-{step}.pt"),
+        (f"history/{run_id}/sample-trace.json", f"sample-trace-{step}.json"),
+        (
+            f"history/{run_id}/stochastic-trace.json",
+            f"stochastic-trace-{step}.json",
+        ),
+    )
+    complete = True
+    for remote, local in remotes:
+        target = target_dir / local
+        if target.is_file():
+            continue
+        temporary = target.with_name(".mirror-" + target.name)
+        try:
+            result = subprocess.run(
+                ["colab", "--auth", "adc", "download",
+                 f"/content/lewm-scale-work/{remote}", str(temporary),
+                 "--session", session],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=600,
+            )
+            if result.returncode == 0 and temporary.is_file():
+                temporary.replace(target)
+            else:
+                complete = False
+        except subprocess.TimeoutExpired:
+            complete = False
+    return complete
+
+
+def _newest_mirrored_step(job: Path) -> int:
+    """Newest step with a complete mirrored (checkpoint, traces) triple."""
+
+    steps = []
+    target_dir = job / "mirror-checkpoints"
+    if target_dir.is_dir():
+        for path in target_dir.glob("checkpoint-*.pt"):
+            try:
+                step = int(path.stem.split("-")[1])
+            except (IndexError, ValueError):
+                continue
+            if (
+                (target_dir / f"sample-trace-{step}.json").is_file()
+                and (target_dir / f"stochastic-trace-{step}.json").is_file()
+            ):
+                steps.append(step)
+    return max(steps) if steps else 0
+
+
 def _mirror_metrics(session: str, history: Path, run_id: str) -> None:
     names = [run_id]
     for name in names:
@@ -269,10 +327,29 @@ def main() -> None:
             stdout=log,
             stderr=subprocess.STDOUT,
         )
+        polls = 0
         while process.poll() is None:
             _mirror_metrics(session, mirror_root, args.run_id)
+            # Mirror the newest intermediate checkpoint triple every ~10
+            # minutes so a preempted chunk can resume instead of restarting.
+            if polls % 10 == 0:
+                status_path = (
+                    mirror_root / args.run_id / "status.json"
+                )
+                try:
+                    status_step = int(
+                        json.loads(status_path.read_text())["step"]
+                    )
+                except (OSError, ValueError, KeyError):
+                    status_step = args.base_step
+                grid = (status_step // args.checkpoint_every) * args.checkpoint_every
+                if grid > args.base_step:
+                    _mirror_checkpoint(session, job, args.run_id, grid)
+            polls += 1
             time.sleep(60)
         _mirror_metrics(session, mirror_root, args.run_id)
+        newest = _newest_mirrored_step(job)
+        print(f"newest mirrored checkpoint step: {newest}", flush=True)
         remote_log = (job / "remote.log").read_text()
         if process.returncode or "SCALE_DRIVER_COMPLETE" not in remote_log:
             raise RuntimeError(f"Scale chunk failed; session retained: {session}")
