@@ -37,6 +37,7 @@ R4|SIGReg reference|Random direction projections; statistic averages across batc
 R5|Control boundary|Paper uses goal-image MPC with continuous actions; Dodge survival and nine discrete actions require later explicit cost/controller design|https://arxiv.org/html/2603.19312v3#S3.SS2
 R6|Uncertainty|No novelty claim for LeWM+DDQN/PPO without separate prior-art review. Noncollapse does not establish small-hazard retention or survival usefulness.
 R7|Paper training hyperparameters|Released config: AdamW lr5e-5, decay1e-3, clip1.0, batch128, bf16, sub-trajectories of 4 frames; ours matches lr/decay/clip/SIGReg0.09 but runs batch32/float32 on T4 memory. LR needs no tinkering; batch/precision gaps are throughput, not dynamics|references/le-wm/config/train/lewm.yaml:33 + paper App.D
+R8|Open question (investigate later)|Frames contain only 3 colors yet the encoder trains on full RGB: does RGB input vs palette-restricted input change what dynamics get learned, or only readout convenience? Y-screen showed palette wins globally but changing-cream recall stayed ~0%; not resolved whether RGB training is problematic for forecasting vs merely wasteful|user 2026-09-16; see Y.result
 
 §I
 pixels: `native_adapter.py` → owned native RGB/action whitelist; preprocess explicit, no privileged features.
@@ -613,6 +614,7 @@ AD2|complete|collection|Expanded determined-scenario corpus, hashed+frozen|AD.au
 AD3|pending|training|Stage-1 scaled training 1024→20000 with chunk resume|AD1|Same envelope as Y2; chunk checkpoints verified; preemption resumes from last chunk.
 AD4|pending|diagnostic fitting/evaluation|AC1/AC2 probes at 5k/10k/20k; advance/stop decision|AD3|Common frozen readout; prediction:persistence + oracle gap reported; stop rule per AD.stages.
 AD.compute|deferred note, no action|User can facilitate multiple A100s; multi-GPU planning (distribution strategy, batch/precision re-baselining per R7, chunk protocol) queued after stage-1 evidence. Single-T4 chunking continues meanwhile.|AD.authorization
+AD.packing|deferred candidate, no action|Frames carry 2 bits/pixel of information in 24-bit RGB; packed 2-bit corpus would shrink inflate/parse/decode cost on the data-bound training step (GPU batch identical either way). Ranked behind prefetch + batch64/bf16; revisit if data side dominates again. See also R8.|AD.authorization
 
 B71|2026-09-15|AC2 T4 run crashed at step-512 milestone: _decode_cells moved targets to the compute device while decoder outputs detach to CPU; cross-device MSE arithmetic is CUDA-only failure invisible to CPU-only tests|Keep decode metric math CPU (V57); add device-move spy test asserting no image-rank tensor moves to the compute device in _decode_cells; relaunch AC2 on retained T4.
 
