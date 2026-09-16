@@ -366,6 +366,28 @@ def run_smoke(protocol: dict) -> None:
     print("SMOKE_COMPLETE", flush=True)
 
 
+def _reset_work_root() -> dict[str, Any]:
+    """Give the scored phase a clean work dir, preserving smoke provenance.
+
+    Smoke and scored run as separate fresh processes sharing /content; the
+    scored phase owns WORK_ROOT afterwards, but the environment record must
+    still name the files smoke recovered.  Preserve the smoke-written
+    recovery-provenance.json across the reset.
+    """
+
+    import shutil
+
+    recovery_path = WORK_ROOT / "recovery-provenance.json"
+    preserved: dict[str, Any] = (
+        json.loads(recovery_path.read_text())
+        if recovery_path.is_file()
+        else {"recovered_files": []}
+    )
+    shutil.rmtree(WORK_ROOT, ignore_errors=True)
+    WORK_ROOT.mkdir(exist_ok=False)
+    return preserved
+
+
 def run_scored(protocol: dict) -> None:
     import torch
 
@@ -384,7 +406,7 @@ def run_scored(protocol: dict) -> None:
     _check_device(protocol)
     ensure_inputs(protocol, INPUT_ROOT, STAGING_ROOT, allow_recovery=False)
     _check_core_init(protocol)
-    WORK_ROOT.mkdir(exist_ok=False)
+    recovery_provenance = _reset_work_root()
     history = WORK_ROOT / "history"
     history.mkdir()
     initial = make_pooling_decoders(device="cuda")
@@ -410,11 +432,7 @@ def run_scored(protocol: dict) -> None:
         if file_hash(INPUT_ROOT / relative) != expected:
             raise ValueError(f"Frozen input mutated: {relative}")
     recovery_path = WORK_ROOT / "recovery-provenance.json"
-    recovery_provenance: dict[str, Any] = (
-        json.loads(recovery_path.read_text())
-        if recovery_path.is_file()
-        else {"recovered_files": []}
-    )
+    atomic_json(recovery_path, recovery_provenance)
     atomic_json(
         history / f"{protocol['run_id']}-environment.json",
         {

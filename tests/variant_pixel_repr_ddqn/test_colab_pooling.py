@@ -413,3 +413,26 @@ def test_pooling_launcher_rejects_local_bytes_disagreeing_with_record(
             source_commit="deadbeef",
             comparison=comparison,
         )
+
+
+def test_reset_work_root_preserves_smoke_provenance(tmp_path: Path) -> None:
+    worker = _worker()
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "scratch-history").mkdir()
+    provenance = {"recovered_files": ["spatial-banks/spatial/train/patches.npy"]}
+    (work / "recovery-provenance.json").write_text(json.dumps(provenance))
+    worker.WORK_ROOT = work
+    try:
+        preserved = worker._reset_work_root()
+    finally:
+        worker.WORK_ROOT = Path("/content/lewm-pooling-work")
+    assert preserved == provenance
+    assert work.is_dir()
+    assert not (work / "scratch-history").exists()
+    worker.WORK_ROOT = work
+    try:
+        preserved = worker._reset_work_root()
+    finally:
+        worker.WORK_ROOT = Path("/content/lewm-pooling-work")
+    assert preserved == {"recovered_files": []}
