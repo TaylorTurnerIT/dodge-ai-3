@@ -98,3 +98,19 @@ def test_future_worker_rejects_actual_readout_drift() -> None:
     result["ab_source_run"] = "other-run"
     with pytest.raises(RuntimeError, match="contract mismatch"):
         worker.validate_result(result, _protocol("actual-next-latent"))
+
+
+def test_future_worker_roots_default_and_overlay(monkeypatch) -> None:
+    from pathlib import Path
+
+    worker = _worker_module()
+    monkeypatch.delenv("LEWM_WORK_ROOT", raising=False)
+    monkeypatch.delenv("LEWM_CODE_ROOT", raising=False)
+    work, code = worker._work_roots()
+    assert work == Path("/content/lewm-work")
+    assert code == Path("/content/lewm-work")
+    monkeypatch.setenv("LEWM_WORK_ROOT", "/content/lewm-ac2-work")
+    monkeypatch.setenv("LEWM_CODE_ROOT", "/content/lewm-ac2-src")
+    work, code = worker._work_roots()
+    assert work == Path("/content/lewm-ac2-work")
+    assert code == Path("/content/lewm-ac2-src")

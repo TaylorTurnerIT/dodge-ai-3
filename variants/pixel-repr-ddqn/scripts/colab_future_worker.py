@@ -87,6 +87,19 @@ def _require_file(path: Path, label: str) -> None:
         raise RuntimeError(f"missing {label}: {path}")
 
 
+def _work_roots() -> tuple[Path, Path]:
+    """Resolve the work and code roots, honoring overlay overrides.
+
+    A fresh session uses ``/content/lewm-work`` for both.  A recorded
+    source overlay on a live runtime sets ``LEWM_WORK_ROOT`` (fresh
+    inputs/history) and ``LEWM_CODE_ROOT`` (overlay source) instead.
+    """
+
+    work = Path(os.environ.get("LEWM_WORK_ROOT", "/content/lewm-work"))
+    code = Path(os.environ.get("LEWM_CODE_ROOT", str(work)))
+    return work, code
+
+
 def main() -> None:
     import torch
 
@@ -96,7 +109,7 @@ def main() -> None:
         file_hash,
     )
 
-    root = Path("/content/lewm-work")
+    root, code = _work_roots()
     protocol = json.loads((root / "future_protocol.json").read_text())
     if not isinstance(protocol, dict):
         raise ValueError("Future protocol must contain a JSON object")
@@ -127,7 +140,7 @@ def main() -> None:
     torch.set_num_threads(2)
     subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "tests/variant_pixel_repr_ddqn"],
-        cwd=root,
+        cwd=code,
         check=True,
     )
     torch.cuda.reset_peak_memory_stats()
