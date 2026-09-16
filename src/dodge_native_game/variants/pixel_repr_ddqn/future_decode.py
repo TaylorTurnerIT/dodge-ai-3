@@ -343,7 +343,7 @@ def _decode_cells(
     target_classes = palette_indices(targets, palette)
     current_classes = palette_indices(currents, palette)
     changed = target_classes != current_classes
-    target01 = torch.from_numpy(targets.astype(np.float32)).to(device).div(255.0)
+    target01 = torch.from_numpy(targets.astype(np.float32)).div(255.0)
     cells: dict[str, Any] = {}
     with (
         torch.random.fork_rng(devices=_rng_devices(device)),

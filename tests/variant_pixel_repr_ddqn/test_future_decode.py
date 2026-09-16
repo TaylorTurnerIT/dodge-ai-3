@@ -194,6 +194,39 @@ def test_palette_metrics_reports_precision_and_unchanged_errors() -> None:
     assert metrics["unchanged_false_positive_share"] == 1 / 3
 
 
+def test_decode_cells_moves_only_forward_chunks_to_compute_device(
+    monkeypatch,
+) -> None:
+    moved = []
+    original_to = torch.Tensor.to
+
+    def spy(self: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        moved.append(tuple(self.shape))
+        return original_to(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "to", spy)
+    rng = np.random.default_rng(0)
+    palette = np.asarray(
+        [[0, 0, 0], [255, 255, 0], [255, 255, 255]], dtype=np.uint8
+    )
+    bundle = {
+        "actual": rng.normal(size=(2, 192)).astype(np.float32),
+        "predicted": rng.normal(size=(2, 192)).astype(np.float32),
+        "persistence": rng.normal(size=(2, 192)).astype(np.float32),
+        "targets": np.zeros((2, 3, 128, 128), dtype=np.uint8),
+        "currents": np.zeros((2, 3, 128, 128), dtype=np.uint8),
+    }
+    future_decode._decode_cells(
+        {"primary": LocalPatchDecoder()},
+        bundle,
+        palette,
+        torch.device("cpu"),
+        keep_images=False,
+    )
+    image_moves = [shape for shape in moved if len(shape) == 4]
+    assert image_moves == []
+
+
 def test_future_decode_actual_readout_trains_matched_head_with_cross_matrix(
     tmp_path: Path, monkeypatch
 ) -> None:
