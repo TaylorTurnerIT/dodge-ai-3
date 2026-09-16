@@ -33,7 +33,28 @@ def test_future_gallery_writes_five_panel_relative_layout(tmp_path) -> None:
     assert 'fetch("/' not in html
 
 
+def test_future_gallery_supports_actual_readout_labels(tmp_path) -> None:
+    output = write_gallery(
+        tmp_path,
+        "actual-screen",
+        primary="primary",
+        primary_label="actual",
+        decode_label="actual latent",
+    )
+    html = output.read_text()
+    assert "__PRIMARY__" not in html
+    assert "__DECODE_LABEL__" not in html
+    assert 'primary="primary"' in html
+    assert '"actual"' in html
+    assert "Next decoded (actual latent)" in html
+
+
 @pytest.mark.parametrize("run_id", ["", "../escape", "has space", "/absolute"])
 def test_future_gallery_rejects_invalid_run_ids(tmp_path, run_id: str) -> None:
     with pytest.raises(ValueError, match="invalid run ID"):
         write_gallery(tmp_path, run_id)
+
+
+def test_future_gallery_rejects_empty_labels(tmp_path) -> None:
+    with pytest.raises(ValueError, match="non-empty strings"):
+        write_gallery(tmp_path, "actual-screen", primary_label="")

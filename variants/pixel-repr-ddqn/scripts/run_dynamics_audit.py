@@ -22,6 +22,49 @@ def _fractions(values: Any) -> tuple[float, ...]:
     return result
 
 
+def _reanalyze(source: Path, output: Path) -> dict[str, Any]:
+    import json
+
+    from dodge_native_game.variants.pixel_repr_ddqn.dynamics import (
+        migrate_audit_rows,
+        summarize_audit_rows,
+    )
+    from dodge_native_game.variants.pixel_repr_ddqn.run_artifacts import atomic_json
+
+    report = json.loads(source.read_text())
+    rows = migrate_audit_rows(report["windows"])
+    summary = summarize_audit_rows(rows)
+    corrected = {
+        "experiment": report.get("experiment"),
+        "analysis": "corrected-reporting-v2",
+        "source_artifact": source.name,
+        "world_model_sha256": report.get("world_model_sha256"),
+        "data_sha256": report.get("data_sha256"),
+        "world_model_updates": report.get("world_model_updates", 0),
+        "split": report.get("split"),
+        "note": (
+            "Group names, win/loss/tie separation, and unique/tied-best "
+            "ranking replace the original summary; per-action count fields "
+            "are unavailable for saved rows. Original artifact preserved."
+        ),
+        **summary,
+        "windows": rows,
+    }
+    atomic_json(output, corrected)
+    print(
+        "AUDIT_REANALYZED windows={} win/loss/tie={}/{}/{} unique/tied={}/{}".format(
+            corrected["window_count"],
+            corrected["prediction_win_rate"],
+            corrected["prediction_loss_rate"],
+            corrected["prediction_tie_rate"],
+            corrected["recorded_uniquely_best_rate"],
+            corrected["recorded_tied_best_rate"],
+        ),
+        flush=True,
+    )
+    return corrected
+
+
 def main(argv: Any = None) -> dict[str, Any]:
     import torch
 
@@ -44,8 +87,8 @@ def main(argv: Any = None) -> dict[str, Any]:
     )
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", type=Path, required=True)
-    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--dataset", type=Path, default=None)
+    parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
@@ -53,11 +96,21 @@ def main(argv: Any = None) -> dict[str, Any]:
     )
     parser.add_argument("--fractions", nargs="+", default=(0.25, 0.5, 0.75))
     parser.add_argument("--action-dim", type=int, default=9)
+    parser.add_argument(
+        "--reanalyze",
+        type=Path,
+        default=None,
+        help="recompute the corrected summary from a saved audit report",
+    )
     args = parser.parse_args(argv)
+    output = Path(args.output)
+    if args.reanalyze is not None:
+        return _reanalyze(Path(args.reanalyze), output)
 
+    if args.dataset is None or args.checkpoint is None:
+        parser.error("--dataset and --checkpoint are required without --reanalyze")
     dataset_root = Path(args.dataset)
     checkpoint = Path(args.checkpoint)
-    output = Path(args.output)
     fractions = _fractions(args.fractions)
     device = torch.device(args.device)
 
@@ -105,13 +158,16 @@ def main(argv: Any = None) -> dict[str, Any]:
     atomic_json(output, report)
     print(
         "AUDIT_COMPLETE windows={} pred={:.6f} copy={:.6f} "
-        "ratio={} win_rate={} best_rate={}".format(
+        "ratio={} win/loss/tie={}/{}/{} unique/tied={}/{}".format(
             result["window_count"],
             result["prediction_mse"] or float("nan"),
             result["persistence_mse"] or float("nan"),
             result["prediction_vs_persistence_ratio"],
             result["prediction_win_rate"],
-            result["recorded_action_best_rate"],
+            result["prediction_loss_rate"],
+            result["prediction_tie_rate"],
+            result["recorded_uniquely_best_rate"],
+            result["recorded_tied_best_rate"],
         ),
         flush=True,
     )

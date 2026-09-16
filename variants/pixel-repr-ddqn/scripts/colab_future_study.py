@@ -14,6 +14,10 @@ from colab_large_probe import ROOT, _validate_run_id, cli, digest, upload
 EXPERIMENT = "lewm-future-decode-v1"
 MILESTONES = (512, 2048)
 SCENE_COUNT = 16
+READOUTS = {
+    "predicted": "predicted-latent-broadcast",
+    "actual": "actual-next-latent",
+}
 
 
 def _protocol(
@@ -23,8 +27,11 @@ def _protocol(
     data_sha256: str,
     run_id: str,
     source_commit: str,
+    readout: str,
+    ab_decoder_sha256: str | None = None,
+    ab_source_run: str | None = None,
 ) -> dict[str, object]:
-    return {
+    protocol: dict[str, object] = {
         "experiment": EXPERIMENT,
         "run_id": run_id,
         "checkpoint_name": "world.pt",
@@ -40,11 +47,16 @@ def _protocol(
         "decoder_sampling_seed": 903,
         "loss_kind": "balanced-bright",
         "equal_class_weights": True,
-        "readout": "predicted-latent-broadcast",
+        "readout": READOUTS[readout],
         "scene_count": SCENE_COUNT,
         "worker_timeout_seconds": 7200,
         "source_commit": source_commit,
     }
+    if readout == "actual":
+        protocol["ab_decoder_name"] = "ab-decoder.pt"
+        protocol["ab_decoder_sha256"] = ab_decoder_sha256
+        protocol["ab_source_run"] = ab_source_run
+    return protocol
 
 
 def _write_refresh_script(job: Path, session: str) -> Path:
@@ -120,6 +132,9 @@ def main() -> None:
     parser.add_argument("--current-decoder", type=Path, required=True)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--readout", default="predicted", choices=tuple(READOUTS))
+    parser.add_argument("--ab-decoder", type=Path, default=None)
+    parser.add_argument("--ab-source-run", default=None)
     args = parser.parse_args()
     _validate_run_id(args.run_id, "run ID")
     checkpoint = args.checkpoint.expanduser().resolve()
@@ -131,6 +146,13 @@ def main() -> None:
         parser.error(f"current decoder does not exist: {current_decoder}")
     if not (dataset / "manifest.json").is_file():
         parser.error(f"dataset manifest does not exist: {dataset / 'manifest.json'}")
+    ab_decoder = None
+    if args.readout == "actual":
+        if args.ab_decoder is None or not args.ab_source_run:
+            parser.error("--ab-decoder and --ab-source-run are required for actual")
+        ab_decoder = args.ab_decoder.expanduser().resolve()
+        if not ab_decoder.is_file():
+            parser.error(f"reference decoder does not exist: {ab_decoder}")
     if subprocess.check_output(
         ["git", "status", "--porcelain"], cwd=ROOT, text=True
     ).strip():
@@ -145,6 +167,9 @@ def main() -> None:
         source_commit=subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
+        readout=args.readout,
+        ab_decoder_sha256=digest(ab_decoder) if ab_decoder is not None else None,
+        ab_source_run=args.ab_source_run,
     )
     (job / "future_protocol.json").write_text(json.dumps(protocol, indent=2) + "\n")
     archive = job / "source.tar.gz"
@@ -168,6 +193,8 @@ def main() -> None:
             )
         output.add(checkpoint, arcname="world.pt")
         output.add(current_decoder, arcname="current-decoder.pt")
+        if ab_decoder is not None:
+            output.add(ab_decoder, arcname="ab-decoder.pt")
         output.add(dataset, arcname="dataset")
         output.add(job / "future_protocol.json", arcname="future_protocol.json")
     if archive.stat().st_size > 1024**3:
@@ -237,8 +264,14 @@ def main() -> None:
         or report.get("world_model_updates") != 0
         or report.get("milestones") != protocol["milestones"]
         or report.get("loss_kind") != "balanced-bright"
+        or report.get("readout") != protocol["readout"]
     ):
         raise RuntimeError("future report provenance mismatch; session retained")
+    if protocol["readout"] == "actual-next-latent" and (
+        report.get("ab_source_run") != protocol["ab_source_run"]
+        or report.get("ab_decoder_sha256") != protocol["ab_decoder_sha256"]
+    ):
+        raise RuntimeError("future reference provenance mismatch; session retained")
     gallery = history / f"{args.run_id}-comparison.html"
     if not gallery.is_file() or gallery.stat().st_size == 0:
         raise RuntimeError("future comparison gallery is missing; session retained")

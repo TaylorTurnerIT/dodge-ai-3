@@ -178,6 +178,117 @@ def test_diff_map_highlights_only_mismatched_pixels() -> None:
         diff_map(observed.astype(np.float32), decoded.astype(np.float32))
 
 
+def test_palette_metrics_reports_precision_and_unchanged_errors() -> None:
+    predicted = np.asarray([[0, 1], [1, 1]])
+    target = np.asarray([[0, 1], [1, 0]])
+    current = np.asarray([[0, 0], [1, 0]])
+    metrics = future_decode._palette_metrics(predicted, target, current)
+
+    assert metrics["changed_pixels"] == 1
+    assert metrics["palette_changed_per_color_recall"] == [None, 1.0, None]
+    assert metrics["palette_precision"] == [1.0, 2 / 3, None]
+    assert metrics["palette_recall"] == [0.5, 1.0, None]
+    assert metrics["palette_iou"] == [0.5, 2 / 3, None]
+    assert metrics["predicted_occupancy"] == [0.25, 0.75, 0.0]
+    assert metrics["unchanged_pixels"] == 3
+    assert metrics["unchanged_false_positive_share"] == 1 / 3
+
+
+def test_future_decode_actual_readout_trains_matched_head_with_cross_matrix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    dataset = tmp_path / "dataset"
+    _make_dataset(dataset)
+    checkpoint, decoder_path = _write_world_and_decoder(tmp_path, dataset)
+    world_hash = file_hash(checkpoint)
+    ab_path = tmp_path / "ab-decoder.pt"
+    torch.save(
+        {
+            "model": LocalPatchDecoder().state_dict(),
+            "decoder_kind": "local-patch",
+            "representation": "predicted",
+            "world_model_sha256": world_hash,
+            "latent_dim": 192,
+        },
+        ab_path,
+    )
+
+    monkeypatch.setattr(
+        future_decode, "load_model", lambda path: (_StubWorld(), {})
+    )
+
+    history = tmp_path / "history"
+    result = run_study(
+        dataset,
+        checkpoint,
+        decoder_path,
+        history,
+        "actual-test",
+        device="cpu",
+        milestones=(1,),
+        scene_count=2,
+        batch_size=2,
+        readout="actual",
+        ab_decoder=ab_path,
+        ab_source_run="future-test",
+        eval_fractions=(0.5,),
+    )
+
+    assert result["readout"] == "actual-next-latent"
+    assert result["ab_source_run"] == "future-test"
+    assert result["ab_decoder_sha256"] == file_hash(ab_path)
+    assert file_hash(checkpoint) == world_hash
+
+    run = history / "actual-test"
+    report = json.loads((run / "report.json").read_text())
+    assert set(report["cross"]) == {
+        "primary_on_actual",
+        "primary_on_predicted",
+        "primary_on_current",
+        "reference_on_actual",
+        "reference_on_predicted",
+        "reference_on_current",
+    }
+    assert report["broad"]["window_count"] == 2
+    assert set(report["broad"]["cells"]) == set(report["cross"])
+    saved = torch.load(run / "decoder.pt", weights_only=True)
+    assert saved["representation"] == "actual"
+    rows = [
+        json.loads(line) for line in (run / "metrics.jsonl").read_text().splitlines()
+    ]
+    assert rows[0]["loss"] == rows[0]["actual_loss"]
+    gallery = (history / "actual-test-comparison.html").read_text()
+    assert "Next decoded (actual latent)" in gallery
+    assert '"actual"' in gallery
+
+    with pytest.raises(ValueError, match="ab_decoder is required"):
+        run_study(
+            dataset,
+            checkpoint,
+            decoder_path,
+            history,
+            "actual-bad",
+            device="cpu",
+            milestones=(1,),
+            scene_count=2,
+            batch_size=2,
+            readout="actual",
+        )
+    with pytest.raises(ValueError, match="readout must be"):
+        run_study(
+            dataset,
+            checkpoint,
+            decoder_path,
+            history,
+            "actual-bad",
+            device="cpu",
+            milestones=(1,),
+            scene_count=2,
+            batch_size=2,
+            readout="cls",
+        )
+
+
 def test_nearest_palette_classes_picks_closest_color() -> None:
     images = torch.tensor(
         [
@@ -229,8 +340,9 @@ def test_future_decode_study_bounded_cpu(tmp_path: Path, monkeypatch) -> None:
     assert report["equal_class_weights"] is True
     assert report["loss_class_weights"] == {"cream": 0.5, "other": 0.5}
     assert report["loss_normalization"] == "per-frame-then-batch"
+    assert report["readout"] == "predicted-latent-broadcast"
     for key in (
-        "predicted",
+        "primary",
         "persistence_control",
         "wrong_latent_control",
         "pixel_persistence_baseline",
@@ -238,9 +350,19 @@ def test_future_decode_study_bounded_cpu(tmp_path: Path, monkeypatch) -> None:
         metrics = report[key]
         assert 0.0 <= metrics["class_error"] <= 1.0
         assert len(metrics["palette_changed_per_color_recall"]) == 3
-    for key in ("predicted", "persistence_control"):
+    for key in ("primary", "persistence_control"):
         assert report[key]["mse"] >= 0.0
         assert "changed_region_mse" in report[key]
+        assert len(report[key]["palette_precision"]) == 3
+        assert len(report[key]["predicted_occupancy"]) == 3
+        assert "unchanged_false_positive_share" in report[key]
+    assert set(report["cross"]) == {
+        "primary_on_actual",
+        "primary_on_predicted",
+        "primary_on_current",
+    }
+    assert report["broad"]["window_count"] == 6
+    assert set(report["broad"]["cells"]) == set(report["cross"])
 
     rows = [
         json.loads(line) for line in (run / "metrics.jsonl").read_text().splitlines()

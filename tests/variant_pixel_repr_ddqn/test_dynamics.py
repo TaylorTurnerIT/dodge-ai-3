@@ -7,7 +7,9 @@ from torch import nn
 from dodge_native_game.variants.pixel_repr_ddqn.dynamics import (
     audit_action_conditioning,
     evaluate_dynamics,
+    migrate_audit_rows,
     plan_audit_windows,
+    summarize_audit_rows,
 )
 
 
@@ -125,7 +127,10 @@ def test_action_audit_reports_interventions_and_splits() -> None:
     assert result["persistence_mse"] == pytest.approx(5.0)
     assert result["prediction_vs_persistence_ratio"] == pytest.approx(0.1)
     assert result["prediction_win_rate"] == pytest.approx(0.5)
-    assert result["recorded_action_best_rate"] == pytest.approx(0.5)
+    assert result["prediction_loss_rate"] == pytest.approx(0.0)
+    assert result["prediction_tie_rate"] == pytest.approx(0.5)
+    assert result["recorded_uniquely_best_rate"] == pytest.approx(0.5)
+    assert result["recorded_tied_best_rate"] == pytest.approx(0.0)
     assert result["wrong_action_mean_mse"] == pytest.approx(13.0625)
     assert result["move_from_current_mse"] == pytest.approx(4.5)
     assert result["action_spread_mse"] == pytest.approx(17.0625)
@@ -138,21 +143,90 @@ def test_action_audit_reports_interventions_and_splits() -> None:
     assert first["persistence_mse"] == pytest.approx(9.0)
     assert first["wrong_action_mean_mse"] == pytest.approx(8.625)
     assert first["wrong_action_min_mse"] == pytest.approx(1.0)
-    assert first["recorded_action_best"] is True
+    assert first["recorded_action"] == 3
+    assert first["alternative_mses"] == pytest.approx([9, 4, 1, 1, 4, 9, 16, 25])
+    assert first["better_alternative_count"] == 0
+    assert first["tied_alternative_count"] == 0
+    assert first["recorded_uniquely_best"] is True
+    assert first["recorded_tied_best"] is False
     assert first["action_changed"] is True
     assert second["prediction_mse"] == pytest.approx(1.0)
     assert second["wrong_action_mean_mse"] == pytest.approx(17.5)
     assert second["wrong_action_min_mse"] == pytest.approx(0.0)
-    assert second["recorded_action_best"] is False
+    assert second["better_alternative_count"] == 1
+    assert second["tied_alternative_count"] == 1
+    assert second["recorded_uniquely_best"] is False
+    assert second["recorded_tied_best"] is False
     assert second["move_from_current_mse"] == pytest.approx(0.0)
     assert second["action_spread_mse"] == pytest.approx(25.5)
     assert second["action_changed"] is False
 
-    assert result["changing"]["window_count"] == 1
-    assert result["changing"]["prediction_win_rate"] == pytest.approx(1.0)
-    assert result["static"]["window_count"] == 1
-    assert result["static"]["prediction_win_rate"] == pytest.approx(0.0)
-    assert result["static"]["recorded_action_best_rate"] == pytest.approx(0.0)
+    assert result["higher_pixel_change"]["window_count"] == 1
+    assert result["higher_pixel_change"]["prediction_win_rate"] == pytest.approx(1.0)
+    assert result["lower_pixel_change"]["window_count"] == 1
+    assert result["lower_pixel_change"]["prediction_win_rate"] == pytest.approx(0.0)
+    assert result["lower_pixel_change"]["prediction_tie_rate"] == pytest.approx(1.0)
+    assert result["unchanged"]["window_count"] == 0
+    assert result["unchanged"]["prediction_mse"] is None
+
+
+def test_migrate_audit_rows_recovers_ranking_without_action_errors() -> None:
+    def old_row(prediction: float, minimum: float, change: float) -> dict:
+        return {
+            "prediction_mse": prediction,
+            "persistence_mse": 1.0,
+            "wrong_action_mean_mse": 1.0,
+            "wrong_action_min_mse": minimum,
+            "recorded_action_best": minimum >= prediction,
+            "move_from_current_mse": 0.0,
+            "action_spread_mse": 0.0,
+            "pixel_change": change,
+            "action_changed": False,
+        }
+
+    rows = migrate_audit_rows(
+        [
+            old_row(0.0, 1.0, 9.0),
+            old_row(1.0, 0.0, 1.0),
+            old_row(0.5, 0.5, 0.0),
+        ]
+    )
+
+    assert rows[0]["alternative_mses"] is None
+    assert rows[0]["better_alternative_count"] is None
+    assert "recorded_action_best" not in rows[0]
+    assert [row["recorded_uniquely_best"] for row in rows] == [True, False, False]
+    assert [row["recorded_tied_best"] for row in rows] == [False, False, True]
+
+    summary = summarize_audit_rows(rows)
+    assert summary["window_count"] == 3
+    assert summary["higher_pixel_change"]["window_count"] == 1
+    assert summary["lower_pixel_change"]["window_count"] == 1
+    assert summary["unchanged"]["window_count"] == 1
+    assert summary["recorded_uniquely_best_rate"] == pytest.approx(1 / 3)
+    assert summary["recorded_tied_best_rate"] == pytest.approx(1 / 3)
+
+
+def test_action_invariant_model_reports_tied_best_not_unique() -> None:
+    class InvariantModel(nn.Module):
+        def encode(self, pixels: torch.Tensor) -> torch.Tensor:
+            batch, time = pixels.shape[:2]
+            return torch.zeros(batch, time, 1)
+
+        def predict(self, z: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+            return torch.zeros_like(z)
+
+    result = audit_action_conditioning(
+        InvariantModel(), [_window([0.0, 1.0, 3.0, 6.0], [1, 2, 3])], "cpu"
+    )
+
+    (row,) = result["windows"]
+    assert row["better_alternative_count"] == 0
+    assert row["tied_alternative_count"] == 8
+    assert row["recorded_uniquely_best"] is False
+    assert row["recorded_tied_best"] is True
+    assert result["recorded_uniquely_best_rate"] == pytest.approx(0.0)
+    assert result["recorded_tied_best_rate"] == pytest.approx(1.0)
 
 
 def test_action_audit_is_read_only_and_guards_degenerate_cases() -> None:
@@ -168,9 +242,11 @@ def test_action_audit_is_read_only_and_guards_degenerate_cases() -> None:
     assert torch.equal(before_rng, torch.random.get_rng_state())
     assert result["prediction_vs_persistence_ratio"] is None
     assert result["prediction_win_rate"] == pytest.approx(0.0)
-    assert result["recorded_action_best_rate"] == pytest.approx(1.0)
-    assert result["changing"]["window_count"] == 0
-    assert result["changing"]["prediction_mse"] is None
+    assert result["prediction_tie_rate"] == pytest.approx(1.0)
+    assert result["recorded_uniquely_best_rate"] == pytest.approx(1.0)
+    assert result["unchanged"]["window_count"] == 1
+    assert result["higher_pixel_change"]["window_count"] == 0
+    assert result["higher_pixel_change"]["prediction_mse"] is None
 
     with pytest.raises(ValueError, match="action range"):
         audit_action_conditioning(

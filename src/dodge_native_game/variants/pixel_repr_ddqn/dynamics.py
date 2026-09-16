@@ -11,13 +11,17 @@ import torch.nn.functional as F
 
 __all__ = [
     "AUDIT_FRACTIONS",
+    "RANK_TOLERANCE",
     "audit_action_conditioning",
     "evaluate_dynamics",
     "iter_plan_windows",
+    "migrate_audit_rows",
     "plan_audit_windows",
+    "summarize_audit_rows",
 ]
 
 AUDIT_FRACTIONS: Final[tuple[float, float, float]] = (0.25, 0.5, 0.75)
+RANK_TOLERANCE: Final[float] = 1e-9
 
 
 def _mean(total: float, count: int) -> float | None:
@@ -182,6 +186,43 @@ def iter_plan_windows(
         }
 
 
+def _ranking(
+    prediction_mse: float,
+    alternative_mses: Sequence[float],
+    *,
+    tolerance: float = RANK_TOLERANCE,
+) -> dict[str, Any]:
+    """Distinguish uniquely-best, tied-best, and worse recorded actions.
+
+    An action-invariant predictor ties every alternative, so the legacy
+    "no alternative strictly better" statistic cannot be read as an
+    above-chance top-1 result.  Ties are declared within ``tolerance``.
+    """
+
+    better = sum(value < prediction_mse - tolerance for value in alternative_mses)
+    tied = sum(
+        abs(value - prediction_mse) <= tolerance for value in alternative_mses
+    )
+    return {
+        "better_alternative_count": better,
+        "tied_alternative_count": tied,
+        "recorded_uniquely_best": better == 0 and tied == 0,
+        "recorded_tied_best": better == 0 and tied > 0,
+    }
+
+
+def _ranking_from_min(
+    prediction_mse: float, min_mse: float, *, tolerance: float = RANK_TOLERANCE
+) -> dict[str, bool]:
+    """Recover ranking categories for rows lacking per-action errors."""
+
+    if min_mse > prediction_mse + tolerance:
+        return {"recorded_uniquely_best": True, "recorded_tied_best": False}
+    if min_mse < prediction_mse - tolerance:
+        return {"recorded_uniquely_best": False, "recorded_tied_best": False}
+    return {"recorded_uniquely_best": False, "recorded_tied_best": True}
+
+
 def _audit_window(
     model: torch.nn.Module,
     pixels: torch.Tensor,
@@ -209,15 +250,15 @@ def _audit_window(
         varied_prediction = model.predict(history, varied)[:, -1]
         alternative_mses.append(float(F.mse_loss(varied_prediction, target)))
         spreads.append(float(F.mse_loss(varied_prediction, recorded)))
-    rank = 1 + sum(value < prediction_mse for value in alternative_mses)
     frames = pixels[0].to(dtype=torch.float32)
     pixel_change = float(F.mse_loss(frames[-1], frames[-2]))
-    row = {
+    row: dict[str, Any] = {
         "prediction_mse": prediction_mse,
         "persistence_mse": persistence_mse,
         "wrong_action_mean_mse": float(sum(alternative_mses) / len(alternative_mses)),
         "wrong_action_min_mse": float(min(alternative_mses)),
-        "recorded_action_best": rank == 1,
+        "recorded_action": recorded_action,
+        "alternative_mses": alternative_mses,
         "move_from_current_mse": float(F.mse_loss(recorded, current)),
         "action_spread_mse": float(sum(spreads) / len(spreads)),
         "pixel_change": pixel_change,
@@ -226,37 +267,147 @@ def _audit_window(
             and bool(actions[0, -1].item() != actions[0, -2].item())
         ),
     }
+    row.update(_ranking(prediction_mse, alternative_mses))
+    scalars = [
+        value
+        for key, value in row.items()
+        if key != "alternative_mses" and not isinstance(value, bool)
+    ]
     if not all(
-        isinstance(value, bool) or bool(torch.isfinite(torch.as_tensor(value)))
-        for value in row.values()
+        bool(torch.isfinite(torch.as_tensor(value)))
+        for value in scalars + alternative_mses
     ):
         raise RuntimeError("nonfinite action audit metric")
     return row
 
 
+def migrate_audit_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Map pre-correction audit rows to the corrected schema.
+
+    Saved rows lack per-action errors, so count fields stay None while the
+    unique/tied-best categories recover exactly from the saved minimum.
+    """
+
+    migrated: list[dict[str, Any]] = []
+    for row in rows:
+        prediction_mse = float(row["prediction_mse"])
+        new = dict(row)
+        new.pop("recorded_action_best", None)
+        new["recorded_action"] = row.get("recorded_action")
+        new["alternative_mses"] = None
+        new["better_alternative_count"] = None
+        new["tied_alternative_count"] = None
+        new.update(
+            _ranking_from_min(
+                prediction_mse, float(row["wrong_action_min_mse"])
+            )
+        )
+        migrated.append(new)
+    return migrated
+
+
 def _audit_split(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Summarize one window group with win/loss/tie and ranking rates."""
+
     rows = list(rows)
     if not rows:
         return {
             "window_count": 0,
             "prediction_mse": None,
             "persistence_mse": None,
-            "recorded_action_best_rate": None,
             "prediction_win_rate": None,
+            "prediction_loss_rate": None,
+            "prediction_tie_rate": None,
+            "recorded_uniquely_best_rate": None,
+            "recorded_tied_best_rate": None,
         }
     count = len(rows)
-    wins = sum(
-        row["prediction_mse"] < row["persistence_mse"]  # type: ignore[operator]
-        for row in rows
-    )
+    wins = sum(1 for row in rows if row["prediction_mse"] < row["persistence_mse"])
+    losses = sum(1 for row in rows if row["prediction_mse"] > row["persistence_mse"])
     return {
         "window_count": count,
-        "prediction_mse": sum(row["prediction_mse"] for row in rows) / count,  # type: ignore[misc]
-        "persistence_mse": sum(row["persistence_mse"] for row in rows) / count,  # type: ignore[misc]
-        "recorded_action_best_rate": (
-            sum(1 for row in rows if row["recorded_action_best"]) / count
-        ),
+        "prediction_mse": sum(float(row["prediction_mse"]) for row in rows) / count,
+        "persistence_mse": sum(float(row["persistence_mse"]) for row in rows) / count,
         "prediction_win_rate": wins / count,
+        "prediction_loss_rate": losses / count,
+        "prediction_tie_rate": (count - wins - losses) / count,
+        "recorded_uniquely_best_rate": (
+            sum(1 for row in rows if row["recorded_uniquely_best"]) / count
+        ),
+        "recorded_tied_best_rate": (
+            sum(1 for row in rows if row["recorded_tied_best"]) / count
+        ),
+    }
+
+
+def _win_loss_tie(rows: Sequence[Mapping[str, Any]]) -> tuple[float | None, ...]:
+    """Return overall win/loss/tie rates of prediction versus persistence."""
+
+    if not rows:
+        return None, None, None
+    count = len(rows)
+    wins = sum(1 for row in rows if row["prediction_mse"] < row["persistence_mse"])
+    losses = sum(1 for row in rows if row["prediction_mse"] > row["persistence_mse"])
+    return wins / count, losses / count, (count - wins - losses) / count
+
+
+def summarize_audit_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Aggregate per-window audit rows without touching the model.
+
+    Pixel-change groups are relative: ``higher``/``lower`` split at the
+    median change, while ``unchanged`` holds exactly identical frames where
+    persistence is unbeatable by construction.
+    """
+
+    rows = list(rows)
+    changes = sorted(float(row["pixel_change"]) for row in rows)
+    threshold = float(statistics.median(changes)) if changes else 0.0
+    higher = [row for row in rows if float(row["pixel_change"]) > threshold]
+    lower = [row for row in rows if 0.0 < float(row["pixel_change"]) <= threshold]
+    unchanged = [row for row in rows if float(row["pixel_change"]) == 0.0]
+    prediction_mean = _mean(sum(float(r["prediction_mse"]) for r in rows), len(rows))
+    persistence_mean = _mean(sum(float(r["persistence_mse"]) for r in rows), len(rows))
+    win_rate, loss_rate, tie_rate = _win_loss_tie(rows)
+    return {
+        "window_count": len(rows),
+        "pixel_change_threshold": threshold,
+        "prediction_mse": prediction_mean,
+        "persistence_mse": persistence_mean,
+        "prediction_win_rate": win_rate,
+        "prediction_loss_rate": loss_rate,
+        "prediction_tie_rate": tie_rate,
+        "recorded_uniquely_best_rate": (
+            sum(1 for r in rows if r["recorded_uniquely_best"]) / len(rows)
+            if rows
+            else None
+        ),
+        "recorded_tied_best_rate": (
+            sum(1 for r in rows if r["recorded_tied_best"]) / len(rows)
+            if rows
+            else None
+        ),
+        "wrong_action_mean_mse": _mean(
+            sum(float(r["wrong_action_mean_mse"]) for r in rows), len(rows)
+        ),
+        "move_from_current_mse": _mean(
+            sum(float(r["move_from_current_mse"]) for r in rows), len(rows)
+        ),
+        "action_spread_mse": _mean(
+            sum(float(r["action_spread_mse"]) for r in rows), len(rows)
+        ),
+        "prediction_vs_persistence_ratio": (
+            prediction_mean / persistence_mean
+            if prediction_mean is not None and persistence_mean not in (None, 0.0)
+            else None
+        ),
+        "prediction_quantiles": _quantiles([float(r["prediction_mse"]) for r in rows]),
+        "persistence_quantiles": _quantiles(
+            [float(r["persistence_mse"]) for r in rows]
+        ),
+        "higher_pixel_change": _audit_split(higher),
+        "lower_pixel_change": _audit_split(lower),
+        "unchanged": _audit_split(unchanged),
+        "scope": "one-step teacher-forced action audit",
     }
 
 
@@ -312,46 +463,6 @@ def audit_action_conditioning(
         for module, mode in zip(modules, modes, strict=True):
             module.training = mode
 
-    changes = sorted(row["pixel_change"] for row in rows)
-    threshold = float(statistics.median(changes)) if changes else 0.0
-    changing = [row for row in rows if row["pixel_change"] > threshold]
-    static = [row for row in rows if row["pixel_change"] <= threshold]
-    prediction_mean = _mean(sum(row["prediction_mse"] for row in rows), len(rows))
-    persistence_mean = _mean(sum(row["persistence_mse"] for row in rows), len(rows))
-    return {
-        "window_count": len(rows),
-        "pixel_change_threshold": threshold,
-        "prediction_mse": prediction_mean,
-        "persistence_mse": persistence_mean,
-        "wrong_action_mean_mse": _mean(
-            sum(row["wrong_action_mean_mse"] for row in rows), len(rows)
-        ),
-        "move_from_current_mse": _mean(
-            sum(row["move_from_current_mse"] for row in rows), len(rows)
-        ),
-        "action_spread_mse": _mean(
-            sum(row["action_spread_mse"] for row in rows), len(rows)
-        ),
-        "prediction_vs_persistence_ratio": (
-            prediction_mean / persistence_mean
-            if prediction_mean is not None and persistence_mean not in (None, 0.0)
-            else None
-        ),
-        "prediction_win_rate": (
-            sum(row["prediction_mse"] < row["persistence_mse"] for row in rows)
-            / len(rows)
-            if rows
-            else None
-        ),
-        "recorded_action_best_rate": (
-            sum(1 for row in rows if row["recorded_action_best"]) / len(rows)
-            if rows
-            else None
-        ),
-        "prediction_quantiles": _quantiles([row["prediction_mse"] for row in rows]),
-        "persistence_quantiles": _quantiles([row["persistence_mse"] for row in rows]),
-        "changing": _audit_split(changing),
-        "static": _audit_split(static),
-        "scope": "one-step teacher-forced action audit",
-        "windows": rows,
-    }
+    summary = summarize_audit_rows(rows)
+    summary["windows"] = rows
+    return summary

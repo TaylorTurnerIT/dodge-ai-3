@@ -47,10 +47,12 @@ from .spatial_fit import fit_spatial_decoders, make_spatial_decoders
 from .spatial_readout import LocalPatchDecoder
 
 __all__ = [
+    "ACTUAL",
     "CONDITIONS",
     "EXPERIMENT",
     "MILESTONES",
     "PREDICTED",
+    "READOUTS",
     "SCENE_COUNT",
     "diff_map",
     "run_study",
@@ -59,11 +61,19 @@ __all__ = [
 
 EXPERIMENT = "lewm-future-decode-v1"
 PREDICTED = "predicted"
+ACTUAL = "actual"
 CONDITIONS = (PREDICTED,)
+READOUTS = (PREDICTED, ACTUAL)
+READOUT_NAMES = {
+    PREDICTED: "predicted-latent-broadcast",
+    ACTUAL: "actual-next-latent",
+}
+INPUTS = (ACTUAL, PREDICTED, "current")
 MILESTONES = (512, 2048)
 SCENE_COUNT = 16
 BATCH_SIZE = 32
 FEATURE_BATCH = 32
+DECODE_BATCH = 512
 DIFF_RGB: tuple[int, int, int] = (255, 255, 255)
 
 
@@ -171,11 +181,13 @@ def _extract_split(
     history_size: int,
     device: torch.device,
     include_patches: bool,
+    include_actual: bool = False,
 ) -> dict[str, Any]:
     """Encode windows once each and return teacher-forced one-step features."""
 
     predicted: list[np.ndarray] = []
     persistence: list[np.ndarray] = []
+    actual: list[np.ndarray] = []
     targets: list[np.ndarray] = []
     currents: list[np.ndarray] = []
     patches: list[np.ndarray] = []
@@ -202,6 +214,10 @@ def _extract_split(
             persistence.append(
                 encoded[:, -2].detach().cpu().numpy().astype(np.float32)
             )
+            if include_actual:
+                actual.append(
+                    encoded[:, -1].detach().cpu().numpy().astype(np.float32)
+                )
             if include_patches:
                 _, tokens = model.encode_readout_tokens(pixels[:, -2:-1])
                 patches.append(
@@ -215,6 +231,8 @@ def _extract_split(
         "targets": np.concatenate(targets),
         "currents": np.concatenate(currents),
     }
+    if include_actual:
+        result["actual"] = np.concatenate(actual)
     if include_patches:
         result["patches"] = np.concatenate(patches)
     return result
@@ -225,16 +243,39 @@ def _palette_metrics(
     target_classes: np.ndarray,
     current_classes: np.ndarray,
 ) -> dict[str, Any]:
+    """Classify decode quality with false-positive-aware spatial metrics.
+
+    Changed-region statistics describe localization; whole-image
+    precision/recall/IoU and predicted occupancy expose hedging that
+    changed-region recall alone cannot see.
+    """
+
     error = (predicted_classes != target_classes).astype(np.float64)
     changed = target_classes != current_classes
+    unchanged = ~changed
     changed_count = int(changed.sum())
+    unchanged_count = int(unchanged.sum())
     per_color_recall: list[float | None] = []
+    precision: list[float | None] = []
+    recall: list[float | None] = []
+    iou: list[float | None] = []
+    occupancy: list[float] = []
+    total_pixels = int(target_classes.size)
     for color in range(3):
         mask = changed & (target_classes == color)
         total = int(mask.sum())
         per_color_recall.append(
             float((predicted_classes[mask] == color).mean()) if total else None
         )
+        true = target_classes == color
+        guessed = predicted_classes == color
+        true_count, guessed_count = int(true.sum()), int(guessed.sum())
+        both = int((true & guessed).sum())
+        precision.append(float(both / guessed_count) if guessed_count else None)
+        recall.append(float(both / true_count) if true_count else None)
+        union = int((true | guessed).sum())
+        iou.append(float(both / union) if union else None)
+        occupancy.append(float(guessed_count / total_pixels) if total_pixels else 0.0)
     return {
         "class_error": float(error.mean()),
         "changed_pixels": changed_count,
@@ -244,6 +285,16 @@ def _palette_metrics(
         "palette_changed_per_color_recall": per_color_recall,
         "exact_match_share": float(
             (error.reshape(len(error), -1).sum(axis=1) == 0).mean()
+        ),
+        "palette_precision": precision,
+        "palette_recall": recall,
+        "palette_iou": iou,
+        "predicted_occupancy": occupancy,
+        "unchanged_pixels": unchanged_count,
+        "unchanged_false_positive_share": (
+            float((predicted_classes[unchanged] != target_classes[unchanged]).mean())
+            if unchanged_count
+            else None
         ),
     }
 
@@ -260,51 +311,101 @@ def _nearest_palette_classes(
     return distances.argmin(dim=1).detach().cpu().numpy()
 
 
-def _evaluate_scenes(
-    decoder: LocalPatchDecoder,
-    current_decoder: LocalPatchDecoder,
-    scenes: Mapping[str, Any],
+def _input_features(
+    bundle: Mapping[str, Any],
+) -> dict[str, np.ndarray]:
+    """Map cross-matrix input names to latent feature arrays."""
+
+    return {
+        ACTUAL: np.asarray(bundle["actual"]),
+        PREDICTED: np.asarray(bundle["predicted"]),
+        "current": np.asarray(bundle["persistence"]),
+    }
+
+
+def _decode_cells(
+    decoders: Mapping[str, LocalPatchDecoder],
+    bundle: Mapping[str, Any],
     palette: np.ndarray,
     device: torch.device,
+    *,
+    keep_images: bool,
 ) -> dict[str, Any]:
-    """Decode validation scenes through prediction, persistence, and controls."""
+    """Decode every head/input cell with false-positive-aware metrics.
 
-    target_classes = palette_indices(scenes["targets"], palette)
-    current_classes = palette_indices(scenes["currents"], palette)
+    Cells are named ``{head}_on_{input}`` over the actual next, predicted
+    next, and current latents.  Images are retained only on request; the
+    broad validation coverage keeps metrics alone.
+    """
+
+    targets = np.asarray(bundle["targets"])
+    currents = np.asarray(bundle["currents"])
+    target_classes = palette_indices(targets, palette)
+    current_classes = palette_indices(currents, palette)
     changed = target_classes != current_classes
-    target01 = (
-        torch.from_numpy(scenes["targets"].astype(np.float32)).to(device).div(255.0)
-    )
-    rows: dict[str, Any] = {}
+    target01 = torch.from_numpy(targets.astype(np.float32)).to(device).div(255.0)
+    cells: dict[str, Any] = {}
     with (
         torch.random.fork_rng(devices=_rng_devices(device)),
         torch.no_grad(),
     ):
-        for name, features in (
-            (PREDICTED, scenes["predicted"]),
-            ("persistence", scenes["persistence"]),
-        ):
-            output = forward_logits(
-                decoder,
-                torch.from_numpy(
-                    np.asarray(
-                        ExpandedFeatures(features)[:], dtype=np.float32
+        for head_name, decoder in decoders.items():
+            for input_name, features in _input_features(bundle).items():
+                expanded = np.asarray(ExpandedFeatures(features)[:], dtype=np.float32)
+                outputs = []
+                for cursor in range(0, len(expanded), DECODE_BATCH):
+                    chunk = torch.from_numpy(expanded[cursor : cursor + DECODE_BATCH])
+                    outputs.append(
+                        forward_logits(decoder, chunk.to(device)).detach().cpu()
                     )
-                ).to(device),
-            )
-            image01 = output.clamp(0.0, 1.0)
-            classes = _nearest_palette_classes(image01, palette)
-            metrics = _palette_metrics(classes, target_classes, current_classes)
-            squared = (image01 - target01).square().mean(dim=1).detach().cpu().numpy()
-            metrics["mse"] = float(squared.mean())
-            metrics["changed_region_mse"] = (
-                float(squared[changed].mean()) if bool(changed.any()) else None
-            )
-            rows[name] = {
-                "metrics": metrics,
-                "decoded": np.transpose(palette[classes], (0, 3, 1, 2)),
-                "classes": classes,
-            }
+                image01 = torch.cat(outputs).clamp(0.0, 1.0)
+                classes = _nearest_palette_classes(image01, palette)
+                metrics = _palette_metrics(classes, target_classes, current_classes)
+                squared = (
+                    (image01 - target01).square().mean(dim=1).detach().cpu().numpy()
+                )
+                metrics["mse"] = float(squared.mean())
+                metrics["changed_region_mse"] = (
+                    float(squared[changed].mean()) if bool(changed.any()) else None
+                )
+                cell: dict[str, Any] = {"metrics": metrics}
+                if keep_images:
+                    cell["decoded"] = np.transpose(palette[classes], (0, 3, 1, 2))
+                    cell["classes"] = classes
+                cells[f"{head_name}_on_{input_name}"] = cell
+    return {
+        "cells": cells,
+        "target_classes": target_classes,
+        "current_classes": current_classes,
+    }
+
+
+def _evaluate_scenes(
+    decoder: LocalPatchDecoder,
+    current_decoder: LocalPatchDecoder,
+    primary_input: str,
+    scenes: Mapping[str, Any],
+    palette: np.ndarray,
+    device: torch.device,
+    ab_decoder: LocalPatchDecoder | None = None,
+) -> dict[str, Any]:
+    """Decode gallery scenes through the primary head plus cross controls."""
+
+    heads: dict[str, LocalPatchDecoder] = {"primary": decoder}
+    if ab_decoder is not None:
+        heads["reference"] = ab_decoder
+    decoded = _decode_cells(heads, scenes, palette, device, keep_images=True)
+    cells = decoded["cells"]
+    target_classes = decoded["target_classes"]
+    current_classes = decoded["current_classes"]
+    rows: dict[str, Any] = {
+        "primary": cells[f"primary_on_{primary_input}"],
+        "cross": cells,
+    }
+    with (
+        torch.random.fork_rng(devices=_rng_devices(device)),
+        torch.no_grad(),
+    ):
         patch_logits = forward_logits(
             current_decoder,
             torch.from_numpy(scenes["patches"].astype(np.float32)).to(device),
@@ -312,10 +413,13 @@ def _evaluate_scenes(
         current_decoded = (
             render_palette_rgb(patch_logits, palette).detach().cpu().numpy() * 255.0
         ).round().astype(np.uint8)
-    predicted_classes = rows[PREDICTED]["classes"]
-    persistence_classes = rows["persistence"]["classes"]
+    primary_classes = rows["primary"]["classes"]
     order = np.arange(len(target_classes))
-    wrong = predicted_classes[(order + 1) % len(target_classes)]
+    wrong = primary_classes[(order + 1) % len(target_classes)]
+    rows["persistence_control"] = {
+        "metrics": cells["primary_on_current"]["metrics"],
+        "decoded": cells["primary_on_current"]["decoded"],
+    }
     rows["wrong_latent_control"] = {
         "metrics": _palette_metrics(wrong, target_classes, current_classes)
     }
@@ -323,10 +427,6 @@ def _evaluate_scenes(
         "metrics": _palette_metrics(current_classes, target_classes, current_classes)
     }
     rows["current_decoded"] = current_decoded
-    rows["target_classes"] = target_classes
-    rows["current_classes"] = current_classes
-    rows["predicted_classes"] = predicted_classes
-    rows["persistence_classes"] = persistence_classes
     return rows
 
 
@@ -366,8 +466,8 @@ def _write_scene_images(
         current_observed = scenes["currents"][index]
         next_observed = scenes["targets"][index]
         current_decoded = evaluation["current_decoded"][index]
-        next_decoded = evaluation[PREDICTED]["decoded"][index]
-        persistence = evaluation["persistence"]["decoded"][index]
+        next_decoded = evaluation["primary"]["decoded"][index]
+        persistence = evaluation["cross"]["primary_on_current"]["decoded"][index]
         diff = diff_map(next_observed, next_decoded)
         frames = {
             "current-observed": current_observed,
@@ -400,6 +500,33 @@ def _write_scene_images(
     return views
 
 
+def _load_readout_decoder(
+    path: Path, world_hash: str, device: torch.device, *, representation: str
+) -> tuple[LocalPatchDecoder, str]:
+    decoder_hash = file_hash(path)
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    if (
+        payload.get("decoder_kind") != "local-patch"
+        or payload.get("representation") != representation
+        or payload.get("world_model_sha256") != world_hash
+        or payload.get("latent_dim", 192) != 192
+    ):
+        raise ValueError(
+            f"Readout decoder must be a 192-dim local-patch {representation} head"
+        )
+    decoder = LocalPatchDecoder()
+    decoder.load_state_dict(payload["model"], strict=True)
+    decoder = decoder.to(device).eval()
+    decoder.requires_grad_(False)
+    return decoder, decoder_hash
+
+
+def _load_current_decoder(
+    path: Path, world_hash: str, device: torch.device
+) -> tuple[LocalPatchDecoder, str]:
+    return _load_readout_decoder(path, world_hash, device, representation="patch")
+
+
 def run_study(
     dataset_root: Path,
     checkpoint: Path,
@@ -412,13 +539,28 @@ def run_study(
     scene_count: int = SCENE_COUNT,
     train_window_limit: int | None = None,
     batch_size: int = BATCH_SIZE,
+    readout: str = PREDICTED,
+    ab_decoder: Path | None = None,
+    ab_source_run: str | None = None,
+    eval_fractions: Sequence[float] = (0.25, 0.5, 0.75),
 ) -> dict[str, Any]:
-    """Fit the predicted-latent readout and render the comparison view."""
+    """Fit one matched readout and render the comparison view.
+
+    ``readout`` selects the fitted condition: the predicted latent
+    (SPEC §AB) or the actual next projected latent (SPEC AC2, which also
+    cross-evaluates the saved §AB head passed as ``ab_decoder``).
+    """
 
     dataset_root = Path(dataset_root)
     checkpoint = Path(checkpoint)
     current_decoder = Path(current_decoder)
     history_root = Path(history_root)
+    if readout not in READOUTS:
+        raise ValueError(f"readout must be one of {READOUTS}")
+    if (ab_decoder is None) != (readout == PREDICTED):
+        raise ValueError("ab_decoder is required exactly for the actual readout")
+    if readout == ACTUAL and not ab_source_run:
+        raise ValueError("ab_source_run is required for the actual readout")
     if isinstance(scene_count, bool) or not isinstance(scene_count, int):
         raise TypeError("scene_count must be an integer")
     if scene_count < 2:
@@ -436,8 +578,16 @@ def run_study(
     patch_decoder, patch_decoder_hash = _load_current_decoder(
         current_decoder, world_hash, target_device
     )
+    reference_decoder = None
+    ab_decoder_hash = None
+    if ab_decoder is not None:
+        reference_decoder, ab_decoder_hash = _load_readout_decoder(
+            Path(ab_decoder), world_hash, target_device, representation=PREDICTED
+        )
     palette = np.asarray(payload["config"]["palette_rgb"], dtype=np.uint8)
     history_size = int(payload["config"]["history_size"])
+
+    from .dynamics import plan_audit_windows
 
     metadata = read_dataset_metadata(dataset_root)
     train_records = metadata.records["train"]
@@ -450,6 +600,9 @@ def run_study(
     )
     scene_names = tuple(
         str(validation_records[episode].episode_id) for episode, _ in scene_plan
+    )
+    broad_plan = plan_audit_windows(
+        validation_records, history_size=history_size, fractions=eval_fractions
     )
 
     print("FUTURE_PHASE train feature extraction", flush=True)
@@ -464,6 +617,7 @@ def run_study(
         history_size=history_size,
         device=target_device,
         include_patches=False,
+        include_actual=readout == ACTUAL,
     )
     del train_dataset
     print("FUTURE_PHASE validation feature extraction", flush=True)
@@ -478,6 +632,18 @@ def run_study(
         history_size=history_size,
         device=target_device,
         include_patches=True,
+        include_actual=True,
+    )
+    print("FUTURE_PHASE broad validation feature extraction", flush=True)
+    broad = _extract_split(
+        model,
+        validation_dataset,
+        validation_records,
+        broad_plan,
+        history_size=history_size,
+        device=target_device,
+        include_patches=False,
+        include_actual=True,
     )
     del validation_dataset, model
     gc.collect()
@@ -485,7 +651,7 @@ def run_study(
     run = history_root / run_id
     run.mkdir(parents=True, exist_ok=False)
     decoders = make_spatial_decoders(
-        device=target_device, seed=904, conditions=CONDITIONS
+        device=target_device, seed=904, conditions=(readout,)
     )
     study_metadata: dict[str, Any] = {
         "experiment": EXPERIMENT,
@@ -496,10 +662,8 @@ def run_study(
         "milestones": list(milestones),
         "world_model_updates": 0,
         "decoder_seed": 904,
-        "initial_state_sha256": _state_digest(decoders[PREDICTED]),
-        "parameter_count": sum(
-            p.numel() for p in decoders[PREDICTED].parameters()
-        ),
+        "initial_state_sha256": _state_digest(decoders[readout]),
+        "parameter_count": sum(p.numel() for p in decoders[readout].parameters()),
         "sampling_seed": 903,
         "batch_size": batch_size,
         "diagnostic_only": True,
@@ -510,59 +674,92 @@ def run_study(
         "bright_threshold": 0.8,
         "loss_normalization": "per-frame-then-batch",
         "decoder_architecture": "local-mlp-194-256-256-192",
-        "readout": "predicted-latent-broadcast",
+        "readout": READOUT_NAMES[readout],
         "palette_rgb": palette.tolist(),
         "train_windows": len(train_plan),
         "scene_count": len(scene_plan),
         "scene_episode_ids": list(scene_names),
+        "broad_windows": len(broad_plan),
+        "eval_fractions": list(eval_fractions),
         "history_size": history_size,
     }
+    if readout == ACTUAL:
+        study_metadata["ab_source_run"] = ab_source_run
+        study_metadata["ab_decoder_sha256"] = ab_decoder_hash
     atomic_json(run / "manifest.json", study_metadata)
     atomic_json(run / "config.json", study_metadata)
     probe._link_or_copy(checkpoint, run / "checkpoint.pt")
     probe._link_or_copy(current_decoder, run / "current-decoder.pt")
+    if ab_decoder is not None:
+        probe._link_or_copy(Path(ab_decoder), run / "ab-decoder.pt")
 
     def on_step(row: Mapping[str, Any]) -> None:
         append_metric(
             run / "metrics.jsonl",
-            {**row, "loss": row[f"{PREDICTED}_loss"], "readout": PREDICTED},
+            {**row, "loss": row[f"{readout}_loss"], "readout": readout},
         )
         if row["step"] % 128 == 0:
             print("FUTURE_DECODER", dict(row), flush=True)
 
     def on_milestone(snapshot, heads) -> None:
-        decoder = heads[PREDICTED]
+        decoder = heads[readout]
         path = run / f"decoder-{snapshot.step}.pt"
         save_checkpoint(
             path,
             {
                 **study_metadata,
-                "model": snapshot.model[PREDICTED],
-                "optimizer": snapshot.optimizer[PREDICTED],
+                "model": snapshot.model[readout],
+                "optimizer": snapshot.optimizer[readout],
                 "sampler": snapshot.sampler,
                 "torch_rng": snapshot.torch_rng,
                 "cuda_rng": snapshot.cuda_rng,
                 "step": snapshot.step,
                 "decoder_kind": "local-patch",
-                "representation": PREDICTED,
+                "representation": readout,
                 "latent_dim": 192,
             },
         )
         evaluation = _evaluate_scenes(
-            decoder, patch_decoder, scenes, palette, target_device
+            decoder,
+            patch_decoder,
+            readout,
+            scenes,
+            palette,
+            target_device,
+            ab_decoder=reference_decoder,
         )
+        broad_cells = _decode_cells(
+            (
+                {"primary": decoder}
+                if reference_decoder is None
+                else {"primary": decoder, "reference": reference_decoder}
+            ),
+            broad,
+            palette,
+            target_device,
+            keep_images=False,
+        )["cells"]
         views = _write_scene_images(
             run, snapshot.step, scene_names, scenes, evaluation
         )
         clean = {
             **study_metadata,
             "step": snapshot.step,
-            "predicted": evaluation[PREDICTED]["metrics"],
-            "persistence_control": evaluation["persistence"]["metrics"],
+            "primary": evaluation["primary"]["metrics"],
+            "cross": {
+                name: cell["metrics"] for name, cell in evaluation["cross"].items()
+            },
+            "persistence_control": evaluation["persistence_control"]["metrics"],
             "wrong_latent_control": evaluation["wrong_latent_control"]["metrics"],
             "pixel_persistence_baseline": evaluation[
                 "pixel_persistence_baseline"
             ]["metrics"],
+            "broad": {
+                "window_count": len(broad["targets"]),
+                "cells": {
+                    name: cell["metrics"] for name, cell in broad_cells.items()
+                },
+            },
             "evaluation_only": True,
         }
         atomic_json(run / f"evaluation-{snapshot.step}.json", clean)
@@ -584,19 +781,19 @@ def run_study(
         print(
             "FUTURE_EVALUATION",
             snapshot.step,
-            json.dumps(clean[PREDICTED]),
+            json.dumps(clean["primary"]),
             flush=True,
         )
 
     print("FUTURE_PHASE frozen diagnostic fitting", flush=True)
     fit_spatial_decoders(
         decoders,
-        {PREDICTED: ExpandedFeatures(train_features["predicted"])},
+        {readout: ExpandedFeatures(train_features[readout])},
         train_features["targets"],
         palette,
         milestones=milestones,
         batch_size=batch_size,
-        conditions=CONDITIONS,
+        conditions=(readout,),
         loss_kind="balanced-bright",
         on_step=on_step,
         on_milestone=on_milestone,
@@ -606,7 +803,13 @@ def run_study(
 
     from .future_gallery import write_gallery
 
-    gallery = write_gallery(history_root, run_id)
+    gallery = write_gallery(
+        history_root,
+        run_id,
+        primary="primary",
+        primary_label="actual" if readout == ACTUAL else "predicted",
+        decode_label="actual latent" if readout == ACTUAL else "predicted latent",
+    )
     result = {
         **study_metadata,
         "run_id": run_id,
@@ -649,6 +852,12 @@ def main(argv: Sequence[str] | None = None) -> dict[str, Any]:
     parser.add_argument("--milestones", type=int, nargs="+", default=list(MILESTONES))
     parser.add_argument("--scenes", type=int, default=SCENE_COUNT)
     parser.add_argument("--train-window-limit", type=int, default=None)
+    parser.add_argument("--readout", default=PREDICTED, choices=READOUTS)
+    parser.add_argument("--ab-decoder", type=Path, default=None)
+    parser.add_argument("--ab-source-run", default=None)
+    parser.add_argument(
+        "--eval-fractions", type=float, nargs="+", default=[0.25, 0.5, 0.75]
+    )
     args = parser.parse_args(argv)
     return run_study(
         args.dataset_root,
@@ -660,6 +869,10 @@ def main(argv: Sequence[str] | None = None) -> dict[str, Any]:
         milestones=tuple(args.milestones),
         scene_count=args.scenes,
         train_window_limit=args.train_window_limit,
+        readout=args.readout,
+        ab_decoder=args.ab_decoder,
+        ab_source_run=args.ab_source_run,
+        eval_fractions=tuple(args.eval_fractions),
     )
 
 

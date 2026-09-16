@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 import torch
 
 from dodge_native_game.variants.pixel_repr_ddqn.model import (
@@ -99,6 +100,48 @@ def test_audit_runner_writes_provenance_report(tmp_path: Path, monkeypatch) -> N
     ]
     assert json.loads(output.read_text())["window_count"] == 2
     assert file_hash(checkpoint) == world_hash
+
+
+def test_audit_runner_reanalyzes_saved_report(tmp_path: Path) -> None:
+    source = tmp_path / "audit.json"
+    source.write_text(
+        json.dumps(
+            {
+                "experiment": "lewm-dynamics-audit-v1",
+                "world_model_sha256": "a" * 64,
+                "data_sha256": "d" * 64,
+                "world_model_updates": 0,
+                "split": "validation",
+                "windows": [
+                    {
+                        "prediction_mse": 0.0,
+                        "persistence_mse": 9.0,
+                        "wrong_action_mean_mse": 8.0,
+                        "wrong_action_min_mse": 1.0,
+                        "recorded_action_best": True,
+                        "move_from_current_mse": 9.0,
+                        "action_spread_mse": 8.0,
+                        "pixel_change": 9.0,
+                        "action_changed": True,
+                    }
+                ],
+            }
+        )
+    )
+
+    runner = _runner_module()
+    output = tmp_path / "corrected.json"
+    corrected = runner.main(["--output", str(output), "--reanalyze", str(source)])
+
+    assert corrected["analysis"] == "corrected-reporting-v2"
+    assert corrected["source_artifact"] == "audit.json"
+    assert corrected["window_count"] == 1
+    assert corrected["prediction_win_rate"] == pytest.approx(1.0)
+    assert corrected["prediction_tie_rate"] == pytest.approx(0.0)
+    assert corrected["recorded_uniquely_best_rate"] == pytest.approx(1.0)
+    assert corrected["higher_pixel_change"]["window_count"] == 0
+    assert corrected["lower_pixel_change"]["window_count"] == 1
+    assert json.loads(output.read_text())["window_count"] == 1
 
 
 def test_audit_runner_rejects_bad_fractions(tmp_path: Path) -> None:

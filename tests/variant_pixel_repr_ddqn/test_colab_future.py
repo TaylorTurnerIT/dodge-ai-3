@@ -20,8 +20,8 @@ def _worker_module():
     return module
 
 
-def _protocol() -> dict:
-    return {
+def _protocol(readout: str = "predicted-latent-broadcast") -> dict:
+    protocol = {
         "experiment": "lewm-future-decode-v1",
         "run_id": "future-remote",
         "checkpoint_name": "world.pt",
@@ -30,11 +30,16 @@ def _protocol() -> dict:
         "current_decoder_sha256": "c" * 64,
         "data_sha256": "d" * 64,
         "milestones": [512, 2048],
+        "readout": readout,
     }
+    if readout == "actual-next-latent":
+        protocol["ab_decoder_name"] = "ab-decoder.pt"
+        protocol["ab_decoder_sha256"] = "b" * 64
+        protocol["ab_source_run"] = "future-remote-ab"
+    return protocol
 
 
-def test_future_worker_accepts_matching_artifact_contract() -> None:
-    worker = _worker_module()
+def _result(readout: str = "predicted-latent-broadcast") -> dict:
     result = {
         "experiment": "lewm-future-decode-v1",
         "world_model_sha256": "a" * 64,
@@ -47,8 +52,24 @@ def test_future_worker_accepts_matching_artifact_contract() -> None:
         "scene_count": 16,
         "loss_kind": "balanced-bright",
         "equal_class_weights": True,
+        "readout": readout,
     }
-    worker.validate_result(result, _protocol())
+    if readout == "actual-next-latent":
+        result["ab_decoder_sha256"] = "b" * 64
+        result["ab_source_run"] = "future-remote-ab"
+    return result
+
+
+def test_future_worker_accepts_matching_artifact_contract() -> None:
+    worker = _worker_module()
+    worker.validate_result(_result(), _protocol())
+
+
+def test_future_worker_accepts_actual_readout_contract() -> None:
+    worker = _worker_module()
+    worker.validate_result(
+        _result("actual-next-latent"), _protocol("actual-next-latent")
+    )
 
 
 @pytest.mark.parametrize(
@@ -60,23 +81,20 @@ def test_future_worker_accepts_matching_artifact_contract() -> None:
         ("parameter_count", 165057),
         ("scene_count", 8),
         ("batch_size", 16),
+        ("readout", "actual-next-latent"),
     ],
 )
 def test_future_worker_rejects_contract_drift(key: str, value) -> None:
     worker = _worker_module()
-    result = {
-        "experiment": "lewm-future-decode-v1",
-        "world_model_sha256": "a" * 64,
-        "data_sha256": "d" * 64,
-        "current_decoder_sha256": "c" * 64,
-        "milestones": [512, 2048],
-        "world_model_updates": 0,
-        "batch_size": 32,
-        "parameter_count": 165056,
-        "scene_count": 16,
-        "loss_kind": "balanced-bright",
-        "equal_class_weights": True,
-    }
+    result = _result()
     result[key] = value
     with pytest.raises(RuntimeError, match="contract mismatch"):
         worker.validate_result(result, _protocol())
+
+
+def test_future_worker_rejects_actual_readout_drift() -> None:
+    worker = _worker_module()
+    result = _result("actual-next-latent")
+    result["ab_source_run"] = "other-run"
+    with pytest.raises(RuntimeError, match="contract mismatch"):
+        worker.validate_result(result, _protocol("actual-next-latent"))
