@@ -408,7 +408,7 @@ def test_continue_run_rejects_bad_protocol() -> None:
         input_pretrain._validate_continue_protocol(
             extra_steps=0, batch_size=32, device="cpu", threads=1
         )
-    with pytest.raises(ValueError, match=r"batch\(32, 128\)"):
+    with pytest.raises(ValueError, match=r"batch\(32, 64, 128\)"):
         input_pretrain._validate_continue_protocol(
             extra_steps=8, batch_size=8, device="cpu", threads=1
         )
@@ -506,7 +506,7 @@ def test_continue_protocol_accepts_scale_settings(
     )
     input_pretrain._validate_continue_protocol(
         extra_steps=4096,
-        batch_size=128,
+        batch_size=64,
         device="cuda",
         threads=2,
         fetch_workers=2,
@@ -514,7 +514,7 @@ def test_continue_protocol_accepts_scale_settings(
     )
     with pytest.raises(ValueError, match="batch"):
         input_pretrain._validate_continue_protocol(
-            extra_steps=8, batch_size=64, device="cpu", threads=1
+            extra_steps=8, batch_size=96, device="cpu", threads=1
         )
     with pytest.raises(ValueError, match="precision"):
         input_pretrain._validate_continue_protocol(

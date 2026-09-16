@@ -823,7 +823,7 @@ def run_pair(
         raise
 
 
-CONTINUE_BATCH_SIZES: Final[tuple[int, ...]] = (32, 128)
+CONTINUE_BATCH_SIZES: Final[tuple[int, ...]] = (32, 64, 128)
 CONTINUE_PRECISIONS: Final[tuple[str, ...]] = ("float32", "bf16")
 
 

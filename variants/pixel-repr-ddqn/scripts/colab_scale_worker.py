@@ -42,7 +42,7 @@ def main() -> None:
     for key, value in expected.items():
         if protocol.get(key) != value:
             raise ValueError(f"Scale protocol mismatch: {key}")
-    if protocol.get("world_batch_size") not in (32, 128):
+    if protocol.get("world_batch_size") not in (32, 64, 128):
         raise ValueError("Scale protocol batch size not supported")
     if protocol.get("precision", "float32") not in ("float32", "bf16"):
         raise ValueError("Scale protocol precision not supported")

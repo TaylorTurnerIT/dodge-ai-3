@@ -286,8 +286,9 @@ def main() -> None:
     parser.add_argument("--precision", default="float32")
     args = parser.parse_args()
     _validate_run_id(args.run_id, "run ID")
-    if args.batch_size not in (32, 128):
-        parser.error("batch size must be 32 or 128")
+    # Batch 128 exceeds T4-15GB (B79); 64 is the operational ceiling until A100.
+    if args.batch_size not in (32, 64):
+        parser.error("batch size must be 32 or 64 on T4")
     if args.precision not in ("float32", "bf16"):
         parser.error("precision must be float32 or bf16")
     dataset = args.dataset.resolve()
