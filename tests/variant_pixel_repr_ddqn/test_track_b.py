@@ -97,10 +97,10 @@ def test_windows_label_death_within_horizon(tmp_path: Path) -> None:
     assert len(labels) == 2 * 125
     assert set(np.unique(labels)) == {0.0, 1.0}
     # Episode 0 dies at decision 64: windows ending within 16 steps flag it.
-    first = [label for tag, label in zip(provenance, labels)
+    first = [label for tag, label in zip(provenance, labels, strict=True)
              if tag.startswith("train-000000")]
     assert sum(first) == 16
-    assert all(label == 0 for tag, label in zip(provenance, labels)
+    assert all(label == 0 for tag, label in zip(provenance, labels, strict=True)
                if tag.startswith("train-000001"))
 
 
@@ -154,7 +154,7 @@ def test_greedy_action_picks_lowest_predicted_cost() -> None:
 
 
 def test_run_episode_counts_survived_and_outcome() -> None:
-    model, probe = _StubModel(), _StubProbe()
+    model = _StubModel()
     device = torch.device("cpu")
     died = mpc_eval.run_episode(
         lambda: _ScriptedAdapter(die_at=10), 0,
