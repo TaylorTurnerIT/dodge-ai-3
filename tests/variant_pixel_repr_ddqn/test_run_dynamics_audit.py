@@ -89,7 +89,7 @@ def test_audit_runner_writes_provenance_report(tmp_path: Path, monkeypatch) -> N
 
     assert report["experiment"] == "lewm-dynamics-audit-v1"
     assert report["world_model_sha256"] == world_hash
-    assert report["world_model_updates"] == 0
+    assert report["world_model_updates"] == 1024
     assert report["split"] == "validation"
     assert report["fractions"] == [0.5]
     assert report["window_count"] == 2
@@ -161,3 +161,44 @@ def test_audit_runner_rejects_bad_fractions(tmp_path: Path) -> None:
                 "1.5",
             ]
         )
+
+
+def test_audit_runner_accepts_continued_checkpoint(tmp_path: Path, monkeypatch) -> None:
+    dataset = tmp_path / "dataset"
+    fixture = _dataset_module()
+    fixture._make_dataset(dataset, train_count=1, validation_count=2)
+    payload = {
+        "input_arm": "palette",
+        "step": 3072,
+        "input_encoding": INPUT_ENCODING_PALETTE_ONEHOT_NEAREST_SYMMETRIC,
+        "data_hash": file_hash(dataset / "manifest.json"),
+        "config": {"palette_rgb": [[0, 0, 0]], "history_size": 3},
+    }
+    checkpoint = tmp_path / "world.pt"
+    torch.save(payload, checkpoint)
+
+    monkeypatch.setattr(
+        "dodge_native_game.variants.pixel_repr_ddqn.pretrain.load_model",
+        lambda path: (_StubWorld(), {}),
+    )
+
+    runner = _runner_module()
+    output = tmp_path / "audit.json"
+    report = runner.main(
+        [
+            "--dataset",
+            str(dataset),
+            "--checkpoint",
+            str(checkpoint),
+            "--output",
+            str(output),
+            "--device",
+            "cpu",
+            "--split",
+            "validation",
+            "--fractions",
+            "0.5",
+        ]
+    )
+    assert report["world_model_updates"] == 3072
+    assert report["window_count"] == 2

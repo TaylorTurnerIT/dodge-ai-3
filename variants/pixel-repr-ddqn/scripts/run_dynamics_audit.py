@@ -146,7 +146,7 @@ def main(argv: Any = None) -> dict[str, Any]:
         "experiment": "lewm-dynamics-audit-v1",
         "world_model_sha256": world_hash,
         "data_sha256": data_hash,
-        "world_model_updates": 0,
+        "world_model_updates": int(payload.get("step", 0)),
         "split": args.split,
         "history_size": history_size,
         "fractions": list(fractions),

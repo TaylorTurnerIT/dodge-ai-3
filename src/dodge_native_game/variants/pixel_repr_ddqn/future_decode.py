@@ -143,9 +143,11 @@ def _validate_world_payload(
     dataset_root: Path, checkpoint: Path, payload: Mapping[str, Any]
 ) -> str:
     data_hash = file_hash(Path(dataset_root) / "manifest.json")
+    step = payload.get("step")
     if (
         payload.get("input_arm") != "palette"
-        or payload.get("step") != 1024
+        or not isinstance(step, int)
+        or step < 1024
         or payload.get("input_encoding")
         != INPUT_ENCODING_PALETTE_ONEHOT_NEAREST_SYMMETRIC
         or payload.get("data_hash") != data_hash

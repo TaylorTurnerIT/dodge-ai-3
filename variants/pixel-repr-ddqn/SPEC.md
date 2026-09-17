@@ -640,3 +640,5 @@ B80|2026-09-16|Third preemption at results download (c2r2 finished 7168 updates,
 B81|2026-09-16|Fourth download race lost (c3 finished 7168, VM reclaimed within minutes of DRIVER_COMPLETE; 6144 triple survived). Pattern suggests idle-runtime reclamation strikes faster than ~250MB downloads complete|Pivot the stage chain to HPC (Slurm holds results; no race); Colab becomes probe/overflow only. Next HPC chunk resumes verified 6144 triple: 6144→14336 single-A100 batch64/bf16.
 
 B82|2026-09-16|First HPC training chunk failed in 20s: _validate_continue_protocol hardcoded T4-only guard from the Colab era; A100 rejected|Device allowlist (T4/A100/H100) with actual device recorded in continuation manifest; unit test pins accept/reject set.
+
+B83|2026-09-17|Track-A audit died at the 3072 checkpoint: future_decode world validator pinned step==1024 from the §Y era, rejecting continued checkpoints|Validator requires palette arm + matched data hash + step>=1024; audit report records payload step as world_model_updates; continued-checkpoint acceptance test added.
