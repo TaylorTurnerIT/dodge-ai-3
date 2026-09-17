@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _launcher(monkeypatch=None):
     scripts = (
@@ -159,3 +161,21 @@ def test_scale_protocol_records_batch_and_precision(tmp_path: Path) -> None:
     )
     assert protocol["world_batch_size"] == 128
     assert protocol["precision"] == "bf16"
+
+
+def test_job_transport_pair_parsing() -> None:
+    import sys
+
+    scripts = (
+        Path(__file__).resolve().parents[2] / "variants/pixel-repr-ddqn/scripts"
+    )
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import colab_job
+
+    assert colab_job._pair("/content/a.tar.gz:job/a.tar.gz") == (
+        "/content/a.tar.gz",
+        "job/a.tar.gz",
+    )
+    with pytest.raises(ValueError, match="REMOTE:LOCAL"):
+        colab_job._pair("no-separator")
