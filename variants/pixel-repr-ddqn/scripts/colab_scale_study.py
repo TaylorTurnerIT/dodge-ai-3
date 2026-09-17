@@ -399,15 +399,25 @@ def main() -> None:
         remote_log = (job / "remote.log").read_text()
         if process.returncode or "SCALE_DRIVER_COMPLETE" not in remote_log:
             raise RuntimeError(f"Scale chunk failed; session retained: {session}")
-    for remote_name, local_name in (
-        ("lewm-scale-results.sha256", "results.sha256"),
-        ("lewm-scale-results.tar.gz", "results.tar.gz"),
-    ):
-        cli("download", f"/content/{remote_name}", str(job / local_name),
-            "--session", session, timeout=600)
+    def retrieve(remote_name: str, local_name: str) -> None:
+        last: Exception | None = None
+        for _ in range(4):
+            try:
+                cli("download", f"/content/{remote_name}",
+                    str(job / local_name),
+                    "--session", session, timeout=600)
+                return
+            except (RuntimeError, subprocess.TimeoutExpired) as error:
+                last = error
+                time.sleep(60)
+        raise RuntimeError(
+            f"retrieval failed after retries: {remote_name}"
+        ) from last
+
+    retrieve("lewm-scale-results.sha256", "results.sha256")
+    retrieve("lewm-scale-results.tar.gz", "results.tar.gz")
     if wheel is None:
-        cli("download", "/content/lewm-scale-wheel.whl", str(job / "wheel.whl"),
-            "--session", session, timeout=600)
+        retrieve("lewm-scale-wheel.whl", "wheel.whl")
         captured = "dodge_native-0.1.0-cp311-abi3-linux_x86_64.whl"
         for line in (job / "remote.log").read_text().splitlines():
             if "WHEEL_CAPTURED" in line:
