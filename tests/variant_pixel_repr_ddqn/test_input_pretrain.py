@@ -568,3 +568,23 @@ def test_continue_run_records_batch_and_precision(
     manifest = json.loads(resumed["manifest"].read_text())
     assert manifest["batch_size"] == 128
     assert manifest["precision"] == "bf16"
+
+
+def test_continue_protocol_accepts_listed_accelerators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(input_pretrain.torch.cuda, "is_available", lambda: True)
+    for name in ("Tesla T4", "NVIDIA A100-PCIE-40GB", "NVIDIA H100"):
+        monkeypatch.setattr(
+            input_pretrain.torch.cuda, "get_device_name", lambda index, n=name: n
+        )
+        input_pretrain._validate_continue_protocol(
+            extra_steps=8, batch_size=64, device="cuda", threads=1
+        )
+    monkeypatch.setattr(
+        input_pretrain.torch.cuda, "get_device_name", lambda index: "Tesla V100"
+    )
+    with pytest.raises(RuntimeError, match="requires one of"):
+        input_pretrain._validate_continue_protocol(
+            extra_steps=8, batch_size=64, device="cuda", threads=1
+        )

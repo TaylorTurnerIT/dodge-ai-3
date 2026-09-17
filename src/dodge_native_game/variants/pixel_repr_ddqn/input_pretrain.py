@@ -825,6 +825,7 @@ def run_pair(
 
 CONTINUE_BATCH_SIZES: Final[tuple[int, ...]] = (32, 64, 128)
 CONTINUE_PRECISIONS: Final[tuple[str, ...]] = ("float32", "bf16")
+CONTINUE_DEVICES: Final[tuple[str, ...]] = ("T4", "A100", "H100")
 
 
 def _validate_continue_protocol(
@@ -854,8 +855,12 @@ def _validate_continue_protocol(
         raise ValueError("fetch_workers must be positive")
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required: run scaled continuation on a T4")
-    if "T4" not in torch.cuda.get_device_name(0):
-        raise RuntimeError("scaled continuation requires an NVIDIA T4")
+    device_name = torch.cuda.get_device_name(0)
+    if not any(tag in device_name for tag in CONTINUE_DEVICES):
+        raise RuntimeError(
+            "scaled continuation requires one of "
+            f"{CONTINUE_DEVICES}; got {device_name}"
+        )
 
 
 def _single_update(
@@ -1067,6 +1072,11 @@ def continue_run(
         "base_step": start_step,
         "batch_size": batch_size,
         "precision": precision,
+        "device": (
+            torch.cuda.get_device_name(0)
+            if device.startswith("cuda") and torch.cuda.is_available()
+            else device
+        ),
         "data_hash": data_hash,
         "dataset_manifest_sha256": data_hash,
         "optimizer": {
