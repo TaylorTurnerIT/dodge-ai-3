@@ -1,6 +1,6 @@
 """Run the AD5 Track-B survival probe and gated MPC eval on one T4.
 
-Uploads the frozen 6144 checkpoint and mortal probe set with the frozen
+Uploads the frozen study checkpoint and mortal probe set with the frozen
 source, fits the protocol probe on CUDA, applies the prespecified AUPRC
 gate, and runs the 32-scenario MPC comparison only on a pass.  A gate
 failure retrieves the probe evidence with an mpc-skipped record instead.
