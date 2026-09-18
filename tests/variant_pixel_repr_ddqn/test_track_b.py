@@ -160,6 +160,33 @@ def test_average_precision_null_when_degenerate() -> None:
     assert json.loads(json.dumps(report, allow_nan=False)) == report
 
 
+def test_greedy_action_trims_history_to_action_trace() -> None:
+    class _StrictHistoryModel(torch.nn.Module):
+        def encode(self, pixels: torch.Tensor) -> torch.Tensor:
+            batch, time = pixels.shape[:2]
+            return torch.zeros(batch, time, 192)
+
+        def predict(
+            self, z: torch.Tensor, actions: torch.Tensor
+        ) -> torch.Tensor:
+            assert z.shape[1] == actions.shape[1] <= 3, (
+                z.shape,
+                actions.shape,
+            )
+            return z.clone()
+
+    # Rollout buffer holds history_size+1 frames; predictor takes H.
+    action, costs = mpc_eval._greedy_action(
+        _StrictHistoryModel(),
+        _StubProbe(),
+        torch.zeros(1, 4, 3, 128, 128),
+        [0, 0, 0],
+        torch.device("cpu"),
+    )
+    assert len(costs) == 9
+    assert action == 0
+
+
 def test_greedy_action_picks_lowest_predicted_cost() -> None:
     action, costs = mpc_eval._greedy_action(
         _StubModel(), _StubProbe(),

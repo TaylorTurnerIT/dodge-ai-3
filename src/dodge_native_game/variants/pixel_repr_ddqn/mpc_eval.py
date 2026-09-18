@@ -43,7 +43,10 @@ def _greedy_action(
     past = torch.tensor(past_actions, dtype=torch.int64, device=device)
     actions = past.unsqueeze(0).expand(ACTION_COUNT, -1).clone()
     actions[:, -1] = torch.arange(ACTION_COUNT, device=device)
-    z_tiled = z.expand(ACTION_COUNT, -1, -1)
+    # Predictor context is H latents for H actions (training calls
+    # predict(encoded[:, :-1], actions)); the H+1-frame rollout buffer
+    # carries one extra frame, so drop the oldest before predicting.
+    z_tiled = z.expand(ACTION_COUNT, -1, -1)[:, -actions.shape[1] :, :]
     predicted = model.predict(z_tiled, actions)
     costs = probe(predicted[:, -1, :]).reshape(-1).tolist()
     best = int(min(range(ACTION_COUNT), key=lambda a: costs[a]))
