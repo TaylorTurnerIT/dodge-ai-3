@@ -287,6 +287,24 @@ def _read_json(path: Path, label: str) -> dict:
     return value
 
 
+def _publish_results(extracted: Path, run_dir: Path) -> None:
+    """Copy the verified result files (and trace tree) into the run dir."""
+
+    for name in (
+        "probe.pt",
+        "probe.json",
+        "mpc-report.json",
+        "mpc-skipped.json",
+        "environment.json",
+    ):
+        candidate = extracted / name
+        if candidate.is_file():
+            shutil.copy2(candidate, run_dir / name)
+    trace_src = extracted / "trace"
+    if trace_src.is_dir():
+        shutil.copytree(trace_src, run_dir / "trace")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
@@ -397,16 +415,7 @@ def main() -> None:
         results.extractall(job / "results", filter="data")
     run_dir = history / args.run_id
     run_dir.mkdir(parents=True, exist_ok=False)
-    for name in (
-        "probe.pt",
-        "probe.json",
-        "mpc-report.json",
-        "mpc-skipped.json",
-        "environment.json",
-    ):
-        candidate = job / "results" / "results" / name
-        if candidate.is_file():
-            shutil.copy2(candidate, run_dir / name)
+    _publish_results(job / "results" / "results", run_dir)
     probe_report = _read_json(run_dir / "probe.json", "probe report")
     if probe_report.get("world_model_sha256") != protocol["inputs"]["checkpoint.pt"]:
         raise RuntimeError("retrieved probe ran on a different checkpoint")

@@ -26,6 +26,26 @@ def _load(name: str, filename: str):
     return module
 
 
+def test_publish_results_copies_files_and_trace_tree(tmp_path: Path) -> None:
+    launcher = _load("survival_launcher_publish", "colab_survival_study.py")
+    extracted = tmp_path / "extracted"
+    (extracted / "trace" / "mpc" / "scene-0").mkdir(parents=True)
+    (extracted / "probe.json").write_text("{}")
+    (extracted / "trace" / "mpc" / "scene-0" / "steps.jsonl").write_text(
+        '{"step": 0}\n'
+    )
+    (extracted / "trace" / "mpc" / "scene-0" / "frame_000.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    launcher._publish_results(extracted, run_dir)
+    assert (run_dir / "probe.json").is_file()
+    assert not (run_dir / "mpc-report.json").exists()
+    assert (run_dir / "trace" / "mpc" / "scene-0" / "steps.jsonl").is_file()
+    assert (run_dir / "trace" / "mpc" / "scene-0" / "frame_000.png").is_file()
+
+
 def test_survival_remote_driver_sets_up_before_fitting() -> None:
     launcher = _load("survival_launcher_fixture", "colab_survival_study.py")
     driver = launcher.build_remote_driver(
