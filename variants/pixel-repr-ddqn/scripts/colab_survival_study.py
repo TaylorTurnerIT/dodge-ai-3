@@ -25,9 +25,10 @@ PROBE_SEED = 905
 PROBE_MAX_WINDOWS = 20000
 MIN_VAL_AUPRC = 0.10
 MPC_POLICIES = {
-    "mpc": "mpc",
-    "mpc_h2": "mpc_h2",
     "mpc_h3": "mpc_h3",
+    "mpc_h4": "mpc_h4",
+    "mpc_h3_max": "mpc_h3_max",
+    "mpc_h3_last": "mpc_h3_last",
     "random": "random",
     "neutral": "neutral",
 }

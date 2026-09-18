@@ -348,6 +348,47 @@ def test_plan_action_horizon2_minimizes_over_suffix() -> None:
     assert values == pytest.approx([a / 2 - 4 for a in range(9)])
 
 
+def test_plan_action_cost_modes_reduce_depth_scores() -> None:
+    # Stub sequence (a, b) yields depth costs [a - 4, b - 4]: max picks
+    # the worse moment (V(a) = a - 4), last sees only the suffix
+    # (V flat at -4, tie broken to action 0).
+    history = torch.zeros(1, 4, 3, 8, 8)
+    device = torch.device("cpu")
+    action_max, values_max = mpc_eval._plan_action(
+        _StubModel(), _StubProbe(), history, [0, 0, 0], 2, device, "max"
+    )
+    assert action_max == 0
+    assert values_max == pytest.approx([a - 4 for a in range(9)])
+    action_last, values_last = mpc_eval._plan_action(
+        _StubModel(), _StubProbe(), history, [0, 0, 0], 2, device, "last"
+    )
+    assert action_last == 0
+    assert values_last == pytest.approx([-4.0] * 9)
+    with pytest.raises(ValueError, match="cost mode"):
+        mpc_eval._plan_action(
+            _StubModel(), _StubProbe(), history, [0, 0, 0], 2, device,
+            "median",
+        )
+
+
+def test_steering_registry_exposes_planners_and_baselines() -> None:
+    policies = mpc_eval._steering_policies(
+        _StubModel(), _StubProbe(), torch.device("cpu")
+    )
+    assert sorted(policies) == [
+        "mpc", "mpc_h2", "mpc_h3", "mpc_h3_last", "mpc_h3_max", "mpc_h4",
+        "neutral", "random",
+    ]
+    history = torch.zeros(1, 4, 3, 8, 8)
+    for name, policy in policies.items():
+        action, costs = policy(history, [0, 0, 0])
+        assert action in range(9)
+        if name in ("random", "neutral"):
+            assert costs is None
+        else:
+            assert costs is not None and len(costs) == 9
+
+
 def test_plan_action_rejects_zero_horizon() -> None:
     with pytest.raises(ValueError, match="horizon"):
         mpc_eval._plan_action(

@@ -90,6 +90,9 @@ def _greedy_action(
     return best, [float(value) for value in costs]
 
 
+COST_MODES: Final[tuple[str, ...]] = ("mean", "max", "last")
+
+
 @torch.no_grad()
 def _plan_action(
     model: torch.nn.Module,
@@ -98,20 +101,25 @@ def _plan_action(
     past_actions: list[int],
     horizon: int,
     device: torch.device,
+    cost: str = "mean",
 ) -> tuple[int, list[float]]:
     """Exhaustive H-step MPC over 9^H action sequences (AD7.planner).
 
     Open-loop rollout: at each depth every sequence predicts its next
     latent from the sliding context (oldest latent dropped, predicted ẑ
     appended; actions slide equally), scored by the frozen probe.
-    Sequence cost is the mean probe cost over the horizon.  First-action
-    values are the min over sequences starting with each action; the
-    choice is the argmin with lowest-index tie-break.  Horizon 1 is
-    defined to match :func:`_greedy_action` exactly (regression-tested).
+    Sequence cost reduces the H probe scores by ``cost`` (AD8.costs):
+    ``mean`` (legacy), ``max`` (worst predicted moment), or ``last``
+    (terminal-only).  First-action values are the min over sequences
+    starting with each action; the choice is the argmin with
+    lowest-index tie-break.  Horizon 1 with ``mean`` is defined to match
+    :func:`_greedy_action` exactly (regression-tested).
     """
 
     if horizon < 1:
         raise ValueError(f"horizon must be >= 1, got {horizon}")
+    if cost not in COST_MODES:
+        raise ValueError(f"unknown cost mode {cost!r}; want one of {COST_MODES}")
     past = torch.tensor(past_actions, dtype=torch.int64, device=device)
     z = model.encode(history)[:, -past.shape[0] :, :]
     sequences = torch.tensor(
@@ -122,18 +130,25 @@ def _plan_action(
     count = sequences.shape[0]
     latents = z.expand(count, -1, -1).contiguous()
     acts = past.unsqueeze(0).expand(count, -1).clone()
-    costs = torch.zeros(count, dtype=torch.float32, device=device)
+    depth_costs = torch.zeros(
+        horizon, count, dtype=torch.float32, device=device
+    )
     for depth in range(horizon):
         acts[:, -1] = sequences[:, depth]
         step = model.predict(latents, acts)[:, -1, :]
-        costs = costs + probe(step).reshape(-1).to(dtype=torch.float32)
+        depth_costs[depth] = probe(step).reshape(-1).to(dtype=torch.float32)
         if depth < horizon - 1:
             latents = torch.cat(
                 [latents[:, 1:, :], step.unsqueeze(1)], dim=1
             )
             acts = torch.cat([acts[:, 1:], acts[:, -1:]], dim=1)
-    costs = costs / horizon
-    values = costs.reshape(ACTION_COUNT, -1).amin(dim=1).tolist()
+    if cost == "max":
+        seq_costs = depth_costs.amax(dim=0)
+    elif cost == "last":
+        seq_costs = depth_costs[-1]
+    else:
+        seq_costs = depth_costs.mean(dim=0)
+    values = seq_costs.reshape(ACTION_COUNT, -1).amin(dim=1).tolist()
     best = int(min(range(ACTION_COUNT), key=lambda a: values[a]))
     return best, [float(value) for value in values]
 
@@ -229,6 +244,66 @@ def run_episode(
             close()
 
 
+def _steering_policies(
+    model: torch.nn.Module,
+    probe: torch.nn.Module,
+    device: torch.device,
+) -> dict[str, Callable[[torch.Tensor, list[int]], tuple[int, list[float] | None]]]:
+    """Build the named policy registry (AD7/AD8); protocols select subsets."""
+
+    def mpc_policy(
+        history: torch.Tensor, past: list[int]
+    ) -> tuple[int, list[float] | None]:
+        try:
+            action, costs = _greedy_action(model, probe, history, past, device)
+        except ValueError as error:
+            if "outside configured palette" not in str(error):
+                raise
+            raise _UnknownColorAbort from error
+        return action, costs
+
+    def horizon_policy(
+        horizon: int, cost: str
+    ) -> Callable[[torch.Tensor, list[int]], tuple[int, list[float] | None]]:
+        def planned(
+            history: torch.Tensor, past: list[int]
+        ) -> tuple[int, list[float] | None]:
+            try:
+                action, costs = _plan_action(
+                    model, probe, history, past, horizon, device, cost
+                )
+            except ValueError as error:
+                if "outside configured palette" not in str(error):
+                    raise
+                raise _UnknownColorAbort from error
+            return action, costs
+
+        return planned
+
+    def random_policy(
+        history: torch.Tensor, past: list[int]
+    ) -> tuple[int, list[float] | None]:
+        del history, past
+        return int(torch.randint(ACTION_COUNT, (1,)).item()), None
+
+    def neutral_policy(
+        history: torch.Tensor, past: list[int]
+    ) -> tuple[int, list[float] | None]:
+        del history, past
+        return NEUTRAL_ACTION, None
+
+    return {
+        "mpc": mpc_policy,
+        "mpc_h2": horizon_policy(2, "mean"),
+        "mpc_h3": horizon_policy(3, "mean"),
+        "mpc_h4": horizon_policy(4, "mean"),
+        "mpc_h3_max": horizon_policy(3, "max"),
+        "mpc_h3_last": horizon_policy(3, "last"),
+        "random": random_policy,
+        "neutral": neutral_policy,
+    }
+
+
 def plan_mpc_eval() -> list[tuple[str, Any, int]]:
     """Build train-type vs novel-type headless scenario sets (fresh seeds).
 
@@ -318,56 +393,7 @@ def evaluate(
     probe = probe.to(device_obj).eval()
     probe.requires_grad_(False)
 
-    def mpc_policy(
-        history: torch.Tensor, past: list[int]
-    ) -> tuple[int, list[float] | None]:
-        try:
-            action, costs = _greedy_action(
-                model, probe, history, past, device_obj
-            )
-        except ValueError as error:
-            if "outside configured palette" not in str(error):
-                raise
-            raise _UnknownColorAbort from error
-        return action, costs
-
-    def horizon_policy(
-        horizon: int,
-    ) -> Callable[[torch.Tensor, list[int]], tuple[int, list[float] | None]]:
-        def planned(
-            history: torch.Tensor, past: list[int]
-        ) -> tuple[int, list[float] | None]:
-            try:
-                action, costs = _plan_action(
-                    model, probe, history, past, horizon, device_obj
-                )
-            except ValueError as error:
-                if "outside configured palette" not in str(error):
-                    raise
-                raise _UnknownColorAbort from error
-            return action, costs
-
-        return planned
-
-    def random_policy(
-        history: torch.Tensor, past: list[int]
-    ) -> tuple[int, list[float] | None]:
-        del history, past
-        return int(torch.randint(ACTION_COUNT, (1,)).item()), None
-
-    def neutral_policy(
-        history: torch.Tensor, past: list[int]
-    ) -> tuple[int, list[float] | None]:
-        del history, past
-        return NEUTRAL_ACTION, None
-
-    available = {
-        "mpc": mpc_policy,
-        "mpc_h2": horizon_policy(2),
-        "mpc_h3": horizon_policy(3),
-        "random": random_policy,
-        "neutral": neutral_policy,
-    }
+    available = _steering_policies(model, probe, device_obj)
     for name in policies.values():
         if name not in available:
             raise ValueError(f"unknown policy: {name}")
@@ -437,6 +463,7 @@ def evaluate(
 __all__ = [
     "ABORTED_UNKNOWN_COLOR",
     "ACTION_COUNT",
+    "COST_MODES",
     "EXPERIMENT",
     "MAX_DECISIONS",
     "NEUTRAL_ACTION",
