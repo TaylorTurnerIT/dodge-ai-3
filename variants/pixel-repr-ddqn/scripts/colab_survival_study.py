@@ -54,7 +54,7 @@ SOURCE_NAMES = [
     "third_party",
     "variants/pixel-repr-ddqn",
 ]
-CHECKPOINT_RELPATH = "scale-resume-6144/checkpoint.pt"
+CHECKPOINT_RELPATH = "scale-resume-14336/checkpoint.pt"
 PROBE_SET_NAME = "mortal-probe-20260917-v1"
 
 
