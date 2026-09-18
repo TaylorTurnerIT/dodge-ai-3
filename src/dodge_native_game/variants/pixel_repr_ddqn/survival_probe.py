@@ -240,7 +240,7 @@ def fit_probe(
                 (precision * ranked.flip(0)).sum() / positives
             )
         else:
-            val_auprc = float("nan")
+            val_auprc = None
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -270,9 +270,10 @@ def fit_probe(
         "elapsed_seconds": time.monotonic() - began,
     }
     atomic_json(output.with_suffix(".json"), report)
+    auprc_str = f"{val_auprc:.4f}" if val_auprc is not None else "null"
     print(
         f"PROBE_COMPLETE train_loss={train_loss:.4f} "
-        f"val_loss={val_loss:.4f} val_auprc={val_auprc:.4f} "
+        f"val_loss={val_loss:.4f} val_auprc={auprc_str} "
         f"pos_rate={float(val_y.mean()):.3f}",
         flush=True,
     )
