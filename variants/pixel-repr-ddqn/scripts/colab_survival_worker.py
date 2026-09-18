@@ -149,6 +149,7 @@ def run_smoke(protocol: dict[str, Any]) -> None:
 
 def run_scored(protocol: dict[str, Any], run_id: str, source_hash: str) -> None:
     import torch
+    from transformers import __version__ as transformers_version
 
     from dodge_native_game.variants.pixel_repr_ddqn.mpc_eval import (
         evaluate,
@@ -202,6 +203,7 @@ def run_scored(protocol: dict[str, Any], run_id: str, source_hash: str) -> None:
         "source_sha256": source_hash,
         "protocol": protocol,
         "torch_version": torch.__version__,
+        "transformers_version": transformers_version,
         "cuda_device": torch.cuda.get_device_name(0),
         "world_model_sha256": report["world_model_sha256"],
         "probe_set_sha256": report["probe_manifest_sha256"],

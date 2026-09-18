@@ -30,9 +30,14 @@ MPC_DECISIONS = 128
 UPLOAD_WORKERS = 6
 UPLOAD_PART_SIZE = 8 * 1024**2
 SITE_PACKAGES = [
+    "gymnasium>=1",
     "numpy>=2.4.6",
+    "transformers==4.57.6",
+    "einops==0.8.2",
+    "Pillow",
     "pytest",
 ]
+EXPECTED_TRANSFORMERS = "4.57.6"
 WHEEL_CACHE_ROOT = ROOT / "history/dodge/gymnasium/pixel-repr-ddqn-cache/wheels"
 SOURCE_NAMES = [
     "src",
@@ -404,6 +409,11 @@ def main() -> None:
     environment = _read_json(run_dir / "environment.json", "environment")
     if "gate_verdict" not in environment:
         raise RuntimeError("retrieved probe evidence has no gate verdict")
+    if environment.get("transformers_version") != EXPECTED_TRANSFORMERS:
+        raise RuntimeError(
+            "retrieved environment used an unexpected transformers version; "
+            "session retained"
+        )
     if (
         environment.get("source_sha256") != source_hash
         or environment.get("protocol") != protocol

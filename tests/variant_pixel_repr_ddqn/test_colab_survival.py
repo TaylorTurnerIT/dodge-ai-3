@@ -78,6 +78,19 @@ def test_survival_protocol_pins_frozen_inputs_and_gate(tmp_path: Path) -> None:
     assert bundle["checkpoint.pt"] == checkpoint
 
 
+def test_survival_site_packages_pin_transformers() -> None:
+    launcher = _load("survival_launcher_fixture", "colab_survival_study.py")
+    assert "transformers==4.57.6" in launcher.SITE_PACKAGES
+    assert launcher.EXPECTED_TRANSFORMERS == "4.57.6"
+    driver = launcher.build_remote_driver(
+        source_hash="ab" * 32,
+        run_id="survival-test",
+        wheel=None,
+        site_packages=list(launcher.SITE_PACKAGES),
+    )
+    assert "transformers==4.57.6" in driver
+
+
 def test_survival_protocol_rejects_missing_inputs(tmp_path: Path) -> None:
     launcher = _load("survival_launcher_fixture", "colab_survival_study.py")
     with pytest.raises(ValueError, match="frozen input is missing"):
