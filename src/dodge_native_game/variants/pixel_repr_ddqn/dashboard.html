@@ -137,6 +137,23 @@
     .matrix-wrap { min-height: 0; position: relative; padding: 8px; display: grid; place-items: center; }
     .matrix-wrap canvas { display: block; width: min(100%, 270px); height: min(100%, 150px); image-rendering: pixelated; }
     .legend-text { color: var(--dim); font-size: 10px; }
+    .replay-grid { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(250px, .85fr); gap: 10px; }
+    .replay-player { display: grid; grid-template-rows: 38px minmax(0, 1fr) auto auto; overflow: hidden; }
+    .replay-selects { display: flex; align-items: center; gap: 6px; }
+    .replay-stage { position: relative; min-height: 0; display: grid; place-items: center; padding: 9px; overflow: hidden; }
+    .replay-stage img { max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: pixelated; border-radius: 4px; background: #0b1119; }
+    .replay-transport { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border-top: 1px solid var(--line); }
+    .replay-transport input[type="range"] { flex: 1; min-width: 0; accent-color: var(--cyan); }
+    .replay-step { color: var(--muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .replay-meta { padding: 0 11px 9px; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .values-card { display: grid; grid-template-rows: 38px minmax(0, 1fr) auto; overflow: hidden; }
+    .values-wrap { min-height: 0; position: relative; padding: 8px 11px; }
+    .values-wrap canvas { display: block; width: 100%; height: 100%; }
+    .values-meta { display: grid; gap: 6px; padding: 0 11px 10px; }
+    .values-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+    .values-row span { color: var(--muted); font-size: 11px; }
+    .values-row strong { font: 650 15px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .values-row strong.chosen { color: var(--cyan); }
     .mobile-tabs { display: none; }
     @media (max-width: 980px) {
       .shell { grid-template-columns: 185px minmax(0, 1fr); }
@@ -197,6 +214,7 @@
           <nav class="tabs" aria-label="Dashboard view">
             <button class="tab active" data-view="overview">Overview</button>
             <button class="tab" data-view="diagnostics">Diagnostics</button>
+            <button class="tab" data-view="replay">Replay</button>
           </nav>
           <span class="updated" id="updated">Waiting for status.json</span>
         </div>
@@ -251,6 +269,36 @@
             <section class="card chart-card"><div class="card-head"><span class="eyebrow">REPRESENTATION</span><select id="health-metric" class="sample-select" aria-label="Representation metric"><option value="feature_std">Feature std</option><option value="feature_rank">Rank</option><option value="grad_norm">Grad norm</option></select></div><div class="chart-wrap"><canvas id="progress-chart"></canvas><div class="chart-empty" id="progress-empty">Waiting for training metrics.</div></div></section>
             <section class="card matrix-card"><div class="card-head"><span class="eyebrow">ATTENTION / FEATURE PROBE</span><span class="legend-text" id="attention-label">diagnostic only</span></div><div class="matrix-wrap"><canvas id="attention-canvas"></canvas><div class="chart-empty" id="attention-empty">No attention matrix supplied.</div></div></section>
             <section class="card matrix-card"><div class="card-head"><span class="eyebrow">LATENT / FEATURE PROBES</span><span class="legend-text" id="latent-label">actual · predicted · features</span></div><div class="matrix-wrap"><canvas id="latent-canvas"></canvas><div class="chart-empty" id="latent-empty">No latent vectors supplied.</div></div></section>
+          </div>
+        </section>
+        <section id="replay" class="view" hidden>
+          <div class="replay-grid">
+            <section class="card replay-player">
+              <div class="card-head">
+                <span class="eyebrow">EPISODE REPLAY</span>
+                <div class="replay-selects">
+                  <select class="sample-select" id="replay-policy" aria-label="Replay policy"></select>
+                  <select class="sample-select" id="replay-scenario" aria-label="Replay scenario"></select>
+                </div>
+              </div>
+              <div class="replay-stage" id="replay-stage"><span class="frame-empty">Select a run with episode traces.</span></div>
+              <div class="replay-transport">
+                <button class="icon-button" id="replay-play" title="Play or pause the replay" aria-label="Play or pause the replay">▶</button>
+                <button class="icon-button" id="replay-prev" title="Previous decision" aria-label="Previous decision">‹</button>
+                <button class="icon-button" id="replay-next" title="Next decision" aria-label="Next decision">›</button>
+                <input type="range" id="replay-scrub" min="0" max="0" value="0" step="1" aria-label="Replay decision step">
+                <span class="replay-step" id="replay-step">—</span>
+              </div>
+              <div class="replay-meta" id="replay-meta">No trace loaded.</div>
+            </section>
+            <section class="card values-card">
+              <div class="card-head"><span class="eyebrow">ACTION VALUES</span><span class="legend-text" id="values-label">9 first-action costs</span></div>
+              <div class="values-wrap"><canvas id="values-canvas"></canvas><div class="chart-empty" id="values-empty">No decision selected.</div></div>
+              <div class="values-meta">
+                <div class="values-row"><span>Chosen action</span><strong class="chosen" id="values-action">—</strong></div>
+                <div class="values-row"><span>Masked pixels</span><strong id="values-masked">—</strong></div>
+              </div>
+            </section>
           </div>
         </section>
       </section>
@@ -358,6 +406,8 @@
         state.runId = runId;
         renderRuns();
         await loadRun(runId);
+        if (state.view === "replay") loadTraceIndex(runId);
+        else replay.runId = null;
       }
 
       async function loadRun(runId) {
@@ -562,11 +612,147 @@
         series.forEach(([key, color]) => { const points = usable.map((row, index) => [index, Number(row[key])]).filter((point) => Number.isFinite(point[1])); if (!points.length) return; context.strokeStyle = color; context.lineWidth = key === "loss" ? 2 : 1.35; context.beginPath(); points.forEach(([index, value], pointIndex) => { const x = index * width / (usable.length - 1); const y = height - ((value - low) / span) * (height - 6) - 3; pointIndex ? context.lineTo(x, y) : context.moveTo(x, y); }); context.stroke(); });
       }
 
+      const replay = { policies: {}, episodes: {}, policy: null, scenario: null, steps: [], step: 0, playing: false, timer: 0, runId: null };
+
+      function stopReplay() {
+        replay.playing = false;
+        if (replay.timer) { window.clearInterval(replay.timer); replay.timer = 0; }
+        $("replay-play").textContent = "▶";
+      }
+
+      function replayFrameUrl(step) {
+        return `/api/trace-frame?run_id=${encodeURIComponent(replay.runId)}&policy=${encodeURIComponent(replay.policy)}&scenario=${encodeURIComponent(replay.scenario)}&step=${step}`;
+      }
+
+      function drawValues() {
+        const canvas = $("values-canvas"), empty = $("values-empty");
+        const row = replay.steps[replay.step];
+        const costs = row && Array.isArray(row.costs) ? row.costs.map(Number).filter(Number.isFinite) : [];
+        if (costs.length !== 9) {
+          canvas.width = 1; canvas.height = 1;
+          empty.hidden = false;
+          empty.textContent = row && row.costs === null ? "Baseline policy computes no action values." : "No decision selected.";
+          $("values-action").textContent = row && finite(Number(row.action)) ? String(row.action) : "—";
+          $("values-masked").textContent = row && finite(Number(row.masked_pixels)) ? String(row.masked_pixels) : "—";
+          return;
+        }
+        empty.hidden = true;
+        const size = canvasSize(canvas), context = size.context, width = size.width, height = size.height;
+        const low = Math.min(...costs), high = Math.max(...costs), span = Math.max(high - low, 1e-9);
+        const chosen = Number(row.action);
+        context.clearRect(0, 0, width, height);
+        context.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+        const lane = height / 9;
+        costs.forEach((value, index) => {
+          const y = index * lane, selected = index === chosen;
+          context.fillStyle = selected ? "#5cd6e8" : "#8fa1b2";
+          context.fillText(String(index), 2, y + lane / 2 + 3);
+          const barX = 20, barW = Math.max(2, ((value - low) / span) * (width - barX - 52));
+          context.fillStyle = selected ? "rgba(92,214,232,.85)" : "rgba(121,169,255,.45)";
+          context.fillRect(barX, y + 3, barW, Math.max(2, lane - 6));
+          context.fillStyle = selected ? "#e6edf4" : "#637588";
+          context.fillText(number(value, 3), barX + barW + 5, y + lane / 2 + 3);
+        });
+        $("values-action").textContent = String(chosen);
+        $("values-masked").textContent = finite(Number(row.masked_pixels)) ? String(row.masked_pixels) : "—";
+      }
+
+      function renderReplayStep() {
+        const total = replay.steps.length;
+        const scrub = $("replay-scrub");
+        scrub.max = String(Math.max(0, total - 1));
+        scrub.value = String(Math.min(replay.step, Math.max(0, total - 1)));
+        $("replay-step").textContent = total ? `decision ${replay.step + 1} / ${total}` : "—";
+        const stage = $("replay-stage");
+        stage.replaceChildren();
+        if (!total) {
+          const text = document.createElement("span"); text.className = "frame-empty"; text.textContent = "No trace loaded."; stage.appendChild(text);
+        } else {
+          const element = document.createElement("img");
+          element.src = replayFrameUrl(replay.step);
+          element.alt = `replay frame ${replay.step}`;
+          element.draggable = false;
+          stage.appendChild(element);
+        }
+        const episode = (replay.episodes[replay.policy] || {})[replay.scenario] || {};
+        $("replay-meta").textContent = total
+          ? `${safeText(replay.policy)} · ${safeText(replay.scenario)} · survived ${safeText(episode.survived)} · ${safeText(episode.outcome)}`
+          : "No trace loaded.";
+        drawValues();
+      }
+
+      function renderReplaySelects() {
+        const policySelect = $("replay-policy"), scenarioSelect = $("replay-scenario");
+        policySelect.replaceChildren(); scenarioSelect.replaceChildren();
+        const names = Object.keys(replay.policies);
+        if (!names.length) {
+          const option = document.createElement("option"); option.textContent = "no traces"; policySelect.appendChild(option);
+          const option2 = document.createElement("option"); option2.textContent = "no traces"; scenarioSelect.appendChild(option2);
+          return;
+        }
+        if (!replay.policy || !replay.policies[replay.policy]) replay.policy = names.includes("mpc") ? "mpc" : names[0];
+        names.forEach((name) => { const option = document.createElement("option"); option.value = name; option.textContent = name; policySelect.appendChild(option); });
+        policySelect.value = replay.policy;
+        const scenarios = replay.policies[replay.policy] || [];
+        if (!replay.scenario || !scenarios.includes(replay.scenario)) replay.scenario = scenarios[0] || null;
+        scenarios.forEach((name) => { const option = document.createElement("option"); option.value = name; option.textContent = name; scenarioSelect.appendChild(option); });
+        if (replay.scenario) scenarioSelect.value = replay.scenario;
+      }
+
+      async function loadTraceIndex(runId) {
+        try {
+          const payload = await fetchJson(`/api/traces?run_id=${encodeURIComponent(runId)}`);
+          replay.runId = runId;
+          replay.policies = payload && typeof payload.policies === "object" ? payload.policies : {};
+          replay.episodes = payload && typeof payload.episodes === "object" ? payload.episodes : {};
+        } catch (error) {
+          replay.runId = runId; replay.policies = {}; replay.episodes = {};
+        }
+        replay.policy = null; replay.scenario = null;
+        renderReplaySelects();
+        await loadTrace();
+      }
+
+      async function loadTrace() {
+        stopReplay();
+        replay.steps = []; replay.step = 0;
+        if (!replay.runId || !replay.policy || !replay.scenario) { renderReplayStep(); return; }
+        try {
+          const payload = await fetchJson(`/api/trace?run_id=${encodeURIComponent(replay.runId)}&policy=${encodeURIComponent(replay.policy)}&scenario=${encodeURIComponent(replay.scenario)}`);
+          replay.steps = Array.isArray(payload.steps) ? payload.steps : [];
+        } catch (error) {
+          replay.steps = [];
+        }
+        renderReplayStep();
+      }
+
+      function replayGo(delta) {
+        if (!replay.steps.length) return;
+        stopReplay();
+        replay.step = (replay.step + delta + replay.steps.length) % replay.steps.length;
+        renderReplayStep();
+      }
+
+      function toggleReplay() {
+        if (!replay.steps.length || replay.playing) { stopReplay(); return; }
+        replay.playing = true;
+        $("replay-play").textContent = "❚❚";
+        replay.timer = window.setInterval(() => {
+          if (replay.step + 1 >= replay.steps.length) { stopReplay(); return; }
+          replay.step += 1;
+          renderReplayStep();
+        }, 200);
+      }
+
       function switchView(view) {
         state.view = view;
         document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
         $("overview").hidden = view !== "overview";
         $("diagnostics").hidden = view !== "diagnostics";
+        $("replay").hidden = view !== "replay";
+        if (view !== "replay") stopReplay();
+        else if (state.runId && replay.runId !== state.runId) loadTraceIndex(state.runId);
+        else renderReplayStep();
         if (state.detail) renderSnapshot(state.snapshots[state.sample]);
       }
 
@@ -574,8 +760,14 @@
       $("sample-prev").addEventListener("click", () => { if (state.snapshots.length) { state.sample = (state.sample - 1 + state.snapshots.length) % state.snapshots.length; renderSampleControls(); renderSnapshot(state.snapshots[state.sample]); } });
       $("sample-next").addEventListener("click", () => { if (state.snapshots.length) { state.sample = (state.sample + 1) % state.snapshots.length; renderSampleControls(); renderSnapshot(state.snapshots[state.sample]); } });
       $("sample-select").addEventListener("change", (event) => { state.sample = Number(event.target.value) || 0; renderSnapshot(state.snapshots[state.sample]); });
-      window.addEventListener("resize", () => { if (state.detail) { drawMetricCharts(state.detail.metrics || []); renderSnapshot(state.snapshots[state.sample]); } });
+      window.addEventListener("resize", () => { if (state.detail) { drawMetricCharts(state.detail.metrics || []); renderSnapshot(state.snapshots[state.sample]); } if (state.view === "replay") drawValues(); });
       $("health-metric").addEventListener("change", () => { if (state.detail) drawMetricCharts(state.detail.metrics || []); });
+      $("replay-policy").addEventListener("change", (event) => { replay.policy = event.target.value; replay.scenario = null; renderReplaySelects(); loadTrace(); });
+      $("replay-scenario").addEventListener("change", (event) => { replay.scenario = event.target.value; loadTrace(); });
+      $("replay-play").addEventListener("click", toggleReplay);
+      $("replay-prev").addEventListener("click", () => replayGo(-1));
+      $("replay-next").addEventListener("click", () => replayGo(1));
+      $("replay-scrub").addEventListener("input", (event) => { stopReplay(); replay.step = Number(event.target.value) || 0; renderReplayStep(); });
       loadRuns();
       window.setInterval(loadRuns, 2000);
     })();

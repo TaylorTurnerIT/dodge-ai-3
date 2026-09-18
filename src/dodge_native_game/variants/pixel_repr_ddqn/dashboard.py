@@ -25,6 +25,7 @@ MAX_METRIC_ROWS: Final = 300
 MAX_RUNS: Final = 24
 MAX_VISUALIZATIONS: Final = 16
 MAX_RUN_ID_LENGTH: Final = 128
+MAX_TRACE_STEPS: Final = 512
 
 # A run id is used as one path component.  Rejection is preferable to
 # normalising a path supplied by a browser because normalisation can hide a
@@ -216,6 +217,154 @@ class DashboardData:
             ),
         }
 
+    def _trace_entry(
+        self, run_id: str | None, *segments: str
+    ) -> Path | None:
+        """Resolve a trace artifact below a run while refusing escapes."""
+
+        found = self._run_dir(run_id)
+        if found is None:
+            return None
+        _, run_dir = found
+        cleaned: list[str] = []
+        for segment in segments:
+            clean = safe_run_id(segment)
+            if clean is None:
+                return None
+            cleaned.append(clean)
+        candidate = run_dir.joinpath("trace", *cleaned)
+        try:
+            resolved = candidate.resolve(strict=False)
+        except (OSError, RuntimeError):
+            return None
+        if not _inside(resolved, run_dir):
+            return None
+        return resolved
+
+    def load_trace_index(self, run_id: str | None) -> dict[str, Any] | None:
+        """List traced policies/scenarios plus per-episode outcomes."""
+
+        found = self._run_dir(run_id)
+        if found is None:
+            return None
+        _, run_dir = found
+        trace_root = self._artifact(run_dir, "trace")
+        policies: dict[str, list[str]] = {}
+        if trace_root is not None:
+            try:
+                entries = sorted(trace_root.iterdir())
+            except OSError:
+                entries = []
+            for policy_dir in entries:
+                if not policy_dir.is_dir():
+                    continue
+                if safe_run_id(policy_dir.name) is None:
+                    continue
+                try:
+                    scenarios = sorted(
+                        entry.name
+                        for entry in policy_dir.iterdir()
+                        if entry.is_dir() and safe_run_id(entry.name)
+                    )
+                except OSError:
+                    scenarios = []
+                if scenarios:
+                    policies[policy_dir.name] = scenarios
+        episodes: dict[str, dict[str, Any]] = {}
+        report_path = self._artifact(run_dir, "mpc-report.json")
+        report = _read_optional_mapping(report_path) if report_path else None
+        rows = report.get("episodes", []) if report else []
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                label = row.get("scenario")
+                if not isinstance(label, str):
+                    continue
+                for key, value in row.items():
+                    if not key.endswith("_outcome"):
+                        continue
+                    policy = key[: -len("_outcome")]
+                    survived = row.get(policy)
+                    episodes.setdefault(policy, {})[label] = {
+                        "seed": row.get("seed"),
+                        "survived": survived
+                        if isinstance(survived, int)
+                        else None,
+                        "outcome": value if isinstance(value, str) else None,
+                    }
+        return {"policies": policies, "episodes": episodes}
+
+    def load_trace(
+        self, run_id: str | None, policy: str | None, scenario: str | None
+    ) -> dict[str, Any] | None:
+        """Load one episode trace: per-decision values plus frame count."""
+
+        if policy is None or scenario is None:
+            return None
+        steps_path = self._trace_entry(run_id, policy, scenario, "steps.jsonl")
+        if steps_path is None:
+            return None
+        steps: list[dict[str, Any]] = []
+        try:
+            with steps_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        value = json.loads(line)
+                    except (TypeError, ValueError):
+                        continue
+                    if not isinstance(value, dict):
+                        continue
+                    costs = value.get("costs")
+                    if costs is not None and (
+                        not isinstance(costs, list) or len(costs) != 9
+                    ):
+                        continue
+                    steps.append(
+                        {
+                            "step": value.get("step"),
+                            "action": value.get("action"),
+                            "costs": costs,
+                            "masked_pixels": value.get("masked_pixels", 0),
+                        }
+                    )
+                    if len(steps) >= MAX_TRACE_STEPS:
+                        break
+        except (OSError, UnicodeError):
+            return None
+        if not steps:
+            return None
+        return {"steps": steps, "frames": len(steps)}
+
+    def load_trace_frame(
+        self,
+        run_id: str | None,
+        policy: str | None,
+        scenario: str | None,
+        step: int | None,
+    ) -> bytes | None:
+        """Read one raw trace frame PNG; ``None`` when unsafe or missing."""
+
+        if policy is None or scenario is None:
+            return None
+        if not isinstance(step, int) or step < 0 or step >= MAX_TRACE_STEPS:
+            return None
+        frame_path = self._trace_entry(
+            run_id, policy, scenario, f"frame_{step:03d}.png"
+        )
+        if frame_path is None:
+            return None
+        try:
+            body = frame_path.read_bytes()
+        except OSError:
+            return None
+        if len(body) > 4 * 1024**2 or not body.startswith(b"\x89PNG\r\n\x1a\n"):
+            return None
+        return body
+
     def list_runs(self) -> list[dict[str, Any]]:
         """Return a small latest-first run index from safe child directories."""
 
@@ -322,6 +471,59 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._not_found("run not found")
                 return
             self._send_json(loaded)
+            return
+        if path == "/api/traces":
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            values = query.get("run_id", [])
+            if not values or not values[0]:
+                self._send_json(
+                    {"error": "run_id is required"}, HTTPStatus.BAD_REQUEST
+                )
+                return
+            index = data.load_trace_index(values[0])
+            if index is None:
+                self._not_found("run not found")
+                return
+            self._send_json(index)
+            return
+        if path == "/api/trace":
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            run_id = (query.get("run_id", [""]) or [""])[0]
+            policy = (query.get("policy", [""]) or [""])[0]
+            scenario = (query.get("scenario", [""]) or [""])[0]
+            if not run_id or not policy or not scenario:
+                self._send_json(
+                    {"error": "run_id, policy, and scenario are required"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            trace = data.load_trace(run_id, policy, scenario)
+            if trace is None:
+                self._not_found("trace not found")
+                return
+            self._send_json(trace)
+            return
+        if path == "/api/trace-frame":
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            run_id = (query.get("run_id", [""]) or [""])[0]
+            policy = (query.get("policy", [""]) or [""])[0]
+            scenario = (query.get("scenario", [""]) or [""])[0]
+            raw_step = (query.get("step", [""]) or [""])[0]
+            try:
+                step = int(raw_step)
+            except (TypeError, ValueError):
+                step = -1
+            if not run_id or not policy or not scenario or step < 0:
+                self._send_json(
+                    {"error": "run_id, policy, scenario, step are required"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            body = data.load_trace_frame(run_id, policy, scenario, step)
+            if body is None:
+                self._not_found("frame not found")
+                return
+            self._send_bytes(body, "image/png")
             return
         self._not_found()
 

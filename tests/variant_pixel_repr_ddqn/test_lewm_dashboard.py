@@ -242,3 +242,96 @@ def test_future_run_snapshots_and_diff_strip_flow_through_dashboard(
             html = response.read().decode()
         assert 'id="diff-strip"' in html
         assert "function renderDiff(snapshot)" in html
+
+
+def _write_trace_run(root: Path) -> None:
+    run = root / "trace-run"
+    episode = run / "trace" / "mpc" / "scene-0"
+    episode.mkdir(parents=True)
+    rows = [
+        {"step": 0, "action": 3, "costs": [float(i) for i in range(9)],
+         "masked_pixels": 0},
+        {"step": 1, "action": 0, "costs": None, "masked_pixels": 128},
+        "not-json{",
+    ]
+    (episode / "steps.jsonl").write_text(
+        "\n".join(
+            row if isinstance(row, str) else json.dumps(row) for row in rows
+        )
+        + "\n"
+    )
+    from PIL import Image
+
+    Image.new("RGB", (8, 8), (41, 173, 255)).save(episode / "frame_000.png")
+    Image.new("RGB", (8, 8), (0, 0, 0)).save(episode / "frame_001.png")
+    baseline = run / "trace" / "neutral" / "scene-0"
+    baseline.mkdir(parents=True)
+    (baseline / "steps.jsonl").write_text(
+        json.dumps({"step": 0, "action": 0, "costs": None,
+                    "masked_pixels": 0})
+        + "\n"
+    )
+    Image.new("RGB", (8, 8), (41, 173, 255)).save(
+        baseline / "frame_000.png"
+    )
+    _write_json(
+        run / "mpc-report.json",
+        {"episodes": [
+            {"scenario": "scene-0", "seed": 24000, "mpc": 2,
+             "mpc_outcome": "terminated", "neutral": 1,
+             "neutral_outcome": "terminated"},
+        ]},
+    )
+
+
+def test_trace_endpoints_serve_steps_frames_and_index(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "history"
+    root.mkdir()
+    _write_trace_run(root)
+    with _running_server(root) as base_url:
+        status, index = _get_json(base_url, "/api/traces?run_id=trace-run")
+        assert status == 200
+        assert index["policies"] == {"mpc": ["scene-0"], "neutral": ["scene-0"]}
+        assert index["episodes"]["mpc"]["scene-0"] == {
+            "seed": 24000, "survived": 2, "outcome": "terminated",
+        }
+        status, trace = _get_json(
+            base_url, "/api/trace?run_id=trace-run&policy=mpc&scenario=scene-0"
+        )
+        assert status == 200
+        assert trace["frames"] == 2
+        assert trace["steps"][0]["costs"] == [float(i) for i in range(9)]
+        assert trace["steps"][1]["costs"] is None
+        with urlopen(
+            base_url + "/api/trace-frame?run_id=trace-run&policy=mpc"
+            "&scenario=scene-0&step=0",
+            timeout=2,
+        ) as response:
+            assert response.status == 200
+            assert response.headers.get_content_type() == "image/png"
+            body = response.read()
+        assert body.startswith(b"\x89PNG\r\n\x1a\n")
+        with urlopen(base_url + "/", timeout=2) as response:
+            html = response.read().decode()
+        assert 'id="replay-stage"' in html
+        assert "function drawValues()" in html
+
+
+def test_trace_endpoints_reject_unsafe_paths(tmp_path: Path) -> None:
+    root = tmp_path / "history"
+    root.mkdir()
+    _write_trace_run(root)
+    with _running_server(root) as base_url:
+        for path in (
+            "/api/trace?run_id=trace-run&policy=..&scenario=scene-0",
+            "/api/trace?run_id=trace-run&policy=mpc&scenario=..%2F..",
+            "/api/trace-frame?run_id=trace-run&policy=mpc&scenario=scene-0"
+            "&step=99",
+            "/api/trace-frame?run_id=trace-run&policy=mpc&scenario=scene-0"
+            "&step=nope",
+        ):
+            with pytest.raises(HTTPError) as error:
+                urlopen(base_url + path, timeout=2)
+            assert error.value.code in (400, 404)
