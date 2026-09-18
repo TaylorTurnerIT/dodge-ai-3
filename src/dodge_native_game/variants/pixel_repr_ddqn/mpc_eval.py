@@ -23,6 +23,8 @@ ACTION_COUNT: Final[int] = 9
 NEUTRAL_ACTION: Final[int] = 0
 MAX_DECISIONS: Final[int] = 128
 ABORTED_UNKNOWN_COLOR: Final[str] = "aborted-unknown-color"
+SHAKE_BLACK_RGB: Final[tuple[int, int, int]] = (0, 0, 0)
+PLAYFIELD_BACKGROUND_RGB: Final[tuple[int, int, int]] = (41, 173, 255)
 
 
 class _UnknownColorAbort(Exception):
@@ -33,11 +35,35 @@ class _UnknownColorAbort(Exception):
     """
 
 
+def mask_black_pixels(stacked: np.ndarray) -> tuple[np.ndarray, int]:
+    """Replace exact-black pixels with playfield background (AD6.rule).
+
+    Screen-shake strips and game-over text shadows render (0, 0, 0), a
+    color absent from every training corpus (AD5.diagnosis).  A shake
+    strip exposes out-of-view playfield whose training-time content is
+    background, so exact-black maps to background blue.  Any other
+    off-palette color passes through untouched so the encoder's strict
+    refusal still fires (fail-closed).  Returns the masked copy and the
+    masked pixel count.
+    """
+
+    black_rgb = np.asarray(SHAKE_BLACK_RGB, dtype=np.uint8).reshape(1, 3, 1, 1)
+    black = (stacked == black_rgb).all(axis=1, keepdims=True)
+    count = int(black.sum())
+    if not count:
+        return stacked.copy(), 0
+    background = np.asarray(PLAYFIELD_BACKGROUND_RGB, dtype=np.uint8).reshape(
+        1, 3, 1, 1
+    )
+    return np.where(black, background, stacked).astype(np.uint8), count
+
+
 def _history_batch(
     frames: deque[np.ndarray], device: torch.device
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, int]:
     stacked = np.stack(list(frames), axis=0).astype(np.uint8)
-    return torch.from_numpy(stacked).unsqueeze(0).to(device)
+    masked, count = mask_black_pixels(stacked)
+    return torch.from_numpy(masked).unsqueeze(0).to(device), count
 
 
 @torch.no_grad()
@@ -84,8 +110,10 @@ def run_episode(
         past_actions: list[int] = [NEUTRAL_ACTION] * history_size
         survived = 0
         outcome = "truncated"
+        masked_pixels = 0
         for _ in range(max_decisions):
-            history = _history_batch(frames, device)
+            history, newly_masked = _history_batch(frames, device)
+            masked_pixels += newly_masked
             try:
                 action = policy(history, list(past_actions))
             except _UnknownColorAbort:
@@ -104,7 +132,12 @@ def run_episode(
                 break
         else:
             survived = max_decisions
-        return {"seed": seed, "survived": survived, "outcome": outcome}
+        return {
+            "seed": seed,
+            "survived": survived,
+            "outcome": outcome,
+            "masked_pixels": masked_pixels,
+        }
     finally:
         close = getattr(adapter, "close", None)
         if callable(close):
@@ -239,6 +272,7 @@ def evaluate(
             )
             row[key] = result["survived"]
             row[key + "_outcome"] = result["outcome"]
+            row[key + "_masked_pixels"] = result["masked_pixels"]
         episodes.append(row)
     summary: dict[str, Any] = {}
     for key in policies:
@@ -258,6 +292,9 @@ def evaluate(
             "max": max(survived),
             "completed": len(completed),
             "aborted_unknown_color": aborted,
+            "masked_pixels_total": sum(
+                row[key + "_masked_pixels"] for row in episodes
+            ),
             "mean_completed": float(sum(completed) / len(completed))
             if completed
             else None,
@@ -281,6 +318,9 @@ __all__ = [
     "EXPERIMENT",
     "MAX_DECISIONS",
     "NEUTRAL_ACTION",
+    "PLAYFIELD_BACKGROUND_RGB",
+    "SHAKE_BLACK_RGB",
     "evaluate",
+    "mask_black_pixels",
     "run_episode",
 ]

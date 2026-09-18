@@ -120,6 +120,14 @@ class _StubProbe(torch.nn.Module):
         return z[:, 0] - 4.0
 
 
+def _background_frame() -> np.ndarray:
+    frame = np.zeros((3, 128, 128), dtype=np.uint8)
+    frame[:] = np.asarray(
+        mpc_eval.PLAYFIELD_BACKGROUND_RGB, dtype=np.uint8
+    ).reshape(3, 1, 1)
+    return frame
+
+
 class _ScriptedAdapter:
     def __init__(self, die_at: int | None = None) -> None:
         self._die_at = die_at
@@ -129,14 +137,14 @@ class _ScriptedAdapter:
     def reset(self, seed: int):
         del seed
         self._step = 0
-        return np.zeros((3, 128, 128), dtype=np.uint8)
+        return _background_frame()
 
     def step(self, action: int):
         self.actions.append(int(action))
         if self._die_at is not None and self._step == self._die_at:
-            return np.zeros((3, 128, 128), dtype=np.uint8), 0.0, True, False
+            return _background_frame(), 0.0, True, False
         self._step += 1
-        return np.zeros((3, 128, 128), dtype=np.uint8), 0.0, False, False
+        return _background_frame(), 0.0, False, False
 
     def close(self) -> None:
         pass
@@ -244,13 +252,70 @@ def test_run_episode_counts_survived_and_outcome() -> None:
         lambda history, past: 0,
         model=model, device=device, max_decisions=128,
     )
-    assert died == {"seed": 0, "survived": 10, "outcome": "terminated"}
+    assert died == {
+        "seed": 0, "survived": 10, "outcome": "terminated", "masked_pixels": 0,
+    }
     lived = mpc_eval.run_episode(
         lambda: _ScriptedAdapter(), 0,
         lambda history, past: 0,
         model=model, device=device, max_decisions=32,
     )
-    assert lived == {"seed": 0, "survived": 32, "outcome": "truncated"}
+    assert lived == {
+        "seed": 0, "survived": 32, "outcome": "truncated", "masked_pixels": 0,
+    }
+
+
+def test_mask_black_pixels_replaces_exact_black_only() -> None:
+    stacked = np.full((2, 3, 4, 4), 41, dtype=np.uint8)
+    stacked[:, 1] = 173
+    stacked[:, 2] = 255
+    stacked[0, :, 0, 0] = (0, 0, 0)
+    stacked[1, :, 1, 1] = (0, 0, 0)
+    stacked[0, :, 2, 2] = (0, 0, 1)  # near-black passes through
+    stacked[1, :, 3, 3] = (255, 0, 0)  # foreign color passes through
+    masked, count = mpc_eval.mask_black_pixels(stacked)
+    assert count == 2
+    assert masked.dtype == np.uint8
+    assert tuple(masked[0, :, 0, 0]) == mpc_eval.PLAYFIELD_BACKGROUND_RGB
+    assert tuple(masked[1, :, 1, 1]) == mpc_eval.PLAYFIELD_BACKGROUND_RGB
+    assert tuple(masked[0, :, 2, 2]) == (0, 0, 1)
+    assert tuple(masked[1, :, 3, 3]) == (255, 0, 0)
+    # Input untouched; clean input returns a copy with zero count.
+    assert tuple(stacked[0, :, 0, 0]) == (0, 0, 0)
+    clean, clean_count = mpc_eval.mask_black_pixels(
+        np.full((1, 3, 2, 2), 41, dtype=np.uint8)
+    )
+    assert clean_count == 0
+    assert clean.shape == (1, 3, 2, 2)
+
+
+def test_run_episode_masks_shake_frames_and_counts() -> None:
+    class _ShakeAdapter(_ScriptedAdapter):
+        def step(self, action: int):
+            frame, reward, terminated, truncated = super().step(action)
+            frame = frame.copy()
+            frame[:, :, 0] = 0  # 1px shake strip, 128 black px
+            return frame, reward, terminated, truncated
+
+    seen_black: list[bool] = []
+
+    def watching_policy(history: torch.Tensor, past: list[int]) -> int:
+        del past
+        pixels = history[0].cpu().numpy()
+        black = (pixels == 0).all(axis=1).any()
+        seen_black.append(bool(black))
+        return 0
+
+    result = mpc_eval.run_episode(
+        lambda: _ShakeAdapter(), 0, watching_policy,
+        model=_StubModel(), device=torch.device("cpu"), max_decisions=8,
+    )
+    assert not any(seen_black)
+    # Reset frame is clean; each of the 8 steps appends one 128px strip,
+    # and the 4-frame history window accumulates them: steps see
+    # 0,128,256,384, then 4 resident strips (512) for steps 4-7.
+    assert result["masked_pixels"] == 128 + 256 + 384 + 4 * 512
+    assert result["outcome"] == "truncated"
 
 
 def test_evaluate_rejects_probe_world_mismatch(tmp_path: Path) -> None:
