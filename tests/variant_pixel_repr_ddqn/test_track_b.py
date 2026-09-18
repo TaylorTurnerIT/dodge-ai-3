@@ -160,6 +160,44 @@ def test_average_precision_null_when_degenerate() -> None:
     assert json.loads(json.dumps(report, allow_nan=False)) == report
 
 
+def test_run_episode_records_palette_abort_explicitly() -> None:
+    def aborting_policy(history: torch.Tensor, past: list[int]) -> int:
+        del history, past
+        try:
+            raise ValueError("pixels contain an RGB color outside configured palette")
+        except ValueError as error:
+            if "outside configured palette" not in str(error):
+                raise
+            raise mpc_eval._UnknownColorAbort from error
+
+    result = mpc_eval.run_episode(
+        lambda: _ScriptedAdapter(),
+        0,
+        aborting_policy,
+        model=_StubModel(),
+        device=torch.device("cpu"),
+        max_decisions=32,
+    )
+    assert result["outcome"] == mpc_eval.ABORTED_UNKNOWN_COLOR
+    assert result["survived"] == 0
+
+
+def test_run_episode_propagates_unrelated_errors() -> None:
+    def broken_policy(history: torch.Tensor, past: list[int]) -> int:
+        del history, past
+        raise ValueError("some other bug")
+
+    with pytest.raises(ValueError, match="some other bug"):
+        mpc_eval.run_episode(
+            lambda: _ScriptedAdapter(),
+            0,
+            broken_policy,
+            model=_StubModel(),
+            device=torch.device("cpu"),
+            max_decisions=32,
+        )
+
+
 def test_greedy_action_trims_history_to_action_trace() -> None:
     class _StrictHistoryModel(torch.nn.Module):
         def encode(self, pixels: torch.Tensor) -> torch.Tensor:

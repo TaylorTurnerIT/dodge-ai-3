@@ -22,6 +22,15 @@ EXPERIMENT: Final[str] = "lewm-mpc-eval-v1"
 ACTION_COUNT: Final[int] = 9
 NEUTRAL_ACTION: Final[int] = 0
 MAX_DECISIONS: Final[int] = 128
+ABORTED_UNKNOWN_COLOR: Final[str] = "aborted-unknown-color"
+
+
+class _UnknownColorAbort(Exception):
+    """A steering-policy frame carried RGB outside the model palette.
+
+    Raised only for the palette contract refusal so evaluation can record
+    the abort explicitly; every other exception still propagates.
+    """
 
 
 def _history_batch(
@@ -77,7 +86,11 @@ def run_episode(
         outcome = "truncated"
         for _ in range(max_decisions):
             history = _history_batch(frames, device)
-            action = policy(history, list(past_actions))
+            try:
+                action = policy(history, list(past_actions))
+            except _UnknownColorAbort:
+                outcome = ABORTED_UNKNOWN_COLOR
+                break
             frame, _reward, terminated, truncated = adapter.step(action)
             frames.append(np.asarray(frame, dtype=np.uint8))
             past_actions.append(int(action))
@@ -187,7 +200,12 @@ def evaluate(
     probe.requires_grad_(False)
 
     def mpc_policy(history: torch.Tensor, past: list[int]) -> int:
-        action, _ = _greedy_action(model, probe, history, past, device_obj)
+        try:
+            action, _ = _greedy_action(model, probe, history, past, device_obj)
+        except ValueError as error:
+            if "outside configured palette" not in str(error):
+                raise
+            raise _UnknownColorAbort from error
         return action
 
     def random_policy(history: torch.Tensor, past: list[int]) -> int:
@@ -225,11 +243,24 @@ def evaluate(
     summary: dict[str, Any] = {}
     for key in policies:
         survived = [row[key] for row in episodes]
+        aborted = sum(
+            1 for row in episodes if row[key + "_outcome"] == ABORTED_UNKNOWN_COLOR
+        )
+        completed = [
+            row[key]
+            for row in episodes
+            if row[key + "_outcome"] != ABORTED_UNKNOWN_COLOR
+        ]
         summary[key] = {
             "mean": float(sum(survived) / len(survived)),
             "median": float(sorted(survived)[len(survived) // 2]),
             "min": min(survived),
             "max": max(survived),
+            "completed": len(completed),
+            "aborted_unknown_color": aborted,
+            "mean_completed": float(sum(completed) / len(completed))
+            if completed
+            else None,
         }
     report = {
         "experiment": EXPERIMENT,
@@ -245,6 +276,7 @@ def evaluate(
 
 
 __all__ = [
+    "ABORTED_UNKNOWN_COLOR",
     "ACTION_COUNT",
     "EXPERIMENT",
     "MAX_DECISIONS",
