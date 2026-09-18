@@ -249,7 +249,7 @@ def test_run_episode_counts_survived_and_outcome() -> None:
     device = torch.device("cpu")
     died = mpc_eval.run_episode(
         lambda: _ScriptedAdapter(die_at=10), 0,
-        lambda history, past: 0,
+        lambda history, past: (0, None),
         model=model, device=device, max_decisions=128,
     )
     assert died == {
@@ -257,7 +257,7 @@ def test_run_episode_counts_survived_and_outcome() -> None:
     }
     lived = mpc_eval.run_episode(
         lambda: _ScriptedAdapter(), 0,
-        lambda history, past: 0,
+        lambda history, past: (0, None),
         model=model, device=device, max_decisions=32,
     )
     assert lived == {
@@ -299,12 +299,14 @@ def test_run_episode_masks_shake_frames_and_counts() -> None:
 
     seen_black: list[bool] = []
 
-    def watching_policy(history: torch.Tensor, past: list[int]) -> int:
+    def watching_policy(
+        history: torch.Tensor, past: list[int]
+    ) -> tuple[int, list[float] | None]:
         del past
         pixels = history[0].cpu().numpy()
         black = (pixels == 0).all(axis=1).any()
         seen_black.append(bool(black))
-        return 0
+        return 0, None
 
     result = mpc_eval.run_episode(
         lambda: _ShakeAdapter(), 0, watching_policy,
@@ -316,6 +318,83 @@ def test_run_episode_masks_shake_frames_and_counts() -> None:
     # 0,128,256,384, then 4 resident strips (512) for steps 4-7.
     assert result["masked_pixels"] == 128 + 256 + 384 + 4 * 512
     assert result["outcome"] == "truncated"
+
+
+def test_plan_action_horizon1_matches_greedy() -> None:
+    history = torch.zeros(1, 4, 3, 8, 8)
+    expected = mpc_eval._greedy_action(
+        _StubModel(), _StubProbe(), history, [0, 0, 0], torch.device("cpu")
+    )
+    actual = mpc_eval._plan_action(
+        _StubModel(), _StubProbe(), history, [0, 0, 0], 1, torch.device("cpu")
+    )
+    assert actual[0] == expected[0]
+    assert actual[1] == expected[1]
+
+
+def test_plan_action_horizon2_minimizes_over_suffix() -> None:
+    # _StubModel copies the last action index into latent dim 0 and
+    # _StubProbe reads it back: sequence (a, b) costs ((a + b) / 2 - 4),
+    # so V(a) = min_b = a / 2 - 4 with best action 0.
+    action, values = mpc_eval._plan_action(
+        _StubModel(),
+        _StubProbe(),
+        torch.zeros(1, 4, 3, 8, 8),
+        [0, 0, 0],
+        2,
+        torch.device("cpu"),
+    )
+    assert action == 0
+    assert values == pytest.approx([a / 2 - 4 for a in range(9)])
+
+
+def test_plan_action_rejects_zero_horizon() -> None:
+    with pytest.raises(ValueError, match="horizon"):
+        mpc_eval._plan_action(
+            _StubModel(),
+            _StubProbe(),
+            torch.zeros(1, 4, 3, 8, 8),
+            [0, 0, 0],
+            0,
+            torch.device("cpu"),
+        )
+
+
+def test_run_episode_writes_trace_steps_and_frames(tmp_path: Path) -> None:
+    from PIL import Image
+
+    trace = tmp_path / "trace" / "mpc" / "scene-0"
+    costs = [float(index) for index in range(9)]
+    result = mpc_eval.run_episode(
+        lambda: _ScriptedAdapter(), 0,
+        lambda history, past: (3, costs),
+        model=_StubModel(), device=torch.device("cpu"), max_decisions=3,
+        trace_dir=trace,
+    )
+    assert result["outcome"] == "truncated"
+    rows = (trace / "steps.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 3
+    first = json.loads(rows[0])
+    assert first == {
+        "step": 0, "action": 3, "costs": costs, "masked_pixels": 0,
+    }
+    for step in range(3):
+        frame = np.asarray(Image.open(trace / f"frame_{step:03d}.png"))
+        assert frame.shape == (128, 128, 3)
+        assert (frame == np.asarray(mpc_eval.PLAYFIELD_BACKGROUND_RGB)).all()
+    # Baselines record null costs, never zero-filled values.
+    baseline_trace = tmp_path / "trace" / "neutral" / "scene-0"
+    mpc_eval.run_episode(
+        lambda: _ScriptedAdapter(), 0,
+        lambda history, past: (0, None),
+        model=_StubModel(), device=torch.device("cpu"), max_decisions=2,
+        trace_dir=baseline_trace,
+    )
+    baseline_rows = (baseline_trace / "steps.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert len(baseline_rows) == 2
+    assert json.loads(baseline_rows[0])["costs"] is None
 
 
 def test_evaluate_rejects_probe_world_mismatch(tmp_path: Path) -> None:

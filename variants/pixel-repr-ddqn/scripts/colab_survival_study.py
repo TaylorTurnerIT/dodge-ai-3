@@ -24,7 +24,13 @@ PROBE_BATCH = 256
 PROBE_SEED = 905
 PROBE_MAX_WINDOWS = 20000
 MIN_VAL_AUPRC = 0.10
-MPC_POLICIES = {"mpc": "mpc", "random": "random", "neutral": "neutral"}
+MPC_POLICIES = {
+    "mpc": "mpc",
+    "mpc_h2": "mpc_h2",
+    "mpc_h3": "mpc_h3",
+    "random": "random",
+    "neutral": "neutral",
+}
 MPC_HISTORY = 3
 MPC_DECISIONS = 128
 UPLOAD_WORKERS = 6

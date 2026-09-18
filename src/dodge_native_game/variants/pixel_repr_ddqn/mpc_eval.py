@@ -9,6 +9,8 @@ updates the world model or fits a policy.
 
 from __future__ import annotations
 
+import itertools
+import json
 import time
 from collections import deque
 from collections.abc import Callable
@@ -88,17 +90,81 @@ def _greedy_action(
     return best, [float(value) for value in costs]
 
 
+@torch.no_grad()
+def _plan_action(
+    model: torch.nn.Module,
+    probe: torch.nn.Module,
+    history: torch.Tensor,
+    past_actions: list[int],
+    horizon: int,
+    device: torch.device,
+) -> tuple[int, list[float]]:
+    """Exhaustive H-step MPC over 9^H action sequences (AD7.planner).
+
+    Open-loop rollout: at each depth every sequence predicts its next
+    latent from the sliding context (oldest latent dropped, predicted ẑ
+    appended; actions slide equally), scored by the frozen probe.
+    Sequence cost is the mean probe cost over the horizon.  First-action
+    values are the min over sequences starting with each action; the
+    choice is the argmin with lowest-index tie-break.  Horizon 1 is
+    defined to match :func:`_greedy_action` exactly (regression-tested).
+    """
+
+    if horizon < 1:
+        raise ValueError(f"horizon must be >= 1, got {horizon}")
+    past = torch.tensor(past_actions, dtype=torch.int64, device=device)
+    z = model.encode(history)[:, -past.shape[0] :, :]
+    sequences = torch.tensor(
+        list(itertools.product(range(ACTION_COUNT), repeat=horizon)),
+        dtype=torch.int64,
+        device=device,
+    )
+    count = sequences.shape[0]
+    latents = z.expand(count, -1, -1).contiguous()
+    acts = past.unsqueeze(0).expand(count, -1).clone()
+    costs = torch.zeros(count, dtype=torch.float32, device=device)
+    for depth in range(horizon):
+        acts[:, -1] = sequences[:, depth]
+        step = model.predict(latents, acts)[:, -1, :]
+        costs = costs + probe(step).reshape(-1).to(dtype=torch.float32)
+        if depth < horizon - 1:
+            latents = torch.cat(
+                [latents[:, 1:, :], step.unsqueeze(1)], dim=1
+            )
+            acts = torch.cat([acts[:, 1:], acts[:, -1:]], dim=1)
+    costs = costs / horizon
+    values = costs.reshape(ACTION_COUNT, -1).amin(dim=1).tolist()
+    best = int(min(range(ACTION_COUNT), key=lambda a: values[a]))
+    return best, [float(value) for value in values]
+
+
+def _write_trace_frame(trace_dir: Path, step: int, frame: np.ndarray) -> None:
+    """Save the observed pre-decision frame for the replay view (AD7.trace)."""
+
+    from PIL import Image
+
+    pixels = np.moveaxis(np.asarray(frame, dtype=np.uint8), 0, -1)
+    Image.fromarray(pixels).save(trace_dir / f"frame_{step:03d}.png")
+
+
 def run_episode(
     make_adapter: Callable[[], Any],
     seed: int,
-    policy: Callable[[torch.Tensor, list[int]], int],
+    policy: Callable[[torch.Tensor, list[int]], tuple[int, list[float] | None]],
     *,
     model: torch.nn.Module,
     device: torch.device,
     history_size: int = 3,
     max_decisions: int = MAX_DECISIONS,
+    trace_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Roll one episode under ``policy``; policy sees frames + past actions."""
+    """Roll one episode under ``policy``; policy sees frames + past actions.
+
+    Policies return ``(action, costs)`` where ``costs`` holds the 9
+    first-action values for MPC planners and ``None`` for baselines that
+    compute no values.  When ``trace_dir`` is set, each decision appends
+    a ``steps.jsonl`` row and the observed pre-decision frame PNG.
+    """
 
     adapter = make_adapter()
     try:
@@ -111,14 +177,33 @@ def run_episode(
         survived = 0
         outcome = "truncated"
         masked_pixels = 0
-        for _ in range(max_decisions):
+        steps_path = None
+        if trace_dir is not None:
+            trace_dir = Path(trace_dir)
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            steps_path = trace_dir / "steps.jsonl"
+        for step in range(max_decisions):
             history, newly_masked = _history_batch(frames, device)
             masked_pixels += newly_masked
             try:
-                action = policy(history, list(past_actions))
+                action, costs = policy(history, list(past_actions))
             except _UnknownColorAbort:
                 outcome = ABORTED_UNKNOWN_COLOR
                 break
+            if steps_path is not None:
+                _write_trace_frame(trace_dir, step, frames[-1])
+                with steps_path.open("a", encoding="utf-8") as stream:
+                    stream.write(
+                        json.dumps(
+                            {
+                                "step": step,
+                                "action": int(action),
+                                "costs": costs,
+                                "masked_pixels": newly_masked,
+                            }
+                        )
+                        + "\n"
+                    )
             frame, _reward, terminated, truncated = adapter.step(action)
             frames.append(np.asarray(frame, dtype=np.uint8))
             past_actions.append(int(action))
@@ -209,6 +294,7 @@ def evaluate(
     device: str = "cpu",
     history_size: int = 3,
     max_decisions: int = MAX_DECISIONS,
+    trace_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run every policy over every scenario; report survival frames."""
 
@@ -232,24 +318,56 @@ def evaluate(
     probe = probe.to(device_obj).eval()
     probe.requires_grad_(False)
 
-    def mpc_policy(history: torch.Tensor, past: list[int]) -> int:
+    def mpc_policy(
+        history: torch.Tensor, past: list[int]
+    ) -> tuple[int, list[float] | None]:
         try:
-            action, _ = _greedy_action(model, probe, history, past, device_obj)
+            action, costs = _greedy_action(
+                model, probe, history, past, device_obj
+            )
         except ValueError as error:
             if "outside configured palette" not in str(error):
                 raise
             raise _UnknownColorAbort from error
-        return action
+        return action, costs
 
-    def random_policy(history: torch.Tensor, past: list[int]) -> int:
+    def horizon_policy(
+        horizon: int,
+    ) -> Callable[[torch.Tensor, list[int]], tuple[int, list[float] | None]]:
+        def planned(
+            history: torch.Tensor, past: list[int]
+        ) -> tuple[int, list[float] | None]:
+            try:
+                action, costs = _plan_action(
+                    model, probe, history, past, horizon, device_obj
+                )
+            except ValueError as error:
+                if "outside configured palette" not in str(error):
+                    raise
+                raise _UnknownColorAbort from error
+            return action, costs
+
+        return planned
+
+    def random_policy(
+        history: torch.Tensor, past: list[int]
+    ) -> tuple[int, list[float] | None]:
         del history, past
-        return int(torch.randint(ACTION_COUNT, (1,)).item())
+        return int(torch.randint(ACTION_COUNT, (1,)).item()), None
 
-    def neutral_policy(history: torch.Tensor, past: list[int]) -> int:
+    def neutral_policy(
+        history: torch.Tensor, past: list[int]
+    ) -> tuple[int, list[float] | None]:
         del history, past
-        return NEUTRAL_ACTION
+        return NEUTRAL_ACTION, None
 
-    available = {"mpc": mpc_policy, "random": random_policy, "neutral": neutral_policy}
+    available = {
+        "mpc": mpc_policy,
+        "mpc_h2": horizon_policy(2),
+        "mpc_h3": horizon_policy(3),
+        "random": random_policy,
+        "neutral": neutral_policy,
+    }
     for name in policies.values():
         if name not in available:
             raise ValueError(f"unknown policy: {name}")
@@ -261,6 +379,9 @@ def evaluate(
         )
         row: dict[str, Any] = {"scenario": label, "seed": seed}
         for key, policy_name in policies.items():
+            episode_trace = (
+                Path(trace_dir) / key / label if trace_dir is not None else None
+            )
             result = run_episode(
                 adapter_factory,
                 seed,
@@ -269,6 +390,7 @@ def evaluate(
                 device=device_obj,
                 history_size=history_size,
                 max_decisions=max_decisions,
+                trace_dir=episode_trace,
             )
             row[key] = result["survived"]
             row[key + "_outcome"] = result["outcome"]

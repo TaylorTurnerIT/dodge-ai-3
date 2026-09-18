@@ -152,10 +152,11 @@ def run_smoke(protocol: dict[str, Any]) -> None:
     print(f"SMOKE_PROBE_OK val_auprc={report['val_auprc']}", flush=True)
     for policy_name in ("neutral", "random"):
         if policy_name == "neutral":
-            policy = lambda history, past: 0  # noqa: E731
+            policy = lambda history, past: (0, None)  # noqa: E731
         else:
-            policy = lambda history, past: int(  # noqa: E731
-                torch.randint(9, (1,)).item()
+            policy = lambda history, past: (  # noqa: E731
+                int(torch.randint(9, (1,)).item()),
+                None,
             )
         result = run_episode(
             PixelNativeAdapter,
@@ -164,9 +165,24 @@ def run_smoke(protocol: dict[str, Any]) -> None:
             model=model,
             device=torch.device(device),
             max_decisions=4,
+            trace_dir=scratch / "trace" / policy_name,
         )
         assert result["survived"] <= 4
+        assert (scratch / "trace" / policy_name / "steps.jsonl").is_file()
+        assert (scratch / "trace" / policy_name / "frame_000.png").is_file()
     print("SMOKE_EPISODES_OK", flush=True)
+    from dodge_native_game.variants.pixel_repr_ddqn.mpc_eval import _plan_action
+    from dodge_native_game.variants.pixel_repr_ddqn.survival_probe import (
+        SurvivalProbe,
+    )
+
+    probe = SurvivalProbe().to(device).eval()
+    with torch.no_grad():
+        planned = _plan_action(
+            model, probe, batch[:1], [0, 0, 0], 2, torch.device(device)
+        )
+    assert planned[0] in range(9) and len(planned[1]) == 9
+    print("SMOKE_PLAN_OK", flush=True)
     print(SMOKE_MARKER, flush=True)
 
 
@@ -205,6 +221,7 @@ def run_scored(protocol: dict[str, Any], run_id: str, source_hash: str) -> None:
             RESULTS_ROOT / "probe.pt",
             plan_mpc_eval(),
             policies=dict(mpc_cfg["policies"]),
+            trace_dir=RESULTS_ROOT / "trace",
             device=device,
             history_size=int(mpc_cfg["history_size"]),
             max_decisions=int(mpc_cfg["max_decisions"]),
