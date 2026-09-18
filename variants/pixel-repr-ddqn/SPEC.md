@@ -643,3 +643,5 @@ B81|2026-09-16|Fourth download race lost (c3 finished 7168, VM reclaimed within 
 B82|2026-09-16|First HPC training chunk failed in 20s: _validate_continue_protocol hardcoded T4-only guard from the Colab era; A100 rejected|Device allowlist (T4/A100/H100) with actual device recorded in continuation manifest; unit test pins accept/reject set.
 
 B83|2026-09-17|Track-A audit died at the 3072 checkpoint: future_decode world validator pinned step==1024 from the §Y era, rejecting continued checkpoints|Validator requires palette arm + matched data hash + step>=1024; audit report records payload step as world_model_updates; continued-checkpoint acceptance test added.
+
+B84|2026-09-18|Survival-probe smoke hit two harness defects before any fit: degenerate val slice wrote NaN val_auprc, rejected by atomic_json allow_nan=False; AUPRC denominator ranked from the wrong end (perfect ranking scored0.46)|Null-when-degenerate (JSON null) plus standard descending-rank AP; _average_precision unit test covers null/perfect/serializability. No published artifact used the old math; probe never completed a fit.

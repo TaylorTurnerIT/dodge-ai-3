@@ -142,6 +142,24 @@ class _ScriptedAdapter:
         pass
 
 
+def test_average_precision_null_when_degenerate() -> None:
+    import json
+
+    from dodge_native_game.variants.pixel_repr_ddqn.survival_probe import (
+        _average_precision,
+    )
+
+    # No positives (or all positives): JSON null, never NaN.
+    assert _average_precision(torch.zeros(8), torch.zeros(8)) is None
+    assert _average_precision(torch.zeros(8), torch.ones(8)) is None
+    perfect = _average_precision(
+        torch.tensor([0.1, 0.2, 0.8, 0.9]), torch.tensor([0.0, 0.0, 1.0, 1.0])
+    )
+    assert perfect is not None and perfect > 0.99
+    report = {"val_auprc": None}
+    assert json.loads(json.dumps(report, allow_nan=False)) == report
+
+
 def test_greedy_action_picks_lowest_predicted_cost() -> None:
     action, costs = mpc_eval._greedy_action(
         _StubModel(), _StubProbe(),

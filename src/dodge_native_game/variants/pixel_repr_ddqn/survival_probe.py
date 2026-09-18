@@ -110,6 +110,24 @@ def collect_mortal_probe_set(
     return manifest
 
 
+def _average_precision(
+    probabilities: torch.Tensor, labels: torch.Tensor
+) -> float | None:
+    """Area under the precision-recall curve; None when degenerate.
+
+    A validation slice with zero (or all) positives has no ranking signal;
+    callers record JSON null instead of NaN so the artifact stays compliant.
+    """
+
+    ranked = labels[torch.argsort(probabilities, descending=True)]
+    positives = int(labels.sum().item())
+    if positives and positives < len(labels):
+        retrieved = torch.cumsum(ranked, 0).float()
+        precision = retrieved / torch.arange(1, len(labels) + 1).float()
+        return float((precision * ranked).sum() / positives)
+    return None
+
+
 def _windows_with_labels(
     probe_root: Path,
     split: str,
@@ -230,17 +248,7 @@ def fit_probe(
         train_loss = float(criterion(probe(train_z), train_y))
         val_loss = float(criterion(probe(val_z), val_y))
         val_prob = torch.sigmoid(probe(val_z))
-        order = torch.argsort(val_prob)
-        ranked = val_y[order]
-        positives = int(val_y.sum().item())
-        if positives and positives < len(val_y):
-            retrieved = torch.cumsum(ranked.flip(0), 0).float()
-            precision = retrieved / torch.arange(1, len(val_y) + 1).flip(0).float()
-            val_auprc = float(
-                (precision * ranked.flip(0)).sum() / positives
-            )
-        else:
-            val_auprc = None
+        val_auprc = _average_precision(val_prob, val_y)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -292,6 +300,7 @@ __all__ = [
     "PROBE_TRAIN_SEED_START",
     "PROBE_VALIDATION_SEED_START",
     "SurvivalProbe",
+    "_average_precision",
     "collect_mortal_probe_set",
     "fit_probe",
 ]
