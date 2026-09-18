@@ -102,6 +102,58 @@ def test_survival_protocol_rejects_missing_inputs(tmp_path: Path) -> None:
         )
 
 
+def test_smoke_batch_loads_real_windows(tmp_path: Path) -> None:
+    import numpy as np
+
+    from dodge_native_game.variants.pixel_repr_ddqn.survival_probe import (
+        PROBE_FORMAT,
+    )
+
+    worker = _load("survival_worker_fixture", "colab_survival_worker.py")
+    root = tmp_path / "probe-set"
+    episode = root / "episodes" / "train" / "episode.npz"
+    episode.parent.mkdir(parents=True)
+    frames = np.zeros((9, 3, 128, 128), dtype=np.uint8)
+    frames[:, 2] = 200
+    actions = np.zeros(8, dtype=np.int64)
+    terminated = np.zeros(8, dtype=np.bool_)
+    truncated = np.zeros(8, dtype=np.bool_)
+    truncated[-1] = True
+    with episode.open("wb") as stream:
+        np.savez_compressed(
+            stream,
+            pixels=frames,
+            actions=actions,
+            terminated=terminated,
+            truncated=truncated,
+        )
+    manifest = {
+        "format": PROBE_FORMAT,
+        "splits": {"train": 1, "validation": 0},
+        "deaths": {"train": 0, "validation": 0},
+        "episodes": {
+            "train": [
+                {
+                    "episode_id": "train-000000",
+                    "recipe_family": "test",
+                    "seed": 22000,
+                    "path": "episodes/train/episode.npz",
+                    "sha256": "x",
+                    "decisions": 8,
+                    "terminated": False,
+                }
+            ],
+            "validation": [],
+        },
+    }
+    (root / "manifest.json").write_text(
+        __import__("json").dumps(manifest) + "\n"
+    )
+    batch = worker._smoke_batch(root)
+    assert tuple(batch.shape) == (2, 4, 3, 128, 128)
+    assert str(batch.dtype) == "torch.uint8"
+
+
 def test_probe_gate_decision_fails_closed() -> None:
     worker = _load("survival_worker_fixture", "colab_survival_worker.py")
     assert worker.probe_gate_decision({"val_auprc": None}, 0.10) == {

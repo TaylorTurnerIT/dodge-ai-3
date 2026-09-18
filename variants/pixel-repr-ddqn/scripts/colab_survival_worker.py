@@ -34,6 +34,9 @@ SMOKE_MARKER = "SURVIVAL_SMOKE_COMPLETE"
 SCORED_MARKER = "SURVIVAL_DRIVER_COMPLETE"
 
 
+SMOKE_WINDOW_SEED = 907
+
+
 def digest(path: Path) -> str:
     value = hashlib.sha256()
     with path.open("rb") as stream:
@@ -84,6 +87,26 @@ def _verify_inputs(protocol: dict[str, Any]) -> dict[str, str]:
     return actual
 
 
+def _smoke_batch(probe_set: Path):
+    """Load two real probe windows for the smoke encode.
+
+    Synthetic zeros are invalid input for the palette-arm encoder, which
+    rejects any RGB outside its three colors; real recorded frames are
+    palette-covered by construction.
+    """
+
+    import torch
+
+    from dodge_native_game.variants.pixel_repr_ddqn.survival_probe import (
+        _windows_with_labels,
+    )
+
+    windows, _, _ = _windows_with_labels(
+        probe_set, "train", max_windows=2, seed=SMOKE_WINDOW_SEED
+    )
+    return torch.from_numpy(windows)
+
+
 def _cuda_device() -> str:
     import torch
 
@@ -108,7 +131,7 @@ def run_smoke(protocol: dict[str, Any]) -> None:
     model, _ = load_model(checkpoint)
     model = model.to(device).eval()
     with torch.no_grad():
-        batch = torch.zeros(2, 4, 3, 128, 128, dtype=torch.uint8, device=device)
+        batch = _smoke_batch(INPUT_ROOT / "probe-set").to(device)
         encoded = model.encode(batch)
     assert tuple(encoded.shape) == (2, 4, 192), (
         f"unexpected encode shape {encoded.shape}"
