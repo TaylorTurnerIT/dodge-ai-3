@@ -95,7 +95,24 @@ def test_survival_protocol_pins_frozen_inputs_and_gate(tmp_path: Path) -> None:
         "max_windows": 20000,
     }
     assert protocol["gate"]["min_val_auprc"] == 0.10
+    assert protocol["mpc"]["policies"] == {
+        "mpc_h3": "mpc_h3",
+        "mpc_h3_last": "mpc_h3_last",
+        "random": "random",
+        "neutral": "neutral",
+    }
+    assert protocol["mpc"]["scenario_cohorts"] == [0, 1]
+    assert protocol["mpc"]["history_size"] == 3
+    assert protocol["mpc"]["max_decisions"] == 128
     assert bundle["checkpoint.pt"] == checkpoint
+
+
+def test_survival_targets_20k_confirmation_round() -> None:
+    launcher = _load("survival_launcher_fixture", "colab_survival_study.py")
+    assert (
+        launcher.CHECKPOINT_RELPATH == "scale-resume-20000/checkpoint.pt"
+    )
+    assert launcher.SCENARIO_COHORTS == (0, 1)
 
 
 def test_survival_site_packages_pin_transformers() -> None:

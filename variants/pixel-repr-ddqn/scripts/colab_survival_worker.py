@@ -219,7 +219,9 @@ def run_scored(protocol: dict[str, Any], run_id: str, source_hash: str) -> None:
         mpc_report = evaluate(
             checkpoint,
             RESULTS_ROOT / "probe.pt",
-            plan_mpc_eval(),
+            plan_mpc_eval(
+                cohorts=tuple(int(c) for c in mpc_cfg["scenario_cohorts"])
+            ),
             policies=dict(mpc_cfg["policies"]),
             trace_dir=RESULTS_ROOT / "trace",
             device=device,

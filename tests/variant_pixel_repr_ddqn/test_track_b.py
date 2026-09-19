@@ -463,3 +463,49 @@ def test_plan_mpc_eval_splits_and_seeds() -> None:
     assert max(seeds) <= 32767
     cfgs = [cfg for _, cfg, _ in scenarios]
     assert all(cfg.invulnerable is False for cfg in cfgs)
+
+
+def test_plan_mpc_eval_cohort_zero_unchanged() -> None:
+    assert mpc_eval.plan_mpc_eval() == mpc_eval.plan_mpc_eval(cohorts=(0,))
+    scenarios = mpc_eval.plan_mpc_eval()
+    assert scenarios[0][0] == "ordinary-d1-all-pat-0"
+    assert scenarios[0][2] == 24000
+    assert scenarios[16][0] == "novel-d2-p3-0"
+    assert scenarios[16][2] == 25016
+
+
+def test_plan_mpc_eval_confirmation_cohort_is_fresh_but_matched() -> None:
+    base = mpc_eval.plan_mpc_eval()
+    both = mpc_eval.plan_mpc_eval(cohorts=(0, 1))
+    assert len(both) == 64
+    assert both[:32] == base
+    fresh = both[32:]
+    labels = [label for label, _, _ in fresh]
+    assert all(label.endswith("-c1") for label in labels)
+    assert [label[:-3] for label in labels] == [
+        label for label, _, _ in base
+    ]
+    seeds = [seed for _, _, seed in fresh]
+    base_seeds = {seed for _, _, seed in base}
+    assert len(set(seeds)) == 32
+    assert not (set(seeds) & base_seeds)
+    assert seeds[:16] == list(range(26000, 26016))
+    assert seeds[16:] == list(range(27016, 27032))
+    assert max(seeds) <= 32767
+    for (_, cfg, _), (_, fresh_cfg, _) in zip(base, fresh, strict=True):
+        assert fresh_cfg.invulnerable is False
+        assert (
+            fresh_cfg.difficulty,
+            fresh_cfg.enemy_mode,
+            fresh_cfg.patterns_enabled,
+            fresh_cfg.powerups_enabled,
+            fresh_cfg.permanent_pattern,
+        ) == (
+            cfg.difficulty,
+            cfg.enemy_mode,
+            cfg.patterns_enabled,
+            cfg.powerups_enabled,
+            cfg.permanent_pattern,
+        )
+    with pytest.raises(ValueError, match="unknown scenario cohort"):
+        mpc_eval.plan_mpc_eval(cohorts=(2,))

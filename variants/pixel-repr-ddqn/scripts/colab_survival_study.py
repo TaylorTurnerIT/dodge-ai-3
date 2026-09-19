@@ -26,12 +26,11 @@ PROBE_MAX_WINDOWS = 20000
 MIN_VAL_AUPRC = 0.10
 MPC_POLICIES = {
     "mpc_h3": "mpc_h3",
-    "mpc_h4": "mpc_h4",
-    "mpc_h3_max": "mpc_h3_max",
     "mpc_h3_last": "mpc_h3_last",
     "random": "random",
     "neutral": "neutral",
 }
+SCENARIO_COHORTS = (0, 1)
 MPC_HISTORY = 3
 MPC_DECISIONS = 128
 UPLOAD_WORKERS = 6
@@ -54,7 +53,7 @@ SOURCE_NAMES = [
     "third_party",
     "variants/pixel-repr-ddqn",
 ]
-CHECKPOINT_RELPATH = "scale-resume-14336/checkpoint.pt"
+CHECKPOINT_RELPATH = "scale-resume-20000/checkpoint.pt"
 PROBE_SET_NAME = "mortal-probe-20260917-v1"
 
 
@@ -95,6 +94,7 @@ def build_protocol(
         },
         "mpc": {
             "policies": dict(MPC_POLICIES),
+            "scenario_cohorts": list(SCENARIO_COHORTS),
             "history_size": MPC_HISTORY,
             "max_decisions": MPC_DECISIONS,
         },

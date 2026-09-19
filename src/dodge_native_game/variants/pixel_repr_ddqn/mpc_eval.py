@@ -304,7 +304,15 @@ def _steering_policies(
     }
 
 
-def plan_mpc_eval() -> list[tuple[str, Any, int]]:
+COHORT_SEED_BASES: Final[dict[int, tuple[int, int]]] = {
+    0: (24000, 25000),
+    1: (26000, 27000),
+}
+
+
+def plan_mpc_eval(
+    *, cohorts: tuple[int, ...] = (0,)
+) -> list[tuple[str, Any, int]]:
     """Build train-type vs novel-type headless scenario sets (fresh seeds).
 
     Set A mirrors the ordinary native distribution (difficulty 1-2, mixed
@@ -313,50 +321,61 @@ def plan_mpc_eval() -> list[tuple[str, Any, int]]:
     validation, and probe range.  The distribution shift from scripted
     training recipes to organic play is intentional: it tests
     generalization, and baselines run the identical scenarios.
+
+    Each cohort repeats the same 32 configs on disjoint seeds; cohort 0
+    keeps the original labels while later cohorts suffix ``-c<n>``.
     """
 
     from .scenario import ScenarioConfig
 
+    for cohort in cohorts:
+        if cohort not in COHORT_SEED_BASES:
+            raise ValueError(f"unknown scenario cohort: {cohort!r}")
     scenarios: list[tuple[str, Any, int]] = []
-    index = 0
-    for difficulty in (1, 2):
-        for enemy_mode in ("all", "normal"):
-            for patterns in (True, False):
-                for repeat in range(2):
-                    scenarios.append(
-                        (
-                            f"ordinary-d{difficulty}-{enemy_mode}"
-                            f"-{'pat' if patterns else 'flat'}-{repeat}",
-                            ScenarioConfig(
-                                name=f"mpc-ordinary-{index:02d}",
-                                difficulty=difficulty,
-                                enemy_mode=enemy_mode,  # type: ignore[arg-type]
-                                patterns_enabled=patterns,
-                                powerups_enabled=True,
-                                permanent_pattern=0,
-                            ),
-                            24000 + index,
+    for cohort in cohorts:
+        ordinary_base, novel_base = COHORT_SEED_BASES[cohort]
+        suffix = "" if cohort == 0 else f"-c{cohort}"
+        index = 0
+        for difficulty in (1, 2):
+            for enemy_mode in ("all", "normal"):
+                for patterns in (True, False):
+                    for repeat in range(2):
+                        scenarios.append(
+                            (
+                                f"ordinary-d{difficulty}-{enemy_mode}"
+                                f"-{'pat' if patterns else 'flat'}-{repeat}"
+                                f"{suffix}",
+                                ScenarioConfig(
+                                    name=f"mpc-ordinary-{index:02d}{suffix}",
+                                    difficulty=difficulty,
+                                    enemy_mode=enemy_mode,  # type: ignore[arg-type]
+                                    patterns_enabled=patterns,
+                                    powerups_enabled=True,
+                                    permanent_pattern=0,
+                                ),
+                                ordinary_base + index,
+                            )
                         )
+                        index += 1
+        permanents = (3, 11, 17, 23, 29, 35, 7, 31)
+        for difficulty in (2, 3):
+            for repeat, permanent in enumerate(permanents):
+                scenarios.append(
+                    (
+                        f"novel-d{difficulty}-p{permanent}-{repeat % 2}"
+                        f"{suffix}",
+                        ScenarioConfig(
+                            name=f"mpc-novel-{index:02d}{suffix}",
+                            difficulty=difficulty,
+                            enemy_mode="all",
+                            patterns_enabled=True,
+                            powerups_enabled=False,
+                            permanent_pattern=permanent,
+                        ),
+                        novel_base + index,
                     )
-                    index += 1
-    permanents = (3, 11, 17, 23, 29, 35, 7, 31)
-    for difficulty in (2, 3):
-        for repeat, permanent in enumerate(permanents):
-            scenarios.append(
-                (
-                    f"novel-d{difficulty}-p{permanent}-{repeat % 2}",
-                    ScenarioConfig(
-                        name=f"mpc-novel-{index:02d}",
-                        difficulty=difficulty,
-                        enemy_mode="all",
-                        patterns_enabled=True,
-                        powerups_enabled=False,
-                        permanent_pattern=permanent,
-                    ),
-                    25000 + index,
                 )
-            )
-            index += 1
+                index += 1
     return scenarios
 
 
