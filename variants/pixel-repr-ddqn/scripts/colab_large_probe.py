@@ -92,6 +92,7 @@ def upload(
     workers: int = 1,
     part_size: int = 8 * 1024**2,
     remote_prefix: str = "large-probe",
+    assemble_name: str = "lewm-source.tar.gz",
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
@@ -113,7 +114,7 @@ def upload(
     assembly = job / "assemble.py"
     assembly.write_text(
         "from pathlib import Path\nimport hashlib\n"
-        "target=Path('/content/lewm-source.tar.gz')\n"
+        f"target=Path('/content/{assemble_name}')\n"
         "with target.open('wb') as output:\n"
         f" for i in range({len(parts)}):\n"
         f"  part=Path(f'/content/{remote_prefix}.part-{{i:03d}}')\n"

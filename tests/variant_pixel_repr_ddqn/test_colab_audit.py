@@ -85,6 +85,63 @@ def test_audit_remote_driver_runs_each_ckpt_and_split() -> None:
     assert "--device" in driver and "cuda" in driver
 
 
+def test_audit_upload_assembly_follows_assemble_name(
+    tmp_path: Path, monkeypatch
+) -> None:
+    probe = _load("audit_probe_upload", "colab_large_probe.py")
+    calls: list[tuple] = []
+
+    def fake_cli(*args, **kwargs):
+        calls.append(args)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(probe, "cli", fake_cli)
+    archive = tmp_path / "archive.bin"
+    archive.write_bytes(b"y" * (2 * 1024**2 + 1))
+    probe.upload(
+        archive,
+        "test-session",
+        tmp_path,
+        workers=1,
+        part_size=1024**2,
+        remote_prefix="lewm-audit",
+        assemble_name="lewm-audit.tar.gz",
+    )
+    assembly = (tmp_path / "assemble.py").read_text()
+    assert "target=Path('/content/lewm-audit.tar.gz')" in assembly
+    assert "lewm-audit.part" in assembly
+    probe.upload(archive, "test-session", tmp_path, workers=1)
+    default = (tmp_path / "assemble.py").read_text()
+    assert "target=Path('/content/lewm-source.tar.gz')" in default
+
+
+def test_audit_driver_runner_sees_cached_wheel() -> None:
+    launcher = _load("audit_launcher_wheel_env", "colab_audit_study.py")
+    wheel = {"filename": "dodge_native-0.1-py3-none-any.whl", "sha256": "ab" * 32}
+    driver = launcher.build_remote_driver(
+        source_hash="ab" * 32,
+        run_id="audit-test",
+        wheel=wheel,
+        site_packages=["pytest"],
+        checkpoints=["10240"],
+    )
+    compile(driver, "<audit-remote-driver>", "exec")
+    assert "native_path = str(wheelhouse)" in driver
+    assert "os.pathsep + native_path" in driver
+    plain = launcher.build_remote_driver(
+        source_hash="ab" * 32,
+        run_id="audit-test",
+        wheel=None,
+        site_packages=["pytest"],
+        checkpoints=["10240"],
+    )
+    compile(plain, "<audit-remote-driver>", "exec")
+    assert "native_path = ''" in plain
+    assert "str(wheelhouse)" not in plain
+
+
 def test_audit_publish_requires_every_ckpt_file(tmp_path: Path) -> None:
     launcher = _load("audit_launcher_publish", "colab_audit_study.py")
     extracted = tmp_path / "extracted"

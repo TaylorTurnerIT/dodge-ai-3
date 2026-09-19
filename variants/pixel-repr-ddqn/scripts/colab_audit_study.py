@@ -151,6 +151,7 @@ def build_remote_driver(
             "             str(wheel)])",
             "print('WHEEL_CAPTURED', flush=True)",
             "sys.path.insert(0, str(wheelhouse))",
+            "native_path = str(wheelhouse)",
         ]
     else:
         lines += [
@@ -169,6 +170,7 @@ def build_remote_driver(
             "else:",
             "    run_command([sys.executable, '-m', 'pip',",
             "                 'install', '-q', crate])",
+            "native_path = ''",
         ]
     audit_call = (
         "            proc = subprocess.run([sys.executable, runner,"
@@ -181,7 +183,8 @@ def build_remote_driver(
     )
     lines += [
         "print('SETUP_COMPLETE', flush=True)",
-        "env = dict(os.environ, PYTHONPATH=str(code / 'src'),",
+        "env = dict(os.environ, PYTHONPATH=str(code / 'src')",
+        "           + (os.pathsep + native_path if native_path else ''),",
         "           OMP_NUM_THREADS='2', MKL_NUM_THREADS='2')",
         "runner = str(code / 'variants/pixel-repr-ddqn/scripts'",
         "                '/run_dynamics_audit.py')",
@@ -324,6 +327,7 @@ def main() -> None:
         workers=UPLOAD_WORKERS,
         part_size=UPLOAD_PART_SIZE,
         remote_prefix="lewm-audit",
+        assemble_name="lewm-audit.tar.gz",
     )
     with (job / "remote.log").open("w") as log:
         result = subprocess.run(
