@@ -1,10 +1,9 @@
-# P7 — Controller comparison design (DRAFT, unapproved)
+# P7 — Controller comparison design (APPROVED 2026-09-18)
 
 Authority: [SPEC](../SPEC.md) C9–C11, V10–V13, §E; card [07](phases/07-controller-design.md).
-Predecessor state: P6 formally unopened; AD4–AD10 supply its evidentiary content
-(latent dynamics 0.95→0.13, V13-positive planning on the 20k world). This draft
-scopes the comparison only. No branch opens, no code, no training until the
-owner approves this design AND records how P6 is satisfied.
+Predecessor state: P6 satisfied per SPEC P6.record (AD4–AD10 evidence). Owner
+approved this design with the §6 powerup amendment: no aborts on gameplay
+colors; policies face powerups and learn them. P8 opens for DDQN first.
 
 ## 1. Shared frozen core (all branches)
 
@@ -79,35 +78,42 @@ Reused as the beat-this baseline; no refit, no new search.
 - Advance rule: a branch that fails V13 at screen may not proceed to P10 on
   more seeds; negative/inconclusive is a reportable result (V22).
 
-## 6. The powerup-sparkle problem (open, must resolve before P8)
+## 6. The powerup-sparkle rule (DECIDED: face powerups, no aborts)
 
-Organic rollouts with powerups enabled contain red sparkles the frozen encoder
-never saw (v12 abort). Branches need a pinned rule, options:
+Rust-verified facts: all enemy bodies incl. powerups render in-palette
+(ENTITY_COLOR 7 cream + SHADOW_COLOR 1 navy); only ambient sparkles of
+personality 2 ([8,9,10] red/orange/yellow) and personality 3 (index 13
+lavender) fall outside the 3-color training palette. Practice-mode training
+corpora suppress organic spawns, so sparkles are structurally train-absent.
 
-- (a) Powerups ON in training/rollouts, strict palette contract at eval
-  (aborts stay loud; policies must cope with encoder degradation on sparkle
-  frames — measures robustness, risks noise).
-- (b) Powerups OFF everywhere in P7 (clean comparison, but changes the game
-  vs v12 and dodges the gap instead of closing it).
-- (c) Corpus expansion first: determined scenarios with powerup personalities
-  (AD.data follow-up), encoder stays frozen but eval coverage is then honest —
-  delays P7 by one collection phase.
+Pinned rule (owner 2026-09-18): powerups stay ON; policies must learn them.
 
-Recommendation: (a) for the screen (honest, measures the real artifact), (c)
-in parallel as the principled fix. Owner decides.
+- Live-input boundary (`_history_batch` path, shared by planning rollouts,
+  policy rollouts, and eval): exact-black keeps the AD6 mask-to-background
+  (viewport artifact); every other out-of-palette pixel projects to the
+  nearest training-palette color (RGB Euclidean, ties → lowest palette
+  index, deterministic). Both counts (`masked_pixels`, `projected_pixels`)
+  reported per episode. In-palette pixels pass bit-identical, so all prior
+  probe/planning numbers remain comparable.
+- The abort path stays as a fail-closed backstop but must never trigger on
+  PICO-8 colors; any abort is a defect, not data.
+- Frozen banks/datasets keep strict coverage validation (data must be
+  exactly in-palette); projection applies to live inputs only.
+- Corpus expansion with powerup personalities proceeds in parallel as the
+  principled fix for the next world; it does not block P7.
 
-## 7. Branch order and budgets (owner to confirm)
+## 7. Branch order and budgets (CONFIRMED)
 
 - Order: DDQN → PPO → hybrid (hybrid reuses DDQN's replay + value).
-- Proposed caps per branch: 200k decisions, one T4-class worker, 7200s phases;
+- Caps per branch: 200k decisions, one T4-class worker, 7200s phases;
   PPO minibatch/epoch settings pinned at P8. These replace the retired DDQN
-  campaign settings (§E) once approved.
+  campaign settings (§E).
 - P8 implements ONE branch at a time (card 08); P9 screens it; P10 confirms
   only branches that pass the screen gate.
 
-## 8. What approval unlocks
+## 8. Approval record
 
-Owner approval of this doc (as-is or amended) authorizes: (1) recording the
-P6-satisfaction rationale, (2) amending P8/P9/P10 branch contracts per card
-step 3, (3) opening P8 for the first branch. It does not authorize training —
-each training phase still needs its frozen protocol + weights.
+Owner approved 2026-09-18: §6 powerup amendment (face powerups, projection
+rule, no aborts), §7 budgets/order as proposed, P6 rationale as recorded in
+SPEC P6.record. P8 opens for DDQN. Training still needs each phase's frozen
+protocol + weights.
