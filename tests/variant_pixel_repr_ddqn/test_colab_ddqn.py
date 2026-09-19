@@ -119,6 +119,22 @@ def test_ddqn_publish_requires_results_and_checkpoints(
         launcher._publish_results(extracted, run2)
 
 
+def test_ddqn_driver_staging_matches_worker_roots() -> None:
+    import inspect
+
+    launcher = _load("ddqn_launcher_roots", "colab_ddqn_study.py")
+    worker = _load("ddqn_worker_roots", "colab_ddqn_worker.py")
+    driver = launcher.build_remote_driver(
+        source_hash="ab" * 32,
+        run_id="ddqn-test",
+        wheel={"filename": "w.whl", "sha256": "ab" * 32},
+        site_packages=["pytest"],
+    )
+    assert str(worker.INPUT_ROOT) in driver
+    assert "work / 'inputs'" not in driver
+    assert "lewm-ddqn-results.tar.gz" in inspect.getsource(worker)
+
+
 def test_ddqn_epsilon_schedule_bounds() -> None:
     worker = _load("ddqn_worker_schedule", "colab_ddqn_worker.py")
     cfg = {
