@@ -87,6 +87,47 @@ def test_adapter_whitelists_pixels_actions_and_boundary_values() -> None:
     assert environment.closed
 
 
+def test_adapter_exposes_only_native_reward_terms() -> None:
+    class TermsEnvironment(FakeEnvironment):
+        def step(
+            self, action: int
+        ) -> tuple[np.ndarray, float, bool, bool, dict[str, object]]:
+            frame, reward, terminated, truncated, _info = super().step(action)
+            return (
+                frame, reward, terminated, truncated,
+                {
+                    "secret_player_position": (1, 2),
+                    "native_reward_terms": np.asarray(
+                        [4.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32
+                    ),
+                },
+            )
+
+    adapter = PixelNativeAdapter(TermsEnvironment(None))
+    try:
+        adapter.reset(seed=0)
+        adapter.step(0)
+        terms = adapter.last_reward_terms
+        assert terms.tolist() == [4.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        terms[0] = -99.0
+        assert adapter.last_reward_terms[0] == 4.0
+    finally:
+        adapter.close()
+
+
+def test_adapter_terms_unavailable_without_native_terms() -> None:
+    adapter = PixelNativeAdapter(FakeEnvironment(None))
+    try:
+        adapter.reset(seed=0)
+        with pytest.raises(ValueError, match="unavailable"):
+            _ = adapter.last_reward_terms
+        adapter.step(0)
+        with pytest.raises(ValueError, match="unavailable"):
+            _ = adapter.last_reward_terms
+    finally:
+        adapter.close()
+
+
 def test_collection_is_deterministic_and_has_disjoint_hashed_splits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -20,13 +20,19 @@ from typing import Any, Final
 import numpy as np
 import torch
 
+from .live_inputs import (
+    PLAYFIELD_BACKGROUND_RGB,
+    SHAKE_BLACK_RGB,
+    history_batch,
+    mask_black_pixels,
+    model_palette,
+)
+
 EXPERIMENT: Final[str] = "lewm-mpc-eval-v1"
 ACTION_COUNT: Final[int] = 9
 NEUTRAL_ACTION: Final[int] = 0
 MAX_DECISIONS: Final[int] = 128
 ABORTED_UNKNOWN_COLOR: Final[str] = "aborted-unknown-color"
-SHAKE_BLACK_RGB: Final[tuple[int, int, int]] = (0, 0, 0)
-PLAYFIELD_BACKGROUND_RGB: Final[tuple[int, int, int]] = (41, 173, 255)
 
 
 class _UnknownColorAbort(Exception):
@@ -37,35 +43,8 @@ class _UnknownColorAbort(Exception):
     """
 
 
-def mask_black_pixels(stacked: np.ndarray) -> tuple[np.ndarray, int]:
-    """Replace exact-black pixels with playfield background (AD6.rule).
-
-    Screen-shake strips and game-over text shadows render (0, 0, 0), a
-    color absent from every training corpus (AD5.diagnosis).  A shake
-    strip exposes out-of-view playfield whose training-time content is
-    background, so exact-black maps to background blue.  Any other
-    off-palette color passes through untouched so the encoder's strict
-    refusal still fires (fail-closed).  Returns the masked copy and the
-    masked pixel count.
-    """
-
-    black_rgb = np.asarray(SHAKE_BLACK_RGB, dtype=np.uint8).reshape(1, 3, 1, 1)
-    black = (stacked == black_rgb).all(axis=1, keepdims=True)
-    count = int(black.sum())
-    if not count:
-        return stacked.copy(), 0
-    background = np.asarray(PLAYFIELD_BACKGROUND_RGB, dtype=np.uint8).reshape(
-        1, 3, 1, 1
-    )
-    return np.where(black, background, stacked).astype(np.uint8), count
-
-
-def _history_batch(
-    frames: deque[np.ndarray], device: torch.device
-) -> tuple[torch.Tensor, int]:
-    stacked = np.stack(list(frames), axis=0).astype(np.uint8)
-    masked, count = mask_black_pixels(stacked)
-    return torch.from_numpy(masked).unsqueeze(0).to(device), count
+_history_batch = history_batch
+_model_palette = model_palette
 
 
 @torch.no_grad()
@@ -192,14 +171,19 @@ def run_episode(
         survived = 0
         outcome = "truncated"
         masked_pixels = 0
+        projected_pixels = 0
+        palette = _model_palette(model)
         steps_path = None
         if trace_dir is not None:
             trace_dir = Path(trace_dir)
             trace_dir.mkdir(parents=True, exist_ok=True)
             steps_path = trace_dir / "steps.jsonl"
         for step in range(max_decisions):
-            history, newly_masked = _history_batch(frames, device)
+            history, newly_masked, newly_projected = _history_batch(
+                frames, device, palette
+            )
             masked_pixels += newly_masked
+            projected_pixels += newly_projected
             try:
                 action, costs = policy(history, list(past_actions))
             except _UnknownColorAbort:
@@ -215,6 +199,7 @@ def run_episode(
                                 "action": int(action),
                                 "costs": costs,
                                 "masked_pixels": newly_masked,
+                                "projected_pixels": newly_projected,
                             }
                         )
                         + "\n"
@@ -237,6 +222,7 @@ def run_episode(
             "survived": survived,
             "outcome": outcome,
             "masked_pixels": masked_pixels,
+            "projected_pixels": projected_pixels,
         }
     finally:
         close = getattr(adapter, "close", None)
@@ -440,6 +426,7 @@ def evaluate(
             row[key] = result["survived"]
             row[key + "_outcome"] = result["outcome"]
             row[key + "_masked_pixels"] = result["masked_pixels"]
+            row[key + "_projected_pixels"] = result["projected_pixels"]
         episodes.append(row)
     summary: dict[str, Any] = {}
     for key in policies:
@@ -461,6 +448,9 @@ def evaluate(
             "aborted_unknown_color": aborted,
             "masked_pixels_total": sum(
                 row[key + "_masked_pixels"] for row in episodes
+            ),
+            "projected_pixels_total": sum(
+                row[key + "_projected_pixels"] for row in episodes
             ),
             "mean_completed": float(sum(completed) / len(completed))
             if completed

@@ -34,6 +34,20 @@ class _GymPixelEnvironment(Protocol):
     def close(self) -> None: ...
 
 
+def _native_terms(info: object) -> np.ndarray | None:
+    """Retain only the native 6-term reward vector from ``info``."""
+
+    if not isinstance(info, dict):
+        return None
+    terms = info.get("native_reward_terms")
+    if terms is None:
+        return None
+    values = np.asarray(terms, dtype=np.float32).reshape(-1)
+    if values.shape != (6,) or not np.all(np.isfinite(values)):
+        return None
+    return np.ascontiguousarray(values)
+
+
 def _validate_seed(seed: int | np.integer) -> int:
     if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
         raise TypeError("seed must be an integer")
@@ -135,6 +149,7 @@ class PixelNativeAdapter:
             self._environment = _default_environment(scenario_config)
         self._scenario = scenario_config
         self._closed = False
+        self._last_terms: np.ndarray | None = None
 
     @property
     def scenario(self) -> ScenarioConfig | None:
@@ -172,19 +187,34 @@ class PixelNativeAdapter:
                 "native environment step must return "
                 "(observation, reward, terminated, truncated, info)"
             )
-        observation, reward, terminated, truncated, _info = result
+        observation, reward, terminated, truncated, info = result
         terminated_value = bool(terminated)
         truncated_value = bool(truncated)
         if terminated_value and truncated_value:
             raise ValueError(
                 "native environment cannot be both terminated and truncated"
             )
+        self._last_terms = _native_terms(info)
         return (
             _owned_rgb(observation),
             float(reward),
             terminated_value,
             truncated_value,
         )
+
+    @property
+    def last_reward_terms(self) -> np.ndarray:
+        """Native 6-term reward vector of the latest decision (P7 §2).
+
+        Order: survival, death, pickups, enemy_deaths, edge, corner.
+        Only this field is retained from the native info mapping; every
+        other diagnostic stays discarded.  Raises when the wrapped
+        environment does not supply terms (fixture injections).
+        """
+
+        if self._last_terms is None:
+            raise ValueError("native reward terms unavailable")
+        return self._last_terms.copy()
 
     def close(self) -> None:
         if not self._closed:

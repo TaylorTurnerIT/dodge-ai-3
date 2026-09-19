@@ -254,6 +254,7 @@ def test_run_episode_counts_survived_and_outcome() -> None:
     )
     assert died == {
         "seed": 0, "survived": 10, "outcome": "terminated", "masked_pixels": 0,
+        "projected_pixels": 0,
     }
     lived = mpc_eval.run_episode(
         lambda: _ScriptedAdapter(), 0,
@@ -262,6 +263,7 @@ def test_run_episode_counts_survived_and_outcome() -> None:
     )
     assert lived == {
         "seed": 0, "survived": 32, "outcome": "truncated", "masked_pixels": 0,
+        "projected_pixels": 0,
     }
 
 
@@ -418,6 +420,7 @@ def test_run_episode_writes_trace_steps_and_frames(tmp_path: Path) -> None:
     first = json.loads(rows[0])
     assert first == {
         "step": 0, "action": 3, "costs": costs, "masked_pixels": 0,
+        "projected_pixels": 0,
     }
     for step in range(3):
         frame = np.asarray(Image.open(trace / f"frame_{step:03d}.png"))

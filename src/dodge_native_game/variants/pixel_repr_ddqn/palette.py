@@ -29,6 +29,7 @@ __all__ = [
     "palette_ce_loss",
     "palette_one_hot",
     "palette_to_json",
+    "project_to_palette",
     "render_palette",
     "render_palette_rgb",
     "validate_palette_coverage",
@@ -201,6 +202,32 @@ def validate_palette_coverage(
                 f"{split} pixels contain RGB colors absent from the train palette: "
                 f"{sample}"
             )
+
+
+def project_to_palette(
+    pixels: Any, palette: np.ndarray
+) -> tuple[np.ndarray, int]:
+    """Map uint8 RGB pixels onto the nearest palette color (P7 §6).
+
+    Pixels already in ``palette`` pass through bit-identical; every other
+    pixel takes the nearest palette color by RGB Euclidean distance, with
+    ties resolved to the lowest palette index.  Returns the projected copy
+    and the count of changed pixels.  Live inputs only: frozen banks keep
+    strict coverage validation.
+    """
+
+    values = _validate_pixels(pixels)
+    colors = _validate_palette(palette)
+    flat = values.reshape(values.shape[0], 3, -1).transpose(0, 2, 1)
+    target = colors.astype(np.int32)
+    distances = (
+        (flat.astype(np.int32)[:, :, None, :] - target[None, None, :, :]) ** 2
+    ).sum(axis=-1)
+    nearest = np.argmin(distances, axis=-1).astype(np.int64)
+    projected = target[nearest].transpose(0, 2, 1).reshape(values.shape)
+    projected = np.ascontiguousarray(projected, dtype=np.uint8)
+    changed = int((projected != values).any(axis=1).sum())
+    return projected, changed
 
 
 def palette_indices(pixels: Any, palette: np.ndarray) -> np.ndarray:
