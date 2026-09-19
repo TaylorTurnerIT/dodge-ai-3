@@ -181,8 +181,9 @@ def build_remote_driver(
         "           OMP_NUM_THREADS='2', MKL_NUM_THREADS='2')",
         "worker = str(code / 'variants/pixel-repr-ddqn/scripts'"
         "                '/colab_ddqn_worker.py')",
-        "base = [sys.executable, worker, '--run-id', " + json.dumps(run_id),
-        "        '--source-hash', '" + source_hash + "']",
+        "base = [sys.executable, worker]",
+        "base += ['--run-id', " + json.dumps(run_id) + "]",
+        "base += ['--source-hash', '" + source_hash + "']",
         "for mode, marker, timeout in (('smoke', 'DDQN_SMOKE_COMPLETE', 2400),"
         "                             ('scored', 'DDQN_DRIVER_COMPLETE', 7000)):",
         "    log = work / f'ddqn-{mode}.log'",

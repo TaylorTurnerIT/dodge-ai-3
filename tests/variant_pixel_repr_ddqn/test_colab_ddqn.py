@@ -84,6 +84,8 @@ def test_ddqn_remote_driver_smokes_then_screens() -> None:
     assert smoke < scored < complete
     assert "colab_ddqn_worker.py" in driver
     assert "transformers.__version__" in driver
+    assert "base += ['--run-id', \"ddqn-test\"]" in driver
+    assert "base += ['--source-hash', '" + "ab" * 32 + "']" in driver
     plain = launcher.build_remote_driver(
         source_hash="ab" * 32,
         run_id="ddqn-test",
